@@ -20,6 +20,7 @@ class ProviderCapabilities:
     state_duration: bool = False
     state_changes: bool = False
     report_rollup: bool = False
+    raw_series: bool = False
 
     def as_dict(self) -> dict[str, bool]:
         return {
@@ -34,6 +35,7 @@ class ProviderCapabilities:
             "state_duration": self.state_duration,
             "state_changes": self.state_changes,
             "report_rollup": self.report_rollup,
+            "raw_series": self.raw_series,
         }
 
 
@@ -79,6 +81,10 @@ class DataProvider(ABC):
         step: int | None = None,
     ) -> list[tuple[float, Any]]:
         raise NotImplementedError
+
+    def get_raw_series(self, source, start, end):
+        """Optional exact samples in [start,end), without resampling."""
+        raise ProviderError(f"Le provider '{self.provider_id}' ne supporte pas les points bruts")
 
     def get_report_statistics(
         self,

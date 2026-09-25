@@ -77,7 +77,7 @@ class PeriodEngine:
             start = self._shift(current_start, period_type, -1)
             end = current_start
 
-        if end <= start:
+        if end.timestamp() <= start.timestamp():
             raise ValueError("La fin de période doit être postérieure au début")
 
         return ResolvedPeriod(
@@ -93,7 +93,7 @@ class PeriodEngine:
         start = self._parse_local(spec.get("start"))
         end = self._parse_local(spec.get("end"))
 
-        if end <= start:
+        if end.timestamp() <= start.timestamp():
             raise ValueError("La fin de période personnalisée doit être postérieure au début")
 
         return ResolvedPeriod(
@@ -116,7 +116,10 @@ class PeriodEngine:
             raise ValueError(f"Date/heure invalide: {value}") from exc
 
         if dt.tzinfo is None:
-            return dt.replace(tzinfo=self.tz)
+            local = dt.replace(tzinfo=self.tz)
+            if datetime.fromtimestamp(local.timestamp(), self.tz).replace(tzinfo=None) != dt:
+                raise ValueError("Heure locale inexistante lors du passage à l'heure d'été")
+            return local
         return dt.astimezone(self.tz)
 
     def _floor(self, dt: datetime, period_type: str) -> datetime:

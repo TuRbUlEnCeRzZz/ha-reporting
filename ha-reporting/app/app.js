@@ -676,7 +676,7 @@ function renderExecutedSource(source, period){
     ...(validation.warnings || [])
   ];
   if(source.retrieval_mode === "series_fallback"){
-    messages.unshift("Fallback détaillé utilisé pour fiabiliser ce runtime.");
+    messages.unshift("Vérification sur les points bruts utilisée pour ce runtime.");
   }
 
   return `

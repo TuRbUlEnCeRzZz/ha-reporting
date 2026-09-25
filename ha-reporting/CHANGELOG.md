@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.0-alpha.22
+
+- Preserve original runtime rollup diagnostics and raw negative transitions.
+- Replace sampled runtime fallback with bounded, targeted raw JSONL export.
+- Retain fallback for actual drops; rounding compatibility is diagnostic only.
+- Fail closed on partial, conflicting, ambiguous or excessive raw exports.
+- Check runtime plausibility against observed samples, including negative values.
+- Enforce millisecond-accurate half-open rollup windows.
+- Handle explicit autumn DST folds and reject nonexistent spring local times.
+- Apply metric-aware density to detailed analysis as well as rollups.
+- Report actual raw fallback transfers and clarify the UI message.
+- Make server startup import-safe for repeatable report integration tests.
+- Add Python, YAML, JavaScript regressions and anonymized real runtime fixtures.
+
 ## 0.1.0-alpha.21
 
 - Validate optimized runtime against the actually observed source window.

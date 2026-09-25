@@ -100,6 +100,12 @@ class DeviceAnalysisEngine:
                         metric == "runtime"
                         and self._runtime_rollup_needs_fallback(analysis)
                     ):
+                        item["fallback"] = {
+                            "reason": "runtime_rollup_reconstruction",
+                            "status": "pending",
+                            "rollup_statistics": dict(analysis.get("statistics") or {}),
+                            "rollup_quality": dict(analysis.get("quality") or {}),
+                        }
                         fallback = self._runtime_detailed_fallback(
                             provider=provider,
                             source=source,
@@ -113,12 +119,14 @@ class DeviceAnalysisEngine:
                             points = fallback["points"]
                             points_count = len(points)
                             source_retrieval_mode = "series_fallback"
-                            item["fallback"] = {
-                                "reason": "runtime_rollup_reconstruction",
+                            item["fallback"].update({
+                                "status": "completed",
+                                "sampling": "raw",
                                 "start": fallback["start"],
                                 "end": fallback["end"],
                                 "points": points_count,
-                            }
+                                "diagnostic": analysis["statistics"].get("transition_diagnostics"),
+                            })
                 elif retrieval_mode == "provider_rollup":
                     raise RuntimeError(
                         f"Le provider '{provider_id}' ne supporte pas "
@@ -163,6 +171,8 @@ class DeviceAnalysisEngine:
                 if message:
                     item["message"] = message
             except Exception as exc:
+                if "fallback" in item:
+                    item["fallback"]["status"] = "failed"
                 item.update(
                     {
                         "status": "error",
@@ -201,7 +211,9 @@ class DeviceAnalysisEngine:
             return False
         statistics = analysis.get("statistics") or {}
         return (
-            statistics.get("mode") == "provider_reconstructed"
+            analysis.get("status") == "invalid"
+            or statistics.get("mode") == "provider_reconstructed"
+            or statistics.get("negative_transitions", 0) > 0
             or statistics.get("plausible") is False
         )
 
@@ -219,20 +231,26 @@ class DeviceAnalysisEngine:
         last_ts = quality.get("last_timestamp")
 
         if first_ts is None or last_ts is None:
-            return None
+            raise RuntimeError("Fenêtre observée absente: runtime non vérifié")
 
-        fallback_start = max(float(start), float(first_ts) - step)
-        fallback_end = min(float(end), float(last_ts) + step)
+        fallback_start = max(float(start), float(first_ts))
+        fallback_end = min(float(end), float(last_ts) + 0.001)
 
         if fallback_end <= fallback_start:
-            return None
+            raise RuntimeError("Fenêtre observée invalide: runtime non vérifié")
+        if not getattr(provider.capabilities, "raw_series", False):
+            raise RuntimeError("Le provider ne permet pas la vérification runtime sur points bruts")
 
-        points = provider.get_series(
-            source,
-            fallback_start,
-            fallback_end,
-            step,
-        )
+        points = provider.get_raw_series(source, fallback_start, fallback_end)
+        # An empty/partial export must never validate the suspicious rollup.
+        if (
+            not points
+            or abs(points[0][0] - float(first_ts)) > 0.0005
+            or abs(points[-1][0] - float(last_ts)) > 0.0005
+        ):
+            raise RuntimeError("Export runtime incomplet ou historique modifié pendant l'analyse")
+        if len(points) != int(quality.get("received_points", 0)):
+            raise RuntimeError("Nombre de points bruts différent du rollup: runtime non vérifié")
         detailed = self.statistics.analyze(
             metric="runtime",
             points=points,
@@ -243,7 +261,7 @@ class DeviceAnalysisEngine:
         )
 
         if detailed.get("status") == "no_numeric_data":
-            return None
+            raise RuntimeError("Export runtime sans données numériques")
 
         detailed_quality = dict(detailed.get("quality") or {})
         merged_quality = dict(quality)
@@ -251,7 +269,7 @@ class DeviceAnalysisEngine:
             "received_points", len(points)
         )
         merged_quality["observed_expected_points"] = detailed_quality.get(
-            "expected_points",
+            "observed_expected_points",
             merged_quality.get("observed_expected_points", 0),
         )
         merged_quality["sample_density_percent"] = None
@@ -261,7 +279,7 @@ class DeviceAnalysisEngine:
             "largest_gap_seconds"
         )
         merged_quality["quality_method"] = (
-            "provider_rollup_coverage+series_fallback"
+            "provider_rollup_coverage+raw_series_fallback"
         )
         detailed["quality"] = merged_quality
         detailed["retrieval_mode"] = "series_fallback"
@@ -283,7 +301,7 @@ class DeviceAnalysisEngine:
             {"valid": True, "issues": [], "warnings": []},
         )
         validation.setdefault("warnings", []).append(
-            "Runtime vérifié par fallback détaillé sur la fenêtre réellement observée."
+            "Runtime analysé sur les points bruts de la fenêtre réellement observée."
         )
 
         return {

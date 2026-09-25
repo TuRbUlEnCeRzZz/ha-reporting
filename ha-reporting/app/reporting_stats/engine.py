@@ -39,10 +39,15 @@ class MetricStatisticsEngine:
         numeric = self._numeric_points(points, start, end)
         quality = self._quality(numeric, start, end, step)
 
+        quality_dict = quality.as_dict()
+        quality_dict["density_applicable"] = metric == "power"
+        if metric != "power":
+            quality_dict["sample_density_percent"] = None
+
         result = {
             "metric": metric,
             "unit": unit,
-            "quality": quality.as_dict(),
+            "quality": quality_dict,
             "statistics": {},
             "status": "no_numeric_data",
         }
@@ -76,12 +81,16 @@ class MetricStatisticsEngine:
 
         if metric in {"energy_total", "runtime", "cycles"}:
             delta = statistics.get("delta")
+            if delta is not None and not math.isfinite(delta):
+                issues.append("La variation du compteur doit être finie.")
             if delta is not None and delta < 0:
                 issues.append("La variation d'un compteur cumulatif ne peut pas être négative.")
             if delta is None:
                 issues.append("La variation du compteur n'a pas pu être déterminée de manière fiable.")
 
         if metric == "runtime":
+            if statistics.get("negative_values", 0) > 0 or statistics.get("minimum_value", 0) < 0:
+                issues.append("Un compteur runtime ne peut pas contenir de valeurs négatives.")
             period_hours = max(0.0, (end - start) / 3600.0)
             physical_limit = statistics.get(
                 "physical_limit_hours",
@@ -310,6 +319,8 @@ class MetricStatisticsEngine:
             "negative_transitions": decreases,
             "anomalies_ignored": max(0, decreases - resets),
             "aggregation_source": "provider_rollup",
+            "total_descent": values.get("descent"),
+            "minimum_value": values.get("min", min(first or 0, last or 0)),
         }
 
         if metric == "runtime":
@@ -467,8 +478,27 @@ class MetricStatisticsEngine:
                 else:
                     anomalies += 1
 
-        physical_limit = max(0.0, (end - start) / 3600.0)
+        physical_limit = max(0.0, (points[-1][0] - points[0][0]) / 3600.0)
         plausible = delta <= physical_limit * tolerance_factor + tolerance_hours
+        negative_transitions = []
+        transition_count = 0
+        rounding_count = 0
+        descent = 0.0
+        for (prev_ts, prev), (ts, value) in zip(points, points[1:]):
+            if value < prev:
+                drop = prev - value
+                descent += drop
+                # Diagnostic only. This does not forgive a reset or relax any
+                # physical allowance. 0.0005 h is half of a 0.001 h quantum.
+                candidate = 0 < drop <= 0.0005 + 1e-12 and value > 0.02
+                transition_count += 1
+                rounding_count += int(candidate)
+                if len(negative_transitions) < 20:
+                    negative_transitions.append({
+                        "previous_timestamp": prev_ts, "timestamp": ts,
+                        "previous_value": prev, "value": value, "drop_hours": drop,
+                        "rounding_compatible": candidate,
+                    })
 
         return {
             "first": {"timestamp": first[0], "value": first[1]},
@@ -478,6 +508,16 @@ class MetricStatisticsEngine:
             "resets_detected": resets,
             "anomalies_ignored": anomalies,
             "accepted_points": accepted_points,
+            "negative_values": sum(value < 0 for _, value in points),
+            "transition_diagnostics": {
+                "negative_transitions": transition_count,
+                "total_descent_hours": descent,
+                "rounding_compatible_transitions": rounding_count,
+                "examples": negative_transitions[:20],
+                "examples_truncated": transition_count > 20,
+                "rounding_tolerance_hours": 0.0005,
+                "classification_only": True,
+            },
             "physical_limit_hours": physical_limit,
             "plausible": plausible,
         }

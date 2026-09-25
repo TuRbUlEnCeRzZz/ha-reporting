@@ -1,5 +1,6 @@
 import json
 import math
+from decimal import Decimal, ROUND_CEILING
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -23,6 +24,7 @@ class VictoriaMetricsProvider(DataProvider):
         state_duration=False,
         state_changes=False,
         report_rollup=True,
+        raw_series=True,
     )
 
     def __init__(self, base_url: str, timeout: int = 10):
@@ -43,7 +45,7 @@ class VictoriaMetricsProvider(DataProvider):
             url,
             headers={
                 "Accept": "application/json",
-                "User-Agent": "HA-Reporting/0.1.0-alpha.21",
+                "User-Agent": "HA-Reporting/0.1.0-alpha.22",
             },
         )
 
@@ -284,8 +286,8 @@ class VictoriaMetricsProvider(DataProvider):
         quality_step: int = 300,
     ) -> str:
         selector = cls.numeric_selector_for_source(source)
-        duration = max(1, int(math.ceil(float(end) - float(start))))
-        window = f"{duration}s"
+        first_ms, end_ms = cls._millisecond_bounds(start, end)
+        window = f"{max(1, end_ms - first_ms)}ms"
         metric = str(source.get("metric") or "")
         max_interval = max(1, int(round(quality_step * 1.5)))
 
@@ -309,6 +311,11 @@ class VictoriaMetricsProvider(DataProvider):
                     ("increase", f"increase_prometheus({selector}[{window}])"),
                 ]
             )
+            if metric == "runtime":
+                common.extend([
+                    ("descent", f"descent_over_time({selector}[{window}])"),
+                    ("min", f"min_over_time({selector}[{window}])"),
+                ])
         else:
             common.extend(
                 [
@@ -346,6 +353,8 @@ class VictoriaMetricsProvider(DataProvider):
                 raise ProviderError(
                     f"Plusieurs séries numériques correspondent au rollup '{stat}'"
                 )
+            if not math.isfinite(value):
+                raise ProviderError(f"Rollup non fini: {stat}")
             output[str(stat)] = value
 
         return output
@@ -364,12 +373,21 @@ class VictoriaMetricsProvider(DataProvider):
             quality_step,
         )
 
-        # Evaluate just before the exclusive period end. MetricsQL's lookbehind
-        # window then covers the report interval without intentionally sampling
-        # the first point of the following period.
-        evaluation_time = math.nextafter(float(end), -math.inf)
-        payload = self.instant_query(expression, evaluation_time=evaluation_time)
+        first_ms, end_ms = self._millisecond_bounds(start, end)
+        # VM timestamps have millisecond precision. The lookbehind interval is
+        # (evaluation-window, evaluation], exactly [ceil(start), ceil(end)) in ms.
+        evaluation_time = str(Decimal(end_ms - 1) / 1000)
+        payload = (
+            self.instant_query(expression, evaluation_time=evaluation_time)
+            if end_ms > first_ms else {"data": {"result": []}}
+        )
         statistics = self._parse_rollup_result(payload)
+        if source.get("metric") == "runtime" and statistics.get("count", 0) > 0:
+            required = {"first", "last", "first_ts", "last_ts", "resets", "decreases", "min", "descent"}
+            if not required.issubset(statistics):
+                raise ProviderError("Rollup runtime incomplet")
+            if not float(start) <= statistics["first_ts"] <= statistics["last_ts"] < float(end):
+                raise ProviderError("Rollup runtime hors période")
 
         return {
             "provider": self.provider_id,
@@ -382,6 +400,94 @@ class VictoriaMetricsProvider(DataProvider):
             },
             "values": statistics,
         }
+
+    @staticmethod
+    def _millisecond_bounds(start, end):
+        if not (math.isfinite(float(start)) and math.isfinite(float(end))) or end <= start:
+            raise ProviderError("Période invalide")
+        return tuple(
+            int((Decimal(str(value)) * 1000).to_integral_value(rounding=ROUND_CEILING))
+            for value in (start, end)
+        )
+
+    RAW_POINT_LIMIT = 200_000
+    RAW_BYTE_LIMIT = 32 * 1024 * 1024
+    RAW_LINE_LIMIT = 1024 * 1024
+
+    def get_raw_series(self, source, start, end):
+        """Read original samples, never a five-minute query_range approximation.
+
+        Limits fail closed rather than returning a silently truncated history.
+        Multiple JSONL rows with the same labels belong to the same series.
+        """
+        if not self.configured:
+            raise ProviderError("VictoriaMetrics n'est pas configuré")
+        first_ms, end_ms = self._millisecond_bounds(start, end)
+        if first_ms >= end_ms:
+            return []
+        params = {
+            "match[]": self.numeric_selector_for_source(source),
+            "start": str(Decimal(first_ms) / 1000),
+            "end": str(Decimal(end_ms - 1) / 1000),
+            "max_rows_per_line": 5000,
+        }
+        request = urllib.request.Request(
+            f"{self.base_url}/api/v1/export?{urllib.parse.urlencode(params)}",
+            headers={"Accept": "application/stream+json", "User-Agent": "HA-Reporting/0.1.0-alpha.22"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                def lines():
+                    size = 0
+                    while True:
+                        line = response.readline(self.RAW_LINE_LIMIT + 1)
+                        if not line:
+                            return
+                        size += len(line)
+                        if len(line) > self.RAW_LINE_LIMIT or size > self.RAW_BYTE_LIMIT:
+                            raise ProviderError("Export runtime trop volumineux; vérification interrompue")
+                        yield line
+                return self._parse_raw_export(lines(), first_ms, end_ms)
+        except urllib.error.HTTPError as exc:
+            raise ProviderError(f"Export runtime VictoriaMetrics HTTP {exc.code}") from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise ProviderError("Export runtime VictoriaMetrics indisponible") from exc
+
+    @classmethod
+    def _parse_raw_export(cls, lines, first_ms, end_ms):
+        points = {}
+        identity = None
+        received = 0
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+                labels = row["metric"]
+                values, timestamps = row["values"], row["timestamps"]
+                if not isinstance(labels, dict) or not labels.get("__name__", "").endswith("_value"):
+                    raise ValueError("Série non numérique")
+                if len(values) != len(timestamps):
+                    raise ValueError("Timestamps et valeurs de tailles différentes")
+                label_key = tuple(sorted(labels.items()))
+                if identity is not None and label_key != identity:
+                    raise ValueError("Plusieurs séries numériques correspondent à l'export")
+                identity = label_key
+                for timestamp, raw in zip(timestamps, values):
+                    received += 1
+                    if received > cls.RAW_POINT_LIMIT:
+                        raise ValueError("Limite de points runtime dépassée")
+                    ts, value = float(timestamp), float(raw)
+                    if not math.isfinite(ts) or not math.isfinite(value) or ts != int(ts):
+                        raise ValueError("Échantillon brut invalide")
+                    if not first_ms <= ts < end_ms:
+                        continue
+                    if ts in points and points[ts] != value:
+                        raise ValueError("Valeurs contradictoires au même timestamp")
+                    points[ts] = value
+            except (ValueError, TypeError, KeyError, AttributeError) as exc:
+                raise ProviderError(f"Export runtime invalide: {exc}") from exc
+        return [(ts / 1000, value) for ts, value in sorted(points.items())]
 
     def get_series(
         self,
@@ -432,4 +538,3 @@ class VictoriaMetricsProvider(DataProvider):
 
         output.sort(key=lambda item: item[0])
         return output
-

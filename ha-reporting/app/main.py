@@ -28,8 +28,6 @@ PROVIDER_FILE = Path("/config/providers.yaml")
 REPORT_DIR = Path("/config/reports")
 REPORT_ROLLUP_THRESHOLD_SECONDS = 45 * 24 * 3600
 REPORT_QUALITY_STEP_SECONDS = 300
-CATALOG_DIR.mkdir(parents=True, exist_ok=True)
-REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_CATEGORIES = [
     {"id": "refrigeration", "name": "Réfrigération"},
@@ -974,7 +972,7 @@ def _execute_report_period(
                 step if retrieval_mode == "series" else None
             ),
             "quality_nominal_step_seconds": step,
-            "raw_series_transferred": retrieval_mode == "series",
+            "raw_series_transferred": retrieval_mode == "series" or sources_fallback > 0,
             "started_at_epoch": started,
             "finished_at_epoch": finished,
             "duration_seconds": finished - started,
@@ -1178,10 +1176,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_payload(400, {"error": str(exc)})
 
 
-log.info("Starting HA Reporting catalog manager on port %d", PORT)
-try:
-    log.info("Home Assistant API connection successful: %d entities", len(home_assistant_states()))
-except Exception as exc:
-    log.error("Home Assistant API initial check failed: %s", exc)
+def main():
+    CATALOG_DIR.mkdir(parents=True, exist_ok=True)
+    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    log.info("Starting HA Reporting catalog manager on port %d", PORT)
+    try:
+        log.info("Home Assistant API connection successful: %d entities", len(home_assistant_states()))
+    except Exception as exc:
+        log.error("Home Assistant API initial check failed: %s", exc)
+    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
-ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+
+if __name__ == "__main__":
+    main()

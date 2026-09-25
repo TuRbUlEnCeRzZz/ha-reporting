@@ -1,38 +1,66 @@
-# HA Reporting — 0.1.0-alpha.10
+# HA Reporting — 0.1.0-alpha.11
 
-First metric-aware statistics milestone.
+First complete-device analysis milestone.
 
-## Metric-aware calculations
+## Complete device analysis
 
-Power:
-- first / last
-- minimum / maximum
-- mean
-- peak timestamp
-- P95
+Expand a catalog and click **Analyser** on a device.
 
-Energy total / Runtime / Cycles:
-- first / last
-- delta over the selected period
-- simple counter-reset detection
+HA Reporting now:
 
-Temperature / Humidity / Voltage / Current:
-- first / last
-- minimum / maximum
-- mean
+1. loads every configured source of the device;
+2. resolves the provider for each source;
+3. queries each supported source independently;
+4. applies metric-aware statistics;
+5. keeps failures isolated;
+6. returns one normalized device-level result.
 
-## Data-quality diagnostics
+A failed or unsupported source does not abort the whole device analysis.
 
-Every normalized series now includes:
-- expected points
-- received points
-- coverage percentage
-- first / last timestamp
-- gap count (> 1.5 × requested step)
-- largest gap in seconds
+## Current metric behavior
 
-This deliberately turns the real-source test view into a diagnostic tool.
+Supported numeric sources:
+- power
+- energy_total
+- runtime
+- cycles
+- temperature
+- humidity
+- voltage
+- current
+
+`state` is explicitly marked as unsupported in alpha.11 rather than being silently misinterpreted as a numeric series.
+
+## Device UI
+
+Each source card shows:
+- metric type;
+- entity ID;
+- main business statistic;
+- supplemental statistic;
+- observed sample density;
+- number of points;
+- detected gaps.
+
+The page also provides:
+- total sources;
+- successfully analyzed sources;
+- unsupported sources;
+- errors;
+- complete device JSON behind a collapsible section.
+
+## Diagnostic wording
+
+The former quality coverage value is presented as **observed sample density** in device analysis.
+
+A low density is not automatically an error. It can be caused by:
+- Home Assistant restarts;
+- connectivity interruptions;
+- provider gaps;
+- a naturally sparse/event-driven source.
+
+This diagnostic is intentionally retained because it can reveal inconsistencies without asserting their cause.
 
 ## Next step
 
-The next milestone can analyze a complete device at once (for example Vinothèque: power + energy + compressor runtime + cycles + state) instead of one source at a time.
+The next milestone can begin turning this multi-source device result into a reusable report definition and period/comparison engine.

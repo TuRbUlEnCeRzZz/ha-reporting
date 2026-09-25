@@ -2,6 +2,8 @@ let entities = [];
 let catalogs = [];
 let categories = [];
 let currentCatalog = null;
+let analysisCatalogId = null;
+let analysisDeviceId = null;
 let selected = new Set();
 let modalSaveHandler = null;
 
@@ -341,7 +343,7 @@ async function loadProviders(){
 }
 
 function setPage(page, state={}, push=true){
-  ["homePage","providersPage","catalogPage","devicePage"].forEach(id => $(id).classList.add("hidden"));
+  ["homePage","deviceAnalysisPage","providersPage","catalogPage","devicePage"].forEach(id => $(id).classList.add("hidden"));
   $(page).classList.remove("hidden");
   $("backButton").classList.toggle("hidden", page === "homePage");
   if(push) history.pushState({page, ...state}, "", "");
@@ -427,7 +429,8 @@ $("vmSaveButton").addEventListener("click", async () => {
 });
 window.addEventListener("popstate", async event => {
   const state = event.state || {page:"homePage"};
-  if(state.page === "providersPage") await showProviders(false);
+  if(state.page === "deviceAnalysisPage") await showDeviceAnalysis(state.catalogId, state.deviceId, false);
+  else if(state.page === "providersPage") await showProviders(false);
   else if(state.page === "catalogPage") showNewCatalog(false);
   else if(state.page === "devicePage") await addDeviceTo(state.catalogId, state.catalogName, false);
   else showHome(false);
@@ -466,6 +469,7 @@ function renderCatalogs(){
         <div><span class="badge">${esc(d.category_name)}</span></div>
         <div>${d.sensors} capteur(s)</div>
         <div class="deviceActions">
+          <button onclick="showDeviceAnalysis('${esc(c.id)}','${esc(d.id)}')">Analyser</button>
           <button class="hasTooltip" data-tooltip="Modifier le nom et la catégorie de l’appareil" title="Modifier le nom et la catégorie de l’appareil" aria-label="Modifier le nom et la catégorie de l’appareil" onclick="editDevice('${esc(c.id)}','${esc(d.id)}')">Modifier</button>
           <button class="danger" onclick="deleteDevice('${esc(c.id)}','${esc(d.id)}','${esc(d.name)}')">Supprimer</button>
         </div>
@@ -703,6 +707,224 @@ $("saveDeviceButton").addEventListener("click", async () => {
   $("saveMessage").textContent = "✓ Appareil ajouté";
   setTimeout(() => showHome(), 500);
 });
+
+async function showDeviceAnalysis(catalogId, deviceId, push=true){
+  await loadCatalogs();
+
+  const catalog = catalogs.find(c => c.id === catalogId);
+  if(!catalog){
+    alert("Catalogue introuvable");
+    return;
+  }
+
+  const device = (catalog.devices || []).find(d => d.id === deviceId);
+  if(!device){
+    alert("Appareil introuvable");
+    return;
+  }
+
+  analysisCatalogId = catalogId;
+  analysisDeviceId = deviceId;
+
+  $("analysisDeviceTitle").textContent = `Analyse · ${device.name}`;
+  $("analysisDeviceMeta").textContent =
+    `${catalog.name} · ${device.category_name} · ${device.sensors} source(s)`;
+
+  $("deviceAnalysisStatus").textContent = "";
+  $("deviceAnalysisResult").classList.add("hidden");
+  $("deviceAnalysisResult").innerHTML = "";
+
+  setPage(
+    "deviceAnalysisPage",
+    {catalogId, deviceId},
+    push
+  );
+}
+
+function qualityBadge(quality){
+  const coverage = quality && quality.coverage_percent;
+  if(coverage == null) return '<span class="qualityPill">densité —</span>';
+
+  const cls = coverage >= 95 ? "good" : coverage >= 80 ? "warn" : "bad";
+  return `<span class="qualityPill ${cls}">densité ${Number(coverage).toFixed(1)} %</span>`;
+}
+
+function businessValueForSource(source){
+  const stats = (source.analysis || {}).statistics || {};
+  const unit = source.unit || "";
+
+  if(["energy_total","runtime","cycles"].includes(source.metric)){
+    return {
+      label:"Variation période",
+      value:formatSeriesNumber(stats.delta, unit)
+    };
+  }
+
+  if(source.metric === "power"){
+    const peak = stats.max || {};
+    return {
+      label:"Pic",
+      value:formatSeriesNumber(peak.value, unit),
+      sub:localDateTime(peak.timestamp)
+    };
+  }
+
+  if(["temperature","humidity","voltage","current"].includes(source.metric)){
+    return {
+      label:"Moyenne",
+      value:formatSeriesNumber(stats.mean, unit)
+    };
+  }
+
+  return {
+    label:"Résultat",
+    value:"—"
+  };
+}
+
+function renderDeviceAnalysis(result){
+  const summary = result.summary || {};
+  const sources = result.sources || [];
+
+  const sourceCards = sources.map(source => {
+    if(source.status === "unsupported"){
+      return `
+        <div class="sourceCard unsupported">
+          <div class="sourceHeader">
+            <div>
+              <div class="sourceTitle">${esc(source.sensor_key)}</div>
+              <div class="sourceEntity">${esc(source.entity_id)}</div>
+            </div>
+            <span class="metricPill">${esc(source.metric)}</span>
+          </div>
+          <div class="sourceMessage">Non disponible · ${esc(source.message || "")}</div>
+        </div>`;
+    }
+
+    if(source.status === "error" || source.status === "no_data"){
+      return `
+        <div class="sourceCard errorCard">
+          <div class="sourceHeader">
+            <div>
+              <div class="sourceTitle">${esc(source.sensor_key)}</div>
+              <div class="sourceEntity">${esc(source.entity_id)}</div>
+            </div>
+            <span class="metricPill">${esc(source.metric)}</span>
+          </div>
+          <div class="sourceMessage">${source.status === "no_data" ? "Aucune donnée" : "Erreur"} · ${esc(source.message || "")}</div>
+        </div>`;
+    }
+
+    const quality = (source.analysis || {}).quality || {};
+    const business = businessValueForSource(source);
+    const stats = (source.analysis || {}).statistics || {};
+
+    let secondary = "";
+    if(source.metric === "power"){
+      secondary = `P95 ${formatSeriesNumber(stats.p95, source.unit || "")}`;
+    }else if(["energy_total","runtime","cycles"].includes(source.metric)){
+      secondary = `${esc(stats.resets_detected ?? 0)} reset(s)`;
+    }else if(stats.min && stats.max){
+      secondary = `${formatSeriesNumber(stats.min.value, source.unit || "")} → ${formatSeriesNumber(stats.max.value, source.unit || "")}`;
+    }
+
+    return `
+      <div class="sourceCard">
+        <div class="sourceHeader">
+          <div>
+            <div class="sourceTitle">${esc(source.sensor_key)}</div>
+            <div class="sourceEntity">${esc(source.entity_id)}</div>
+          </div>
+          <span class="metricPill">${esc(source.metric)}</span>
+        </div>
+
+        <div class="sourceStats">
+          <div>
+            <div class="sourceStatLabel">${esc(business.label)}</div>
+            <div class="sourceStatValue">${business.value}</div>
+            ${business.sub ? `<div class="sourceSub">${esc(business.sub)}</div>` : ""}
+          </div>
+          <div>
+            <div class="sourceStatLabel">Complément</div>
+            <div class="sourceStatSmall">${secondary || "—"}</div>
+          </div>
+        </div>
+
+        <div class="sourceFooter">
+          ${qualityBadge(quality)}
+          <span>${esc(source.points ?? 0)} point(s)</span>
+          <span>${esc(quality.gap_count ?? 0)} trou(s)</span>
+        </div>
+      </div>`;
+  }).join("");
+
+  $("deviceAnalysisResult").classList.remove("hidden");
+  $("deviceAnalysisResult").innerHTML = `
+    <div class="deviceSummary">
+      <div class="seriesStat">
+        <div class="label">Sources</div>
+        <div class="value">${esc(summary.sources_total)}</div>
+      </div>
+      <div class="seriesStat good">
+        <div class="label">Analysées</div>
+        <div class="value">${esc(summary.sources_ok)}</div>
+      </div>
+      <div class="seriesStat">
+        <div class="label">Non supportées</div>
+        <div class="value">${esc(summary.sources_unsupported)}</div>
+      </div>
+      <div class="seriesStat ${summary.sources_error ? "bad" : ""}">
+        <div class="label">Erreurs</div>
+        <div class="value">${esc(summary.sources_error)}</div>
+      </div>
+    </div>
+
+    <p class="diagnosticNote">
+      La densité d'échantillonnage est un indicateur diagnostique : une densité faible peut provenir
+      de redémarrages Home Assistant, d'interruptions, ou simplement d'une source enregistrée de manière clairsemée.
+    </p>
+
+    <div class="sourceGrid">${sourceCards}</div>
+
+    <details class="jsonDetails">
+      <summary>Voir le JSON complet de l'appareil</summary>
+      <div class="seriesPreview">${esc(JSON.stringify(result, null, 2))}</div>
+    </details>
+  `;
+}
+
+async function analyzeCurrentDevice(){
+  if(!analysisCatalogId || !analysisDeviceId) return;
+
+  $("deviceAnalysisStatus").textContent = "Analyse en cours…";
+  $("deviceAnalysisStatus").classList.remove("error");
+  $("deviceAnalysisResult").classList.add("hidden");
+
+  const response = await fetch("api/data/analyze-device", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      catalog_id:analysisCatalogId,
+      device_id:analysisDeviceId,
+      hours:Number($("analysisHours").value),
+      step:300
+    })
+  });
+
+  const data = await response.json();
+  if(!response.ok){
+    $("deviceAnalysisStatus").textContent = "Erreur : " + data.error;
+    $("deviceAnalysisStatus").classList.add("error");
+    return;
+  }
+
+  $("deviceAnalysisStatus").textContent =
+    `✓ Analyse terminée · ${data.result.summary.sources_ok}/${data.result.summary.sources_total} source(s) analysée(s)`;
+
+  renderDeviceAnalysis(data.result);
+}
+
+$("analyzeDeviceButton").addEventListener("click", analyzeCurrentDevice);
 
 async function editDevice(catalogId, deviceId){
   const catalog = catalogs.find(c => c.id === catalogId);

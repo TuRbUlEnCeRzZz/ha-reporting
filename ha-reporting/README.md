@@ -1,5 +1,5 @@
 # HA Reporting
 
-Version **0.1.0-alpha.10**.
+Version **0.1.0-alpha.11**.
 
-Metric-aware statistics and data-quality diagnostics.
+Complete-device analysis across all configured numeric sources, with isolated errors and diagnostic sample-density information.

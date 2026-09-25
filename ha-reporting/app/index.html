@@ -15,7 +15,7 @@
   </button>
   <div>
     <h1>HA Reporting</h1>
-    <div class="subtitle">0.1.0-alpha.10 · Gestion des catalogues</div>
+    <div class="subtitle">0.1.0-alpha.11 · Gestion des catalogues</div>
   </div>
 </header>
 
@@ -32,6 +32,31 @@
       </div>
     </div>
     <div id="catalogList"></div>
+  </section>
+
+  <section id="deviceAnalysisPage" class="hidden">
+    <div class="card">
+      <div class="toolbar">
+        <div>
+          <h2 id="analysisDeviceTitle">Analyse de l'appareil</h2>
+          <p id="analysisDeviceMeta" class="muted"></p>
+        </div>
+        <div class="analysisControls">
+          <label>Période
+            <select id="analysisHours">
+              <option value="1">1 heure</option>
+              <option value="6">6 heures</option>
+              <option value="24" selected>24 heures</option>
+              <option value="168">7 jours</option>
+            </select>
+          </label>
+          <button class="primary" id="analyzeDeviceButton">Analyser l'appareil</button>
+        </div>
+      </div>
+
+      <div id="deviceAnalysisStatus" class="statusText"></div>
+      <div id="deviceAnalysisResult" class="hidden"></div>
+    </div>
   </section>
 
   <section id="providersPage" class="hidden">

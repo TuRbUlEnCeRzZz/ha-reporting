@@ -380,3 +380,54 @@ th{font-size:12px;color:var(--hr-secondary)}
 .jsonDetails .seriesPreview{margin-top:10px}
 @media(max-width:950px){.businessSummary,.qualityGrid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:600px){.businessSummary,.qualityGrid{grid-template-columns:1fr}}
+
+.analysisControls{display:flex;gap:10px;align-items:end}
+.analysisControls label{min-width:150px}
+.deviceSummary{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px;margin:16px 0}
+.diagnosticNote{
+  padding:10px 12px;
+  border-left:3px solid var(--hr-primary);
+  background:color-mix(in srgb,var(--hr-primary) 6%,transparent);
+  color:var(--hr-secondary);
+  border-radius:0 8px 8px 0;
+}
+.sourceGrid{display:grid;grid-template-columns:repeat(2,minmax(300px,1fr));gap:12px;margin-top:16px}
+.sourceCard{
+  border:1px solid var(--hr-divider);
+  border-radius:var(--hr-radius);
+  padding:14px;
+  background:color-mix(in srgb,var(--hr-card) 75%,transparent);
+}
+.sourceCard.unsupported{opacity:.72}
+.sourceCard.errorCard{border-color:color-mix(in srgb,var(--hr-error) 55%,var(--hr-divider))}
+.sourceHeader{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.sourceTitle{font-weight:750}
+.sourceEntity{margin-top:3px;color:var(--hr-secondary);font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all}
+.metricPill,.qualityPill{
+  display:inline-flex;
+  align-items:center;
+  border:1px solid var(--hr-divider);
+  border-radius:999px;
+  padding:4px 8px;
+  color:var(--hr-secondary);
+  font-size:11px;
+  white-space:nowrap;
+}
+.qualityPill.good{color:var(--hr-success);border-color:color-mix(in srgb,var(--hr-success) 45%,var(--hr-divider))}
+.qualityPill.warn{color:#d6a63b;border-color:#d6a63b}
+.qualityPill.bad{color:var(--hr-error);border-color:color-mix(in srgb,var(--hr-error) 55%,var(--hr-divider))}
+.sourceStats{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+.sourceStatLabel{color:var(--hr-secondary);font-size:11px}
+.sourceStatValue{font-size:21px;font-weight:800;margin-top:3px}
+.sourceStatSmall{font-size:14px;font-weight:650;margin-top:5px}
+.sourceSub{margin-top:3px;color:var(--hr-secondary);font-size:11px}
+.sourceFooter{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px;color:var(--hr-secondary);font-size:11px}
+.sourceMessage{margin-top:14px;color:var(--hr-secondary)}
+@media(max-width:900px){
+  .sourceGrid{grid-template-columns:1fr}
+  .deviceSummary{grid-template-columns:repeat(2,1fr)}
+  .analysisControls{flex-wrap:wrap}
+}
+@media(max-width:550px){
+  .deviceSummary{grid-template-columns:1fr}
+}

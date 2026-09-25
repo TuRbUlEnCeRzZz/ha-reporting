@@ -13,6 +13,7 @@ import yaml
 
 from providers.victoriametrics import VictoriaMetricsProvider
 from models_normalized import NormalizedSeries
+from analysis.device import DeviceAnalysisEngine
 
 PORT = 8099
 TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
@@ -503,6 +504,58 @@ def normalized_series_test(payload):
 
     return normalized.summary()
 
+
+def resolve_provider(provider_id):
+    if provider_id == "victoria_metrics":
+        return victoria_provider()
+    raise ValueError(f"Provider '{provider_id}' non implémenté")
+
+
+def analyze_complete_device(payload):
+    catalog_id = str(payload.get("catalog_id") or "").strip()
+    device_id = str(payload.get("device_id") or "").strip()
+
+    if not catalog_id or not device_id:
+        raise ValueError("catalog_id et device_id sont requis")
+
+    try:
+        hours = float(payload.get("hours", 24))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("hours doit être un nombre") from exc
+
+    if hours <= 0 or hours > 24 * 31:
+        raise ValueError("La période doit être comprise entre 0 et 744 heures")
+
+    try:
+        step = int(payload.get("step", 300))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("step doit être un entier") from exc
+
+    if step < 10 or step > 86400:
+        raise ValueError("step doit être compris entre 10 et 86400 secondes")
+
+    catalog = load_catalog(catalog_id)
+    devices = catalog.get("devices") or {}
+    if device_id not in devices:
+        raise FileNotFoundError(f"Appareil introuvable: {device_id}")
+
+    end = time.time()
+    start = end - hours * 3600
+
+    engine = DeviceAnalysisEngine(resolve_provider)
+    return engine.analyze(
+        catalog_id=catalog_id,
+        catalog_name=catalog.get("name", catalog_id),
+        device_id=device_id,
+        device=devices[device_id],
+        default_provider=(catalog.get("defaults") or {}).get(
+            "provider", "victoria_metrics"
+        ),
+        start=start,
+        end=end,
+        step=step,
+    )
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         pass
@@ -555,6 +608,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_payload(200, {"status": provider_status(payload.get("url"))})
             if path.endswith("/api/data/test-series"):
                 return self.send_payload(200, {"result": normalized_series_test(payload)})
+            if path.endswith("/api/data/analyze-device"):
+                return self.send_payload(200, {"result": analyze_complete_device(payload)})
             if path.endswith("/api/catalogs"):
                 return self.send_payload(200, {"catalog": create_catalog(payload)})
             if path.endswith("/api/categories"):

@@ -1,4 +1,4 @@
-# HA Reporting — 0.1.0-alpha.12.1
+# HA Reporting — 0.1.0-alpha.13
 
 Hotfix for VictoriaMetrics source discovery.
 

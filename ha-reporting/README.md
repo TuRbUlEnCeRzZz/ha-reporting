@@ -1,5 +1,1 @@
-# HA Reporting
-
-Version **0.1.0-alpha.2**.
-
-Loads and validates persistent YAML catalogs from `/config/catalogs`. See `DOCS.md`.
+# HA Reporting\n\nVersion **0.1.0-alpha.3**. See `DOCS.md`.\n

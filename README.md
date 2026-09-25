@@ -1,5 +1,1 @@
-# HA Reporting
-
-Modular reporting engine for Home Assistant.
-
-Current version: **0.1.0-alpha.2** — persistent YAML catalog loading and validation.
+# HA Reporting\n\nCurrent version: **0.1.0-alpha.3** — first Ingress UI and live Home Assistant entity browser.\n

@@ -1,1 +1,3 @@
-# HA Reporting\n\nCurrent version: **0.1.0-alpha.3** — first Ingress UI and live Home Assistant entity browser.\n
+# HA Reporting
+
+Current: **0.1.0-alpha.4**.

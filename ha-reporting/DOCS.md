@@ -1,15 +1,12 @@
-# HA Reporting — 0.1.0-alpha.3
+# HA Reporting — 0.1.0-alpha.4
 
-First Home Assistant Ingress interface.
+First visual catalog editor.
 
-## Features
-- Opens inside Home Assistant through Ingress.
-- Retrieves live entities through the Home Assistant Core REST API proxy.
-- Uses `SUPERVISOR_TOKEN`; no personal access token is stored.
-- Searchable entity browser.
-- Displays entity ID, friendly name, current state, unit, device class and proposed HA Reporting metric.
-- Metric suggestions are read-only in this milestone.
+- Create a catalog from Ingress.
+- Search live Home Assistant entities.
+- Suggested metric types are editable.
+- Initial selection ignores `_day` and `_month` helpers.
+- Adds `voltage` and `current`.
+- Saves version-1 YAML to `/config/catalogs`.
 
-Search for `vinotheque` after opening the Web UI.
-
-Next: catalog editor with selection, creation, editing and import/export.
+First test: create `Réfrigération`, device `Vinothèque`, search `vinotheque`, review the checked rows, then save. Expected file: `refrigeration.yaml`.

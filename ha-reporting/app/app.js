@@ -2,6 +2,9 @@ let entities = [];
 let catalogs = [];
 let categories = [];
 let currentCatalog = null;
+let editingDeviceId = null;
+let existingSensorKeyByEntity = new Map();
+let metricOverrideByEntity = new Map();
 let analysisCatalogId = null;
 let analysisDeviceId = null;
 let selected = new Set();
@@ -364,10 +367,17 @@ function showNewCatalog(push=true){
 
 async function addDeviceTo(id, name, push=true){
   currentCatalog = id;
+  editingDeviceId = null;
+  existingSensorKeyByEntity.clear();
+  metricOverrideByEntity.clear();
   selected.clear();
   $("deviceTitle").textContent = `Ajouter un appareil à « ${name} »`;
+  $("deviceEditorHelp").textContent = "Sélectionne les sources à associer au nouvel appareil.";
   $("deviceName").value = "";
+  $("deviceName").disabled = false;
   $("deviceId").value = "";
+  $("category").disabled = false;
+  $("saveDeviceButton").textContent = "Ajouter l'appareil";
   $("query").value = "";
   $("saveMessage").textContent = "";
   setPage("devicePage", {catalogId:id, catalogName:name}, push);
@@ -432,6 +442,7 @@ window.addEventListener("popstate", async event => {
   if(state.page === "deviceAnalysisPage") await showDeviceAnalysis(state.catalogId, state.deviceId, false);
   else if(state.page === "providersPage") await showProviders(false);
   else if(state.page === "catalogPage") showNewCatalog(false);
+  else if(state.page === "devicePage" && state.editDeviceId) await editDeviceSensors(state.catalogId, state.editDeviceId, false);
   else if(state.page === "devicePage") await addDeviceTo(state.catalogId, state.catalogName, false);
   else showHome(false);
 });
@@ -469,6 +480,7 @@ function renderCatalogs(){
         <div><span class="badge">${esc(d.category_name)}</span></div>
         <div>${d.sensors} capteur(s)</div>
         <div class="deviceActions">
+          <button class="hasTooltip" data-tooltip="Ajouter, retirer ou modifier les capteurs de l’appareil" title="Modifier les capteurs de l’appareil" onclick="editDeviceSensors('${esc(c.id)}','${esc(d.id)}')">Capteurs</button>
           <button onclick="showDeviceAnalysis('${esc(c.id)}','${esc(d.id)}')">Analyser</button>
           <button class="hasTooltip" data-tooltip="Modifier le nom et la catégorie de l’appareil" title="Modifier le nom et la catégorie de l’appareil" aria-label="Modifier le nom et la catégorie de l’appareil" onclick="editDevice('${esc(c.id)}','${esc(d.id)}')">Modifier</button>
           <button class="danger" onclick="deleteDevice('${esc(c.id)}','${esc(d.id)}','${esc(d.name)}')">Supprimer</button>
@@ -638,7 +650,7 @@ function drawEntities(){
       <td>${esc(e.state)}</td>
       <td>${esc(e.unit)}</td>
       <td>${esc(e.device_class)}</td>
-      <td><select class="metricSelect">${metricOptions(e.metric_guess)}</select></td>
+      <td><select class="metricSelect">${metricOptions(metricOverrideByEntity.get(e.entity_id) || e.metric_guess)}</select></td>
     </tr>`).join("");
 
   document.querySelectorAll(".entityCheck").forEach(box => {
@@ -646,6 +658,13 @@ function drawEntities(){
       const id = event.target.closest("tr").dataset.id;
       event.target.checked ? selected.add(id) : selected.delete(id);
       drawStatusOnly(shown.length);
+    });
+  });
+
+  document.querySelectorAll(".metricSelect").forEach(select => {
+    select.addEventListener("change", event => {
+      const id = event.target.closest("tr").dataset.id;
+      metricOverrideByEntity.set(id, event.target.value);
     });
   });
 }
@@ -681,20 +700,26 @@ $("saveDeviceButton").addEventListener("click", async () => {
   const sensors = [...selected].map(entityId => {
     const entity = entities.find(e => e.entity_id === entityId);
     return {
-      entity_id: entityId,
-      metric: visibleMetrics.get(entityId) || entity.metric_guess,
-      unit: entity.unit
+      key:existingSensorKeyByEntity.get(entityId) || undefined,
+      entity_id:entityId,
+      metric:visibleMetrics.get(entityId) || metricOverrideByEntity.get(entityId) || entity.metric_guess,
+      unit:entity.unit
     };
   });
 
-  const response = await fetch(`api/catalog/${encodeURIComponent(currentCatalog)}/devices`, {
-    method:"POST",
+  const editing = Boolean(editingDeviceId);
+  const url = editing
+    ? `api/catalog/${encodeURIComponent(currentCatalog)}/device/${encodeURIComponent(editingDeviceId)}`
+    : `api/catalog/${encodeURIComponent(currentCatalog)}/devices`;
+
+  const response = await fetch(url, {
+    method:editing ? "PATCH" : "POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({
-      name:$("deviceName").value,
-      category:$("category").value,
-      sensors
-    })
+    body:JSON.stringify(
+      editing
+        ? {sensors}
+        : {name:$("deviceName").value, category:$("category").value, sensors}
+    )
   });
   const data = await response.json();
 
@@ -704,9 +729,49 @@ $("saveDeviceButton").addEventListener("click", async () => {
     return;
   }
   $("saveMessage").classList.remove("error");
-  $("saveMessage").textContent = "✓ Appareil ajouté";
+  $("saveMessage").textContent = editing ? "✓ Capteurs enregistrés" : "✓ Appareil ajouté";
   setTimeout(() => showHome(), 500);
 });
+
+async function editDeviceSensors(catalogId, deviceId, push=true){
+  await loadCatalogs();
+
+  const catalog = catalogs.find(c => c.id === catalogId);
+  const device = catalog ? (catalog.devices || []).find(d => d.id === deviceId) : null;
+  if(!catalog || !device){
+    alert("Catalogue ou appareil introuvable");
+    return;
+  }
+
+  currentCatalog = catalogId;
+  editingDeviceId = deviceId;
+  selected.clear();
+  existingSensorKeyByEntity.clear();
+  metricOverrideByEntity.clear();
+
+  for(const sensor of (device.entities || [])){
+    selected.add(sensor.entity_id);
+    existingSensorKeyByEntity.set(sensor.entity_id, sensor.key);
+    metricOverrideByEntity.set(sensor.entity_id, sensor.metric);
+  }
+
+  $("deviceTitle").textContent = `Capteurs · ${device.name}`;
+  $("deviceEditorHelp").textContent =
+    "Ajoute ou retire des capteurs sans recréer l’appareil. Les clés existantes restent stables.";
+  $("deviceName").value = device.name;
+  $("deviceName").disabled = true;
+  $("deviceId").value = device.id;
+  $("category").disabled = true;
+  $("saveDeviceButton").textContent = "Enregistrer les capteurs";
+  $("query").value = "";
+  $("saveMessage").textContent = "";
+
+  await loadCategories();
+  $("category").value = device.category;
+  await loadEntities();
+
+  setPage("devicePage", {catalogId, catalogName:catalog.name, editDeviceId:deviceId}, push);
+}
 
 async function showDeviceAnalysis(catalogId, deviceId, push=true){
   await loadCatalogs();
@@ -754,6 +819,9 @@ function businessValueForSource(source){
   const unit = source.unit || "";
 
   if(["energy_total","runtime","cycles"].includes(source.metric)){
+    if(source.metric === "runtime" && stats.plausible === false){
+      return {label:"Variation période", value:"Incohérente"};
+    }
     return {
       label:"Variation période",
       value:formatSeriesNumber(stats.delta, unit)
@@ -822,7 +890,9 @@ function renderDeviceAnalysis(result){
     let secondary = "";
     if(source.metric === "power"){
       secondary = `P95 ${formatSeriesNumber(stats.p95, source.unit || "")}`;
-    }else if(["energy_total","runtime","cycles"].includes(source.metric)){
+    }else if(source.metric === "runtime"){
+      secondary = `${esc(stats.resets_detected ?? 0)} reset(s) · ${esc(stats.anomalies_ignored ?? 0)} anomalie(s) ignorée(s)`;
+    }else if(["energy_total","cycles"].includes(source.metric)){
       secondary = `${esc(stats.resets_detected ?? 0)} reset(s)`;
     }else if(stats.min && stats.max){
       secondary = `${formatSeriesNumber(stats.min.value, source.unit || "")} → ${formatSeriesNumber(stats.max.value, source.unit || "")}`;

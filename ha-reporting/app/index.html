@@ -15,7 +15,7 @@
   </button>
   <div>
     <h1>HA Reporting</h1>
-    <div class="subtitle">0.1.0-alpha.11 · Gestion des catalogues</div>
+    <div class="subtitle">0.1.0-alpha.12 · Gestion des catalogues</div>
   </div>
 </header>
 
@@ -138,6 +138,7 @@
         </label>
         <label>ID automatique
           <input id="catalogId" disabled>
+          <small class="fieldHelp">Un ID existant n’est jamais écrasé ni renommé automatiquement.</small>
         </label>
         <label>Provider
           <select id="provider">
@@ -155,6 +156,7 @@
   <section id="devicePage" class="hidden">
     <div class="card">
       <h2 id="deviceTitle">Ajouter un appareil</h2>
+      <p id="deviceEditorHelp" class="muted">Ajoute les sources de données de l'appareil.</p>
       <div class="grid three">
         <label>Nom
           <input id="deviceName" placeholder="Vinothèque">

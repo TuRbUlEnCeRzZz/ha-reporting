@@ -46,7 +46,9 @@ class MetricStatisticsEngine:
         if not numeric:
             return result
 
-        if metric in self.COUNTER_METRICS:
+        if metric == "runtime":
+            stats = self._runtime_stats(numeric, start, end)
+        elif metric in self.COUNTER_METRICS:
             stats = self._counter_stats(numeric)
         elif metric == "power":
             stats = self._power_stats(numeric)
@@ -120,6 +122,58 @@ class MetricStatisticsEngine:
         rank = max(1, math.ceil(0.95 * len(ordered)))
         base["p95"] = ordered[rank - 1]
         return base
+
+
+    @staticmethod
+    def _runtime_stats(points, start, end):
+        """Reconstruct runtime conservatively using wall-clock limits."""
+        if not points:
+            return {}
+
+        tolerance_factor = 1.05
+        tolerance_hours = 0.02
+        first = points[0]
+        accepted_ts, accepted_value = first
+        delta = 0.0
+        resets = 0
+        anomalies = 0
+        accepted_points = 1
+
+        for ts, value in points[1:]:
+            elapsed_h = max(0.0, (ts - accepted_ts) / 3600.0)
+            allowance = elapsed_h * tolerance_factor + tolerance_hours
+            diff = value - accepted_value
+
+            if diff >= 0:
+                if diff <= allowance:
+                    delta += diff
+                    accepted_ts, accepted_value = ts, value
+                    accepted_points += 1
+                else:
+                    anomalies += 1
+            else:
+                if value >= 0 and value <= allowance:
+                    resets += 1
+                    delta += value
+                    accepted_ts, accepted_value = ts, value
+                    accepted_points += 1
+                else:
+                    anomalies += 1
+
+        physical_limit = max(0.0, (end - start) / 3600.0)
+        plausible = delta <= physical_limit * tolerance_factor + tolerance_hours
+
+        return {
+            "first": {"timestamp": first[0], "value": first[1]},
+            "last": {"timestamp": points[-1][0], "value": points[-1][1]},
+            "delta": delta if plausible else None,
+            "raw_reconstructed_delta": delta,
+            "resets_detected": resets,
+            "anomalies_ignored": anomalies,
+            "accepted_points": accepted_points,
+            "physical_limit_hours": physical_limit,
+            "plausible": plausible,
+        }
 
     @staticmethod
     def _counter_stats(points):

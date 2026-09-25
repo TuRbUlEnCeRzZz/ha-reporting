@@ -298,7 +298,11 @@ def sensors_to_mapping(items):
         if not entity_id or not metric:
             continue
 
+        # Preserve a supplied existing key; generate one only for new sources.
         key = stable_id(item.get("key") or entity_id.split(".", 1)[-1])
+        if not key:
+            raise ValueError(f"Clé de capteur invalide pour {entity_id}")
+
         base_key = key
         suffix = 2
         while key in used:
@@ -309,6 +313,8 @@ def sensors_to_mapping(items):
         sensor = {"entity_id": entity_id, "metric": metric}
         if item.get("unit"):
             sensor["unit"] = str(item["unit"])
+        if item.get("provider"):
+            sensor["provider"] = str(item["provider"])
         output[key] = sensor
     return output
 
@@ -355,6 +361,12 @@ def update_device(catalog_id, device_id, payload):
         device["category"] = payload.get("category") or "other"
     if "enabled" in payload:
         device["enabled"] = bool(payload.get("enabled"))
+
+    if "sensors" in payload:
+        sensors = sensors_to_mapping(payload.get("sensors"))
+        if not sensors:
+            raise ValueError("Un appareil doit contenir au moins un capteur")
+        device["sensors"] = sensors
 
     # Device ID remains unchanged on edits.
     save_catalog(data)

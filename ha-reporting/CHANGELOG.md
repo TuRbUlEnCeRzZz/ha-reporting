@@ -1,19 +1,17 @@
 # Changelog
 
+## 0.1.0-alpha.7
+
+- Standard Home Assistant-style Back icon.
+- Standard disclosure chevrons for catalogs.
+- Tooltips on Modify actions.
+- Improved Home Assistant theme bridge.
+- Liquid Glass visual variable support.
+- Glass-style cards/dialogs with safe generic fallbacks.
+
 ## 0.1.0-alpha.6
 
-- Home Assistant theme bridge with safe fallbacks.
-- Expandable catalog cards with device details.
-- Internal Back navigation and browser history.
-- Catalog rename with stable IDs.
-- Device edit with stable IDs.
-- Device deletion.
-- Catalog deletion with historical-data safety.
-- Explicit automatic entity selection.
-
-## 0.1.0-alpha.5
-
-- Automatic IDs.
-- Multiple devices per catalog.
-- Custom categories.
-- Entity filters.
+- Expandable catalogs.
+- Browser/internal Back navigation.
+- Catalog/device editing and deletion.
+- Home Assistant theme bridge.

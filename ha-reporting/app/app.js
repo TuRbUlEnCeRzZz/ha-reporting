@@ -27,33 +27,68 @@ function slug(value){
 }
 
 function syncHomeAssistantTheme(){
-  const pairs = {
-    "--hr-bg":"--primary-background-color",
-    "--hr-card":"--card-background-color",
-    "--hr-text":"--primary-text-color",
-    "--hr-secondary":"--secondary-text-color",
-    "--hr-divider":"--divider-color",
-    "--hr-primary":"--primary-color",
-    "--hr-primary-text":"--text-primary-color",
-    "--hr-error":"--error-color",
-    "--hr-success":"--success-color"
+  const mappings = {
+    "--hr-bg":["--primary-background-color"],
+    "--hr-secondary-bg":["--secondary-background-color"],
+    "--hr-card":["--card-background-color","--ha-card-background"],
+    "--hr-input":["--card-background-color","--primary-background-color"],
+    "--hr-text":["--primary-text-color"],
+    "--hr-secondary":["--secondary-text-color"],
+    "--hr-divider":["--divider-color"],
+    "--hr-primary":["--primary-color"],
+    "--hr-primary-text":["--text-primary-color"],
+    "--hr-error":["--error-color"],
+    "--hr-success":["--success-color"],
+    "--hr-header-bg":["--app-header-background-color","--card-background-color"],
+    "--hr-radius":["--ha-card-border-radius"],
+    "--hr-shadow":["--ha-card-box-shadow"],
+
+    "--hr-glass-card-bg":["--liquid-glass-card-bg","--ha-card-background","--card-background-color"],
+    "--hr-glass-card-hover":["--liquid-glass-card-bg-hover","--ha-card-background","--card-background-color"],
+    "--hr-glass-border":["--liquid-glass-border","--divider-color"],
+    "--hr-glass-border-soft":["--liquid-glass-border-soft","--divider-color"],
+    "--hr-glass-edge":["--liquid-glass-edge"],
+    "--hr-glass-sheen":["--liquid-glass-sheen"],
+    "--hr-glass-tint-a":["--liquid-glass-tint-a"],
+    "--hr-glass-shadow":["--liquid-glass-shadow","--ha-card-box-shadow"],
+    "--hr-glass-shadow-hover":["--liquid-glass-shadow-hover","--ha-card-box-shadow"],
+    "--hr-glass-blur":["--liquid-glass-card-blur"],
+    "--hr-dialog-bg":["--dialog-background-color","--card-background-color"],
+    "--hr-dialog-blur":["--liquid-glass-dialog-blur"]
   };
+
   try{
-    const parentStyle = window.parent && window.parent !== window
-      ? getComputedStyle(window.parent.document.documentElement)
-      : null;
-    if(!parentStyle) return;
-    for(const [ours, theirs] of Object.entries(pairs)){
-      const value = parentStyle.getPropertyValue(theirs).trim();
-      if(value) document.documentElement.style.setProperty(ours, value);
+    if(!window.parent || window.parent === window) return;
+
+    const doc = window.parent.document;
+    const candidates = [
+      doc.documentElement,
+      doc.body,
+      doc.querySelector("home-assistant"),
+      doc.querySelector("home-assistant-main"),
+      doc.querySelector("ha-drawer"),
+      doc.querySelector("ha-panel-lovelace")
+    ].filter(Boolean);
+
+    const readVariable = names => {
+      for(const element of candidates){
+        const style = window.parent.getComputedStyle(element);
+        for(const name of names){
+          const value = style.getPropertyValue(name).trim();
+          if(value) return value;
+        }
+      }
+      return "";
+    };
+
+    for(const [localVar, sourceVars] of Object.entries(mappings)){
+      const value = readVariable(sourceVars);
+      if(value) document.documentElement.style.setProperty(localVar, value);
     }
-    const radius = parentStyle.getPropertyValue("--ha-card-border-radius").trim();
-    if(radius) document.documentElement.style.setProperty("--hr-radius", radius);
   }catch(_){
-    // Cross-origin or unavailable parent: CSS light/dark fallbacks remain active.
+    // If the parent is not directly readable, the generic light/dark fallbacks remain active.
   }
 }
-
 function setPage(page, state={}, push=true){
   ["homePage","catalogPage","devicePage"].forEach(id => $(id).classList.add("hidden"));
   $(page).classList.remove("hidden");
@@ -126,7 +161,7 @@ function renderCatalogs(){
         <div><span class="badge">${esc(d.category_name)}</span></div>
         <div>${d.sensors} capteur(s)</div>
         <div class="deviceActions">
-          <button onclick="editDevice('${esc(c.id)}','${esc(d.id)}')">Modifier</button>
+          <button class="hasTooltip" data-tooltip="Modifier le nom et la catégorie de l’appareil" title="Modifier le nom et la catégorie de l’appareil" aria-label="Modifier le nom et la catégorie de l’appareil" onclick="editDevice('${esc(c.id)}','${esc(d.id)}')">Modifier</button>
           <button class="danger" onclick="deleteDevice('${esc(c.id)}','${esc(d.id)}','${esc(d.name)}')">Supprimer</button>
         </div>
       </div>`).join("");
@@ -134,8 +169,12 @@ function renderCatalogs(){
     return `
       <div class="catalogCard">
         <div class="catalogHeader">
-          <button class="chevron" onclick="toggleCatalog('${esc(c.id)}',this)" aria-label="Dérouler">▶</button>
-          <div class="catalogMain" onclick="toggleCatalog('${esc(c.id)}',this.parentElement.querySelector('.chevron'))">
+          <button class="disclosureButton" onclick="toggleCatalog('${esc(c.id)}',this)" aria-label="Développer le catalogue" title="Développer le catalogue">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M9.29 6.71a1 1 0 0 0 0 1.41L13.17 12l-3.88 3.88a1 1 0 1 0 1.42 1.41l4.58-4.58a1 1 0 0 0 0-1.42l-4.58-4.58a1 1 0 0 0-1.42 0z"></path>
+            </svg>
+          </button>
+          <div class="catalogMain" onclick="toggleCatalog('${esc(c.id)}',this.parentElement.querySelector('.disclosureButton'))">
             <div>
               <div class="catalogTitle">${esc(c.name)}</div>
               <div class="catalogMeta">${esc(c.id)} · ${c.device_count} appareil(s) · ${esc(c.provider)}</div>
@@ -143,7 +182,7 @@ function renderCatalogs(){
           </div>
           <div class="catalogActions">
             <button onclick="addDeviceTo('${esc(c.id)}','${esc(c.name)}')">+ Appareil</button>
-            <button onclick="renameCatalog('${esc(c.id)}')">Modifier</button>
+            <button class="hasTooltip" data-tooltip="Modifier le nom du catalogue" title="Modifier le nom du catalogue" aria-label="Modifier le nom du catalogue" onclick="renameCatalog('${esc(c.id)}')">Modifier</button>
             <button class="danger" onclick="deleteCatalog('${esc(c.id)}','${esc(c.name)}')">Supprimer</button>
           </div>
         </div>
@@ -157,7 +196,12 @@ function renderCatalogs(){
 function toggleCatalog(id, button){
   const details = $("details-" + id);
   const open = details.classList.toggle("hidden") === false;
-  if(button) button.textContent = open ? "▼" : "▶";
+  if(button){
+    button.classList.toggle("open", open);
+    button.setAttribute("aria-expanded", String(open));
+    button.setAttribute("aria-label", open ? "Réduire le catalogue" : "Développer le catalogue");
+    button.setAttribute("title", open ? "Réduire le catalogue" : "Développer le catalogue");
+  }
 }
 
 async function createCatalog(){

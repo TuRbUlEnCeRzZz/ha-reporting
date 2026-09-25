@@ -1,5 +1,5 @@
 # HA Reporting
 
-Version **0.1.0-alpha.6**.
+Version **0.1.0-alpha.7**.
 
-Catalog management UI with Home Assistant theme bridging, expandable device lists, Back navigation, editing and deletion.
+UI refinement release with Home Assistant-style navigation, disclosure chevrons, action tooltips and improved Liquid Glass theme support.

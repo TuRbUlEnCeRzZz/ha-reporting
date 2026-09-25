@@ -1,33 +1,25 @@
-# HA Reporting — 0.1.0-alpha.6
+# HA Reporting — 0.1.0-alpha.7
 
-This release focuses on catalog management and Home Assistant-style navigation.
+UI/UX refinement release.
 
-## New UI behavior
+## Changes
 
-- Attempts to reuse active Home Assistant theme CSS variables when Ingress permits access.
-- Keeps robust light/dark fallbacks if the parent theme cannot be read.
-- Catalogs are expandable/collapsible.
-- Expanded catalogs show included devices, categories and sensor counts.
-- Internal **Back** button.
-- Browser Back/Forward history support.
-- Rename catalogs while keeping their IDs stable.
-- Edit device display name and category while keeping device IDs stable.
-- Delete a device from a catalog.
-- Delete a complete catalog with explicit confirmation.
-- Deleting configuration never deletes Home Assistant or VictoriaMetrics historical data.
-- Adds an explicit **Détection auto** button for entity selection.
+- Home Assistant-style Back button using a standard arrow icon.
+- Catalog disclosure control now uses a standard chevron-right / chevron-down behavior instead of a Play-like triangle.
+- Smooth chevron rotation when expanding/collapsing catalogs.
+- Hover tooltips clarify what **Modifier** changes:
+  - catalog: display name only;
+  - device: display name and category.
+- Expanded Home Assistant theme bridge.
+- Explicit support for Liquid Glass variables when available through Ingress:
+  - card background and hover background;
+  - borders;
+  - shadows;
+  - blur;
+  - sheen and tint;
+  - dialog background/blur;
+  - HA primary/secondary background and header colors.
+- Generic Home Assistant theme variables remain the fallback.
+- Internal IDs remain stable when names are edited.
 
-## Catalog vs report period
-
-A catalog groups devices/data sources. It is intentionally independent from report periods.
-
-Example:
-
-- Catalog: `Électroménager`
-- Reports using it:
-  - Daily report
-  - Monthly report
-  - Annual report
-  - Custom date-range report
-
-Period and comparison logic will belong to report definitions, not catalogs.
+No catalog schema or reporting-engine behavior changes are introduced in this release.

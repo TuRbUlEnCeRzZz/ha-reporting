@@ -1,55 +1,58 @@
-# HA Reporting — 0.1.0-alpha.15
+# HA Reporting — 0.1.0-alpha.16
 
-Metric-specific analysis cards + generic guardrails.
+Report definitions + period engine.
 
-## Metric-specific cards
+## Reports are now persistent objects
 
-Device analysis no longer uses the generic "Complément" layout.
+Definitions are stored in:
 
-### Temperature / Humidity / Voltage / Current
-- Minimum + timestamp
-- Mean
-- Maximum + timestamp
+`/config/reports/*.yaml`
 
-### Power
-- Peak + timestamp
-- P95
-- Mean
+A report currently contains:
+- stable ID;
+- display name;
+- one or more catalogs;
+- period definition.
 
-### Energy total
-- Period consumption
-- Counter at start
-- Counter at end
-- Reset count
+Report definitions can be created, edited, previewed and deleted from the UI.
 
-### Runtime
-- Runtime during period
-- Duty cycle (% of selected period)
-- Ignored counter anomalies
-- Reset count
+## Period engine
 
-### Cycles
-- Cycles during period
-- Counter at start
-- Counter at end
-- Reset count
+Supported shortcuts:
+- day;
+- week (Monday start);
+- month;
+- quarter;
+- semester;
+- year;
+- custom start/end.
 
-## Generic statistical guardrails
+For standard periods, a report can target:
+- the current period (start -> now);
+- the previous complete period.
 
-The statistics engine now exposes a `validation` object.
+All shortcuts are resolved into explicit timezone-aware bounds:
 
-Conservative invariants only are enforced:
-- cumulative counter deltas must not be negative;
-- runtime cannot exceed wall-clock duration;
-- runtime ignored anomalies are surfaced as warnings;
-- non-integer cycle deltas are flagged as warnings.
+`[start, end)`
 
-HA Reporting intentionally does not impose arbitrary temperature or humidity
-ranges because valid domains can differ widely (freezer, room, oven, industrial
-sensor, etc.).
+The Home Assistant configured timezone is used.
 
-## Next milestone
+## Report preview / planning
 
-With catalogs, provider retrieval, normalization, statistics, diagnostics and
-device analysis now stable enough, alpha.16 can start the report-definition and
-period/comparison engine.
+Alpha.16 deliberately does not execute VictoriaMetrics queries for a whole report yet.
+
+Preview resolves:
+- exact start/end;
+- timezone;
+- selected catalogs;
+- enabled devices;
+- source counts;
+- normalized report-plan JSON.
+
+This separates period/scope correctness from the heavier report execution stage.
+
+## Next stage
+
+The next stage can execute this normalized report plan through DataProvider and
+produce a multi-catalog report result. Comparison N/N-1/N-x can then operate on
+the same resolved-period abstraction.

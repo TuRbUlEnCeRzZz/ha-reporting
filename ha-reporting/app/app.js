@@ -1,5 +1,8 @@
 let entities = [];
 let catalogs = [];
+let reports = [];
+let editingReportId = null;
+let previewReportId = null;
 let categories = [];
 let currentCatalog = null;
 let editingDeviceId = null;
@@ -345,8 +348,247 @@ async function loadProviders(){
   renderProviderStatus(vm.status);
 }
 
+function periodTypeLabel(type){
+  return ({
+    day:"Jour",
+    week:"Semaine",
+    month:"Mois",
+    quarter:"Trimestre",
+    semester:"Semestre",
+    year:"Année",
+    custom:"Personnalisée"
+  })[type] || type;
+}
+
+function periodModeLabel(mode){
+  return mode === "previous" ? "précédente complète" : mode === "custom" ? "" : "en cours";
+}
+
+async function showReports(push=true){
+  setPage("reportsPage", {}, push);
+  await loadReports();
+}
+
+async function loadReports(){
+  const response = await fetch("api/reports");
+  const data = await response.json();
+  reports = data.reports || [];
+  renderReports();
+}
+
+function renderReports(){
+  if(!reports.length){
+    $("reportList").innerHTML = '<div class="card empty">Aucun rapport défini.</div>';
+    return;
+  }
+
+  $("reportList").innerHTML = reports.map(report => {
+    if(report.error){
+      return `<div class="reportCard"><div class="error">${esc(report.error)}</div></div>`;
+    }
+
+    const period = report.period || {};
+    const custom = period.type === "custom"
+      ? `${esc(period.start || "")} → ${esc(period.end || "")}`
+      : `${periodTypeLabel(period.type)} ${periodModeLabel(period.mode)}`;
+
+    return `
+      <div class="reportCard">
+        <div class="reportHeader">
+          <div>
+            <div class="reportTitle">${esc(report.name)}</div>
+            <div class="reportMeta">${esc(report.id)} · ${esc((report.catalog_names || []).join(", "))}</div>
+            <span class="reportPeriodPill">${custom}</span>
+          </div>
+          <div class="reportActions">
+            <button class="primary" onclick="previewReport('${esc(report.id)}')">Aperçu</button>
+            <button onclick="showReportForm('${esc(report.id)}')">Modifier</button>
+            <button class="danger" onclick="deleteReportDefinition('${esc(report.id)}','${esc(report.name)}')">Supprimer</button>
+          </div>
+        </div>
+      </div>`;
+  }).join("");
+}
+
+function updateReportPeriodFields(){
+  const custom = $("reportPeriodType").value === "custom";
+  $("customPeriodFields").classList.toggle("hidden", !custom);
+  $("reportPeriodModeLabel").classList.toggle("hidden", custom);
+}
+
+function renderReportCatalogChoices(selectedIds=[]){
+  const selected = new Set(selectedIds || []);
+  $("reportCatalogChoices").innerHTML = catalogs.length
+    ? catalogs.filter(c => !c.error).map(c => `
+        <label class="choiceItem">
+          <input type="checkbox" class="reportCatalogCheck" value="${esc(c.id)}" ${selected.has(c.id) ? "checked" : ""}>
+          <span>${esc(c.name)} <span class="muted">(${c.device_count} appareil(s))</span></span>
+        </label>`).join("")
+    : '<div class="muted">Aucun catalogue disponible.</div>';
+}
+
+async function showReportForm(reportId=null, push=true){
+  await loadCatalogs();
+  editingReportId = reportId;
+
+  let report = null;
+  if(reportId){
+    report = reports.find(r => r.id === reportId);
+    if(!report){
+      await loadReports();
+      report = reports.find(r => r.id === reportId);
+    }
+  }
+
+  $("reportFormTitle").textContent = report ? `Modifier · ${report.name}` : "Nouveau rapport";
+  $("reportName").value = report ? report.name : "";
+  $("reportName").disabled = false;
+  $("reportId").value = report ? report.id : "";
+  $("reportFormMessage").textContent = "";
+
+  const period = report ? (report.period || {}) : {type:"month",mode:"current"};
+  $("reportPeriodType").value = period.type || "month";
+  $("reportPeriodMode").value = period.mode === "previous" ? "previous" : "current";
+  $("reportCustomStart").value = period.start || "";
+  $("reportCustomEnd").value = period.end || "";
+
+  renderReportCatalogChoices(report ? report.catalogs : []);
+  updateReportPeriodFields();
+
+  setPage("reportFormPage", {reportId}, push);
+}
+
+function reportPayloadFromForm(){
+  const catalogIds = [...document.querySelectorAll(".reportCatalogCheck:checked")]
+    .map(el => el.value);
+
+  const periodType = $("reportPeriodType").value;
+  const period = periodType === "custom"
+    ? {
+        type:"custom",
+        start:$("reportCustomStart").value,
+        end:$("reportCustomEnd").value
+      }
+    : {
+        type:periodType,
+        mode:$("reportPeriodMode").value
+      };
+
+  return {
+    name:$("reportName").value,
+    catalogs:catalogIds,
+    period
+  };
+}
+
+async function saveReportDefinition(){
+  const editing = Boolean(editingReportId);
+  const url = editing
+    ? `api/report/${encodeURIComponent(editingReportId)}`
+    : "api/reports";
+
+  const response = await fetch(url, {
+    method:editing ? "PATCH" : "POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(reportPayloadFromForm())
+  });
+  const data = await response.json();
+
+  if(!response.ok){
+    $("reportFormMessage").textContent = "Erreur : " + data.error;
+    $("reportFormMessage").classList.add("error");
+    return;
+  }
+
+  $("reportFormMessage").classList.remove("error");
+  $("reportFormMessage").textContent = editing ? "✓ Rapport modifié" : "✓ Rapport créé";
+  setTimeout(() => showReports(), 450);
+}
+
+async function deleteReportDefinition(reportId, name){
+  if(!confirm(`Supprimer la définition du rapport « ${name} » ?\n\nAucun historique Home Assistant/VictoriaMetrics n'est supprimé.`)) return;
+
+  const response = await fetch(`api/report/${encodeURIComponent(reportId)}`, {method:"DELETE"});
+  const data = await response.json();
+  if(!response.ok){
+    alert(data.error);
+    return;
+  }
+  await loadReports();
+}
+
+async function previewReport(reportId, push=true){
+  previewReportId = reportId;
+  const report = reports.find(r => r.id === reportId);
+  $("reportPreviewTitle").textContent = report ? `Aperçu · ${report.name}` : "Aperçu du rapport";
+  $("reportPreviewSubtitle").textContent = "Résolution de la période et du périmètre, sans requête de données.";
+  $("reportPreviewStatus").textContent = "Résolution en cours…";
+  $("reportPreviewResult").classList.add("hidden");
+
+  setPage("reportPreviewPage", {reportId}, push);
+
+  const response = await fetch(`api/report/${encodeURIComponent(reportId)}/preview`, {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:"{}"
+  });
+  const data = await response.json();
+
+  if(!response.ok){
+    $("reportPreviewStatus").textContent = "Erreur : " + data.error;
+    $("reportPreviewStatus").classList.add("error");
+    return;
+  }
+
+  $("reportPreviewStatus").classList.remove("error");
+  $("reportPreviewStatus").textContent = "✓ Plan de rapport résolu";
+  renderReportPlan(data.plan);
+}
+
+function renderReportPlan(plan){
+  const period = plan.resolved_period || {};
+  const scope = plan.scope || {};
+  const catalogsHtml = (plan.catalogs || []).map(c => `
+    <div class="planCatalog">
+      <div class="planCatalogHeader">
+        ${esc(c.name)} · ${esc(c.device_count)} appareil(s) · ${esc(c.source_count)} source(s)
+      </div>
+      ${(c.devices || []).map(d => `
+        <div class="planDevice">
+          <div>
+            <b>${esc(d.name)}</b>
+            <div class="planDeviceMeta">${esc(d.id)} · ${esc(d.category)}</div>
+          </div>
+          <div>${esc(d.source_count)} source(s)</div>
+        </div>`).join("")}
+    </div>`).join("");
+
+  $("reportPreviewResult").classList.remove("hidden");
+  $("reportPreviewResult").innerHTML = `
+    <div class="periodHero">
+      <div class="periodLabel">${esc(period.label)}</div>
+      <div class="periodMeta">
+        Fuseau ${esc(period.timezone)} · ${esc(period.start)} → ${esc(period.end)} · sémantique ${esc(period.semantics)}
+      </div>
+    </div>
+
+    <div class="planSummary">
+      <div class="seriesStat"><div class="label">Catalogues</div><div class="value">${esc(scope.catalog_count)}</div></div>
+      <div class="seriesStat"><div class="label">Appareils</div><div class="value">${esc(scope.device_count)}</div></div>
+      <div class="seriesStat"><div class="label">Sources</div><div class="value">${esc(scope.source_count)}</div></div>
+    </div>
+
+    ${catalogsHtml}
+
+    <details class="jsonDetails">
+      <summary>Voir le JSON du plan de rapport</summary>
+      <div class="seriesPreview">${esc(JSON.stringify(plan, null, 2))}</div>
+    </details>
+  `;
+}
+
 function setPage(page, state={}, push=true){
-  ["homePage","deviceAnalysisPage","providersPage","catalogPage","devicePage"].forEach(id => $(id).classList.add("hidden"));
+  ["homePage","reportsPage","reportFormPage","reportPreviewPage","deviceAnalysisPage","providersPage","catalogPage","devicePage"].forEach(id => $(id).classList.add("hidden"));
   $(page).classList.remove("hidden");
   $("backButton").classList.toggle("hidden", page === "homePage");
   if(push) history.pushState({page, ...state}, "", "");
@@ -387,6 +629,16 @@ async function addDeviceTo(id, name, push=true){
 
 $("backButton").addEventListener("click", () => history.back());
 $("newCatalogButton").addEventListener("click", () => showNewCatalog());
+$("reportsButton").addEventListener("click", () => showReports());
+$("newReportButton").addEventListener("click", () => showReportForm());
+$("saveReportButton").addEventListener("click", saveReportDefinition);
+$("reportPeriodType").addEventListener("change", updateReportPeriodFields);
+$("reportName").addEventListener("input", () => {
+  if(!editingReportId) $("reportId").value = slug($("reportName").value);
+});
+$("refreshReportPreviewButton").addEventListener("click", () => {
+  if(previewReportId) previewReport(previewReportId, false);
+});
 $("providersButton").addEventListener("click", () => showProviders());
 $("seriesCatalog").addEventListener("change", populateSeriesDevices);
 $("seriesDevice").addEventListener("change", populateSeriesSensors);
@@ -439,7 +691,10 @@ $("vmSaveButton").addEventListener("click", async () => {
 });
 window.addEventListener("popstate", async event => {
   const state = event.state || {page:"homePage"};
-  if(state.page === "deviceAnalysisPage") await showDeviceAnalysis(state.catalogId, state.deviceId, false);
+  if(state.page === "reportPreviewPage") await previewReport(state.reportId, false);
+  else if(state.page === "reportFormPage") await showReportForm(state.reportId || null, false);
+  else if(state.page === "reportsPage") await showReports(false);
+  else if(state.page === "deviceAnalysisPage") await showDeviceAnalysis(state.catalogId, state.deviceId, false);
   else if(state.page === "providersPage") await showProviders(false);
   else if(state.page === "catalogPage") showNewCatalog(false);
   else if(state.page === "devicePage" && state.editDeviceId) await editDeviceSensors(state.catalogId, state.editDeviceId, false);

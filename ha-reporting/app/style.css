@@ -468,3 +468,65 @@ th{font-size:12px;color:var(--hr-secondary)}
     padding-top:10px;
   }
 }
+
+.choiceGrid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(220px,1fr));
+  gap:8px;
+  margin:10px 0 18px;
+}
+.choiceItem{
+  display:flex;
+  flex-direction:row;
+  align-items:center;
+  gap:9px;
+  padding:10px 12px;
+  border:1px solid var(--hr-divider);
+  border-radius:9px;
+  color:var(--hr-text);
+  font-size:13px;
+}
+.choiceItem input{width:auto}
+.reportCard{
+  background:var(--hr-card);
+  border:1px solid var(--hr-divider);
+  border-radius:var(--hr-radius);
+  padding:16px 18px;
+  margin-bottom:12px;
+}
+.reportHeader{display:flex;justify-content:space-between;gap:16px;align-items:center}
+.reportTitle{font-size:16px;font-weight:750}
+.reportMeta{margin-top:4px;color:var(--hr-secondary);font-size:12px}
+.reportActions{display:flex;gap:8px;flex-wrap:wrap}
+.reportPeriodPill{
+  display:inline-flex;
+  padding:4px 8px;
+  border:1px solid var(--hr-divider);
+  border-radius:999px;
+  font-size:11px;
+  color:var(--hr-secondary);
+  margin-top:8px;
+}
+.planSummary{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(120px,1fr));
+  gap:10px;
+  margin:16px 0;
+}
+.periodHero{
+  padding:14px;
+  border:1px solid color-mix(in srgb,var(--hr-primary) 45%,var(--hr-divider));
+  border-radius:10px;
+  background:color-mix(in srgb,var(--hr-primary) 5%,transparent);
+}
+.periodHero .periodLabel{font-size:17px;font-weight:750}
+.periodHero .periodMeta{margin-top:5px;color:var(--hr-secondary);font-size:12px}
+.planCatalog{margin-top:14px;border:1px solid var(--hr-divider);border-radius:10px;overflow:hidden}
+.planCatalogHeader{padding:12px 14px;background:color-mix(in srgb,var(--hr-card) 85%,transparent);font-weight:700}
+.planDevice{display:flex;justify-content:space-between;gap:12px;padding:10px 14px;border-top:1px solid var(--hr-divider)}
+.planDeviceMeta{color:var(--hr-secondary);font-size:12px}
+@media(max-width:750px){
+  .choiceGrid{grid-template-columns:1fr}
+  .reportHeader{align-items:flex-start;flex-direction:column}
+  .planSummary{grid-template-columns:1fr}
+}

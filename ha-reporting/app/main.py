@@ -14,14 +14,18 @@ import yaml
 from providers.victoriametrics import VictoriaMetricsProvider
 from models_normalized import NormalizedSeries
 from analysis.device import DeviceAnalysisEngine
+from periods.engine import PeriodEngine
 
 PORT = 8099
 TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 HA_STATES_URL = "http://supervisor/core/api/states"
+HA_CONFIG_URL = "http://supervisor/core/api/config"
 CATALOG_DIR = Path("/config/catalogs")
 CATEGORY_FILE = Path("/config/categories.yaml")
 PROVIDER_FILE = Path("/config/providers.yaml")
+REPORT_DIR = Path("/config/reports")
 CATALOG_DIR.mkdir(parents=True, exist_ok=True)
+REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_CATEGORIES = [
     {"id": "refrigeration", "name": "Réfrigération"},
@@ -104,6 +108,27 @@ def home_assistant_states():
             }
         )
     return output
+
+
+
+def home_assistant_config():
+    if not TOKEN:
+        raise RuntimeError("SUPERVISOR_TOKEN unavailable")
+
+    request = urllib.request.Request(
+        HA_CONFIG_URL,
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.loads(response.read())
+
+
+def home_assistant_timezone():
+    try:
+        return str(home_assistant_config().get("time_zone") or "UTC")
+    except Exception as exc:
+        log.warning("Unable to read Home Assistant timezone: %s", exc)
+        return "UTC"
 
 
 def get_categories():
@@ -568,6 +593,213 @@ def analyze_complete_device(payload):
         step=step,
     )
 
+
+def report_path(report_id):
+    return REPORT_DIR / f"{stable_id(report_id)}.yaml"
+
+
+def load_report(report_id):
+    path = report_path(report_id)
+    if not path.exists():
+        raise FileNotFoundError(f"Rapport introuvable: {report_id}")
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if data.get("report_version") != 1:
+        raise ValueError(f"Version de rapport non supportée: {data.get('report_version')!r}")
+    return data
+
+
+def save_report(data):
+    report_id = data.get("id")
+    if not report_id:
+        raise ValueError("Rapport sans identifiant")
+    report_path(report_id).write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+def _validate_report_catalogs(catalog_ids):
+    ids = []
+    for raw in catalog_ids or []:
+        cid = stable_id(raw)
+        if not cid:
+            continue
+        load_catalog(cid)
+        if cid not in ids:
+            ids.append(cid)
+
+    if not ids:
+        raise ValueError("Sélectionnez au moins un catalogue")
+    return ids
+
+
+def _validated_period_spec(payload):
+    raw = payload.get("period") or {}
+    period_type = str(raw.get("type") or "month")
+    mode = str(raw.get("mode") or "current")
+
+    spec = {"type": period_type}
+
+    if period_type == "custom":
+        spec["mode"] = "custom"
+        spec["start"] = str(raw.get("start") or "").strip()
+        spec["end"] = str(raw.get("end") or "").strip()
+    else:
+        spec["mode"] = mode
+
+    # Resolve once at save time for validation only.
+    PeriodEngine(home_assistant_timezone()).resolve(spec)
+    return spec
+
+
+def report_summary(data):
+    catalog_ids = data.get("catalogs") or []
+    catalog_names = []
+    for cid in catalog_ids:
+        try:
+            catalog_names.append(load_catalog(cid).get("name", cid))
+        except Exception:
+            catalog_names.append(cid)
+
+    return {
+        "id": data.get("id"),
+        "name": data.get("name", data.get("id")),
+        "catalogs": catalog_ids,
+        "catalog_names": catalog_names,
+        "period": data.get("period") or {},
+    }
+
+
+def list_reports():
+    output = []
+    for path in sorted(REPORT_DIR.glob("*.yaml")):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            if data.get("report_version") != 1:
+                raise ValueError("report_version must be 1")
+            output.append(report_summary(data))
+        except Exception as exc:
+            output.append(
+                {
+                    "id": path.stem,
+                    "name": path.name,
+                    "catalogs": [],
+                    "catalog_names": [],
+                    "period": {},
+                    "error": str(exc),
+                }
+            )
+    return output
+
+
+def create_report(payload):
+    name = str(payload.get("name") or "").strip()
+    report_id = stable_id(name)
+    if not name or not report_id:
+        raise ValueError("Nom du rapport requis")
+
+    path = report_path(report_id)
+    if path.exists():
+        raise ValueError(f"Le rapport '{report_id}' existe déjà")
+
+    data = {
+        "report_version": 1,
+        "id": report_id,
+        "name": name,
+        "catalogs": _validate_report_catalogs(payload.get("catalogs")),
+        "period": _validated_period_spec(payload),
+    }
+    save_report(data)
+    log.info("Report created: %s", report_id)
+    return report_summary(data)
+
+
+def update_report(report_id, payload):
+    data = load_report(report_id)
+
+    if "name" in payload:
+        name = str(payload.get("name") or "").strip()
+        if not name:
+            raise ValueError("Nom du rapport requis")
+        data["name"] = name
+
+    if "catalogs" in payload:
+        data["catalogs"] = _validate_report_catalogs(payload.get("catalogs"))
+
+    if "period" in payload:
+        data["period"] = _validated_period_spec(payload)
+
+    save_report(data)
+    log.info("Report updated: %s", report_id)
+    return report_summary(data)
+
+
+def delete_report(report_id):
+    path = report_path(report_id)
+    if not path.exists():
+        raise FileNotFoundError(f"Rapport introuvable: {report_id}")
+    path.unlink()
+    log.warning("Report deleted: %s", report_id)
+    return {"ok": True, "report_id": report_id}
+
+
+def build_report_plan(report_id):
+    report = load_report(report_id)
+    timezone_name = home_assistant_timezone()
+    resolved = PeriodEngine(timezone_name).resolve(report.get("period") or {})
+
+    catalog_plans = []
+    device_count = 0
+    source_count = 0
+
+    for catalog_id in report.get("catalogs") or []:
+        catalog = load_catalog(catalog_id)
+        devices = []
+
+        for device_id, device in (catalog.get("devices") or {}).items():
+            if not bool(device.get("enabled", True)):
+                continue
+            sensors = device.get("sensors") or {}
+            devices.append(
+                {
+                    "id": device_id,
+                    "name": device.get("name", device_id),
+                    "category": device.get("category", "other"),
+                    "source_count": len(sensors),
+                }
+            )
+            device_count += 1
+            source_count += len(sensors)
+
+        catalog_plans.append(
+            {
+                "id": catalog_id,
+                "name": catalog.get("name", catalog_id),
+                "provider": (catalog.get("defaults") or {}).get("provider", "victoria_metrics"),
+                "device_count": len(devices),
+                "source_count": sum(d["source_count"] for d in devices),
+                "devices": devices,
+            }
+        )
+
+    return {
+        "report_version": 1,
+        "report": report_summary(report),
+        "resolved_period": resolved.as_dict(),
+        "scope": {
+            "catalog_count": len(catalog_plans),
+            "device_count": device_count,
+            "source_count": source_count,
+        },
+        "catalogs": catalog_plans,
+        "execution": {
+            "status": "planned",
+            "data_queries_executed": False,
+            "next_stage": "report_execution_engine",
+        },
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         pass
@@ -589,6 +821,10 @@ class Handler(BaseHTTPRequestHandler):
         tail = path.split("/api/catalog/", 1)[1]
         return [unquote(part) for part in tail.strip("/").split("/") if part]
 
+    def path_parts_after_report(self, path):
+        tail = path.split("/api/report/", 1)[1]
+        return [unquote(part) for part in tail.strip("/").split("/") if part]
+
     def do_GET(self):
         path = urlparse(self.path).path
         try:
@@ -598,6 +834,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_payload(200, provider_overview())
             if path.endswith("/api/catalogs"):
                 return self.send_payload(200, {"catalogs": list_catalogs()})
+            if path.endswith("/api/reports"):
+                return self.send_payload(200, {"reports": list_reports()})
+            if path.endswith("/api/timezone"):
+                return self.send_payload(200, {"timezone": home_assistant_timezone()})
+            if "/api/report/" in path:
+                parts = self.path_parts_after_report(path)
+                return self.send_payload(200, {"report": report_summary(load_report(parts[0]))})
             if path.endswith("/api/categories"):
                 return self.send_payload(200, {"categories": get_categories()})
             if "/api/catalog/" in path:
@@ -622,6 +865,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_payload(200, {"result": normalized_series_test(payload)})
             if path.endswith("/api/data/analyze-device"):
                 return self.send_payload(200, {"result": analyze_complete_device(payload)})
+            if path.endswith("/api/reports"):
+                return self.send_payload(200, {"report": create_report(payload)})
+            if "/api/report/" in path and path.endswith("/preview"):
+                parts = self.path_parts_after_report(path)
+                return self.send_payload(200, {"plan": build_report_plan(parts[0])})
             if path.endswith("/api/catalogs"):
                 return self.send_payload(200, {"catalog": create_catalog(payload)})
             if path.endswith("/api/categories"):
@@ -640,6 +888,10 @@ class Handler(BaseHTTPRequestHandler):
             payload = self.json_body()
             if path.endswith("/api/providers/victoria_metrics"):
                 return self.send_payload(200, save_provider_config(payload))
+            if "/api/report/" in path:
+                parts = self.path_parts_after_report(path)
+                if len(parts) == 1:
+                    return self.send_payload(200, {"report": update_report(parts[0], payload)})
             if "/api/catalog/" in path:
                 parts = self.path_parts_after_catalog(path)
                 if len(parts) == 1:
@@ -654,6 +906,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         path = urlparse(self.path).path
         try:
+            if "/api/report/" in path:
+                parts = self.path_parts_after_report(path)
+                if len(parts) == 1:
+                    return self.send_payload(200, delete_report(parts[0]))
             if "/api/catalog/" in path:
                 parts = self.path_parts_after_catalog(path)
                 if len(parts) == 1:

@@ -15,7 +15,7 @@
   </button>
   <div>
     <h1>HA Reporting</h1>
-    <div class="subtitle">0.1.0-alpha.15 · Gestion des catalogues</div>
+    <div class="subtitle">0.1.0-alpha.16 · Catalogues & rapports</div>
   </div>
 </header>
 
@@ -27,11 +27,92 @@
         <p class="muted">Les catalogues regroupent des appareils et leurs sources de données.</p>
       </div>
       <div class="toolbarButtons">
+        <button id="reportsButton">Rapports</button>
         <button id="providersButton">Sources de données</button>
         <button class="primary" id="newCatalogButton">+ Nouveau catalogue</button>
       </div>
     </div>
     <div id="catalogList"></div>
+  </section>
+
+  <section id="reportsPage" class="hidden">
+    <div class="toolbar">
+      <div>
+        <h2>Rapports</h2>
+        <p class="muted">Les rapports associent un ou plusieurs catalogues à une définition de période.</p>
+      </div>
+      <button class="primary" id="newReportButton">+ Nouveau rapport</button>
+    </div>
+    <div id="reportList"></div>
+  </section>
+
+  <section id="reportFormPage" class="hidden">
+    <div class="card">
+      <h2 id="reportFormTitle">Nouveau rapport</h2>
+      <p class="muted">Cette version définit le périmètre et résout la période. L'exécution des requêtes du rapport viendra à l'étape suivante.</p>
+
+      <div class="grid two">
+        <label>Nom
+          <input id="reportName" placeholder="Rapport électroménager mensuel">
+        </label>
+        <label>ID stable
+          <input id="reportId" disabled>
+        </label>
+      </div>
+
+      <h3>Catalogues</h3>
+      <div id="reportCatalogChoices" class="choiceGrid"></div>
+
+      <h3>Période</h3>
+      <div class="grid two">
+        <label>Type
+          <select id="reportPeriodType">
+            <option value="day">Jour</option>
+            <option value="week">Semaine</option>
+            <option value="month" selected>Mois</option>
+            <option value="quarter">Trimestre</option>
+            <option value="semester">Semestre</option>
+            <option value="year">Année</option>
+            <option value="custom">Personnalisée</option>
+          </select>
+        </label>
+        <label id="reportPeriodModeLabel">Position
+          <select id="reportPeriodMode">
+            <option value="current">Période en cours</option>
+            <option value="previous">Période précédente complète</option>
+          </select>
+        </label>
+      </div>
+
+      <div id="customPeriodFields" class="grid two hidden">
+        <label>Début
+          <input id="reportCustomStart" type="datetime-local">
+        </label>
+        <label>Fin
+          <input id="reportCustomEnd" type="datetime-local">
+        </label>
+      </div>
+
+      <div class="actions">
+        <button class="primary" id="saveReportButton">Enregistrer le rapport</button>
+        <span id="reportFormMessage" class="statusText"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="reportPreviewPage" class="hidden">
+    <div class="card">
+      <div class="toolbar">
+        <div>
+          <h2 id="reportPreviewTitle">Aperçu du rapport</h2>
+          <p id="reportPreviewSubtitle" class="muted"></p>
+        </div>
+        <button id="refreshReportPreviewButton">Actualiser la période</button>
+      </div>
+
+      <div id="reportPreviewStatus" class="statusText"></div>
+      <div id="reportPreviewResult" class="hidden"></div>
+    </div>
   </section>
 
   <section id="deviceAnalysisPage" class="hidden">

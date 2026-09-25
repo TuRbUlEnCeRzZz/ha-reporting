@@ -521,7 +521,7 @@ async function previewReport(reportId, push=true){
   previewReportId = reportId;
   const report = reports.find(r => r.id === reportId);
   $("reportPreviewTitle").textContent = report ? `Aperçu · ${report.name}` : "Aperçu du rapport";
-  $("reportPreviewSubtitle").textContent = "Résolution de la période et du périmètre, sans requête de données.";
+  $("reportPreviewSubtitle").textContent = "Résolution de la période et du périmètre. Le rapport peut ensuite être exécuté sur les données réelles.";
   $("reportPreviewStatus").textContent = "Résolution en cours…";
   $("reportPreviewResult").classList.add("hidden");
 
@@ -587,6 +587,137 @@ function renderReportPlan(plan){
   `;
 }
 
+function reportSourceCardData(source, period){
+  return metricCardData(source, period);
+}
+
+function renderExecutedSource(source, period){
+  const status = source.status || "error";
+  const quality = (source.analysis || {}).quality || {};
+
+  if(status !== "ok"){
+    return `
+      <div class="executedSource errorCard">
+        <div class="executedSourceHeader">
+          <div>
+            <div class="executedSourceName">${esc(source.sensor_key)}</div>
+            <div class="executedSourceEntity">${esc(source.entity_id)}</div>
+          </div>
+          <span class="metricPill">${esc(source.metric)}</span>
+        </div>
+        <div class="sourceMessage">${esc(source.message || (status === "no_data" ? "Aucune donnée" : status))}</div>
+      </div>`;
+  }
+
+  const card = reportSourceCardData(source, period);
+  const cells = (card.cells || []).map(cell => `
+    <div class="executedMetric">
+      <div class="executedMetricLabel">${esc(cell.label)}</div>
+      <div class="executedMetricValue">${cell.value}</div>
+      ${cell.sub ? `<div class="sourceSub">${esc(cell.sub)}</div>` : ""}
+    </div>
+  `).join("");
+
+  return `
+    <div class="executedSource ${card.invalid ? "errorCard" : ""}">
+      <div class="executedSourceHeader">
+        <div>
+          <div class="executedSourceName">${esc(source.sensor_key)}</div>
+          <div class="executedSourceEntity">${esc(source.entity_id)}</div>
+        </div>
+        <span class="metricPill">${esc(source.metric)}</span>
+      </div>
+      <div class="executedMetrics">${cells}</div>
+      <div class="sourceFooter">
+        ${qualityBadge(quality)}
+        <span>${esc(source.points ?? 0)} point(s)</span>
+      </div>
+    </div>`;
+}
+
+function renderExecutedReport(result){
+  const summary = result.summary || {};
+  const period = result.resolved_period || {};
+  const exec = result.execution || {};
+
+  const catalogHtml = (result.catalogs || []).map(catalog => `
+    <section class="executedCatalog">
+      <h3 class="executedCatalogTitle">${esc(catalog.name)}</h3>
+      ${(catalog.devices || []).map(device => `
+        <div class="executedDevice">
+          <div class="executedDeviceHeader">
+            <div>
+              <div class="executedDeviceTitle">${esc(device.device.name)}</div>
+              <div class="executedDeviceMeta">
+                ${esc(device.device.id)} · ${esc(device.device.category)} ·
+                ${esc(device.summary.sources_ok)}/${esc(device.summary.sources_total)} source(s) analysée(s)
+              </div>
+            </div>
+          </div>
+          <div class="executedSourceGrid">
+            ${(device.sources || []).map(source => renderExecutedSource(source, device.period || {})).join("")}
+          </div>
+        </div>`).join("")}
+    </section>`).join("");
+
+  $("reportPreviewResult").classList.remove("hidden");
+  $("reportPreviewResult").innerHTML = `
+    <div class="periodHero">
+      <div class="periodLabel">${esc(period.label)}</div>
+      <div class="periodMeta">
+        Fuseau ${esc(period.timezone)} · ${esc(period.start)} → ${esc(period.end)}
+      </div>
+      <div class="executionMeta">
+        Exécution réelle · pas ${esc(exec.sampling_step_seconds)} s ·
+        ${Number(exec.duration_seconds || 0).toFixed(2)} s
+      </div>
+    </div>
+
+    <div class="reportExecutionSummary">
+      <div class="seriesStat"><div class="label">Appareils</div><div class="value">${esc(summary.devices_total)}</div></div>
+      <div class="seriesStat good"><div class="label">Sources OK</div><div class="value">${esc(summary.sources_ok)}</div></div>
+      <div class="seriesStat"><div class="label">Sans données</div><div class="value">${esc(summary.sources_no_data)}</div></div>
+      <div class="seriesStat ${summary.sources_error ? "bad" : ""}"><div class="label">Erreurs</div><div class="value">${esc(summary.sources_error)}</div></div>
+      <div class="seriesStat ${summary.sources_invalid ? "bad" : ""}"><div class="label">Invalides</div><div class="value">${esc(summary.sources_invalid)}</div></div>
+    </div>
+
+    ${catalogHtml}
+
+    <details class="jsonDetails">
+      <summary>Voir le JSON complet du rapport exécuté</summary>
+      <div class="seriesPreview">${esc(JSON.stringify(result, null, 2))}</div>
+    </details>
+  `;
+}
+
+async function executeReport(reportId){
+  $("reportPreviewStatus").textContent = "Exécution du rapport…";
+  $("reportPreviewStatus").classList.remove("error");
+  $("executeReportButton").disabled = true;
+
+  try{
+    const response = await fetch(`api/report/${encodeURIComponent(reportId)}/execute`, {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:"{}"
+    });
+    const data = await response.json();
+
+    if(!response.ok){
+      $("reportPreviewStatus").textContent = "Erreur : " + data.error;
+      $("reportPreviewStatus").classList.add("error");
+      return;
+    }
+
+    $("reportPreviewStatus").textContent =
+      `✓ Rapport exécuté · ${data.result.summary.sources_ok}/${data.result.summary.sources_total} source(s) OK`;
+
+    renderExecutedReport(data.result);
+  }finally{
+    $("executeReportButton").disabled = false;
+  }
+}
+
 function setPage(page, state={}, push=true){
   ["homePage","reportsPage","reportFormPage","reportPreviewPage","deviceAnalysisPage","providersPage","catalogPage","devicePage"].forEach(id => $(id).classList.add("hidden"));
   $(page).classList.remove("hidden");
@@ -638,6 +769,9 @@ $("reportName").addEventListener("input", () => {
 });
 $("refreshReportPreviewButton").addEventListener("click", () => {
   if(previewReportId) previewReport(previewReportId, false);
+});
+$("executeReportButton").addEventListener("click", () => {
+  if(previewReportId) executeReport(previewReportId);
 });
 $("providersButton").addEventListener("click", () => showProviders());
 $("seriesCatalog").addEventListener("change", populateSeriesDevices);

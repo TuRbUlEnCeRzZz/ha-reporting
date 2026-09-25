@@ -530,3 +530,91 @@ th{font-size:12px;color:var(--hr-secondary)}
   .reportHeader{align-items:flex-start;flex-direction:column}
   .planSummary{grid-template-columns:1fr}
 }
+
+.reportExecutionSummary{
+  display:grid;
+  grid-template-columns:repeat(5,minmax(115px,1fr));
+  gap:10px;
+  margin:16px 0;
+}
+.executionMeta{
+  margin-top:8px;
+  color:var(--hr-secondary);
+  font-size:12px;
+}
+.executedCatalog{
+  margin-top:16px;
+}
+.executedCatalogTitle{
+  font-size:16px;
+  font-weight:800;
+  margin:0 0 10px;
+}
+.executedDevice{
+  margin-bottom:14px;
+  padding:14px;
+  border:1px solid var(--hr-divider);
+  border-radius:var(--hr-radius);
+  background:color-mix(in srgb,var(--hr-card) 76%,transparent);
+}
+.executedDeviceHeader{
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  align-items:flex-start;
+  margin-bottom:12px;
+}
+.executedDeviceTitle{font-size:15px;font-weight:750}
+.executedDeviceMeta{color:var(--hr-secondary);font-size:11px;margin-top:3px}
+.executedSourceGrid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(280px,1fr));
+  gap:10px;
+}
+.executedSource{
+  padding:11px;
+  border:1px solid var(--hr-divider);
+  border-radius:10px;
+}
+.executedSource.errorCard{
+  border-color:color-mix(in srgb,var(--hr-error) 55%,var(--hr-divider));
+}
+.executedSourceHeader{
+  display:flex;
+  justify-content:space-between;
+  gap:8px;
+  align-items:flex-start;
+}
+.executedSourceName{font-weight:700;font-size:12px}
+.executedSourceEntity{
+  color:var(--hr-secondary);
+  font-size:10px;
+  margin-top:3px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  word-break:break-all;
+}
+.executedMetrics{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:8px;
+  margin-top:10px;
+}
+.executedMetric + .executedMetric{
+  border-left:1px solid var(--hr-divider);
+  padding-left:8px;
+}
+.executedMetricLabel{color:var(--hr-secondary);font-size:10px}
+.executedMetricValue{font-size:15px;font-weight:750;margin-top:3px}
+@media(max-width:1000px){
+  .reportExecutionSummary{grid-template-columns:repeat(2,1fr)}
+  .executedSourceGrid{grid-template-columns:1fr}
+}
+@media(max-width:600px){
+  .reportExecutionSummary,.executedMetrics{grid-template-columns:1fr}
+  .executedMetric + .executedMetric{
+    border-left:0;
+    border-top:1px solid var(--hr-divider);
+    padding-left:0;
+    padding-top:8px;
+  }
+}

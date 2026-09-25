@@ -1,58 +1,57 @@
-# HA Reporting — 0.1.0-alpha.16
+# HA Reporting — 0.1.0-alpha.17
 
-Report definitions + period engine.
+First real report-execution milestone.
 
-## Reports are now persistent objects
+## Report execution
 
-Definitions are stored in:
+A planned report can now be executed from its preview.
 
-`/config/reports/*.yaml`
+Execution:
+1. freezes the report's resolved period;
+2. loads all selected catalogs;
+3. loads each enabled device;
+4. analyzes every configured source through DataProvider;
+5. reuses the metric-aware statistics engine;
+6. isolates source failures;
+7. aggregates one normalized multi-catalog report result.
 
-A report currently contains:
-- stable ID;
-- display name;
-- one or more catalogs;
-- period definition.
+The final result contains only source summaries/previews, not all raw points, so
+memory remains bounded per queried source.
 
-Report definitions can be created, edited, previewed and deleted from the UI.
+## Current execution resolution
 
-## Period engine
+Alpha.17 uses a 300-second query step, identical to the validated device-analysis
+workflow. The step is included explicitly in execution metadata.
 
-Supported shortcuts:
-- day;
-- week (Monday start);
-- month;
-- quarter;
-- semester;
-- year;
-- custom start/end.
+Long-period query optimization will be handled before beta so that annual reports
+can remain accurate without unnecessary VictoriaMetrics load.
 
-For standard periods, a report can target:
-- the current period (start -> now);
-- the previous complete period.
+## UI
 
-All shortcuts are resolved into explicit timezone-aware bounds:
+The report preview now offers:
 
-`[start, end)`
+- `Actualiser la période`
+- `Exécuter le rapport`
 
-The Home Assistant configured timezone is used.
+Executed reports display:
+- exact resolved period;
+- execution duration;
+- device/source status totals;
+- catalog -> device -> source hierarchy;
+- metric-specific source cards;
+- full normalized report JSON.
 
-## Report preview / planning
+## Period wording
 
-Alpha.16 deliberately does not execute VictoriaMetrics queries for a whole report yet.
+French labels were also corrected:
+- `Mois précédent`
+- `Semaine précédente`
+- `Année précédente`
+etc.
 
-Preview resolves:
-- exact start/end;
-- timezone;
-- selected catalogs;
-- enabled devices;
-- source counts;
-- normalized report-plan JSON.
+## Next milestone
 
-This separates period/scope correctness from the heavier report execution stage.
-
-## Next stage
-
-The next stage can execute this normalized report plan through DataProvider and
-produce a multi-catalog report result. Comparison N/N-1/N-x can then operate on
-the same resolved-period abstraction.
+The normalized executed report is now ready for a comparison engine:
+- N vs previous period;
+- same period previous year;
+- N-x offsets.

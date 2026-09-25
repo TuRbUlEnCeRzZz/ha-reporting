@@ -168,13 +168,21 @@ class PeriodEngine:
 
     @staticmethod
     def _label(period_type: str, mode: str, start: datetime, end: datetime) -> str:
-        names = {
-            "day": "Jour",
-            "week": "Semaine",
-            "month": "Mois",
-            "quarter": "Trimestre",
-            "semester": "Semestre",
-            "year": "Année",
+        current_labels = {
+            "day": "Jour en cours",
+            "week": "Semaine en cours",
+            "month": "Mois en cours",
+            "quarter": "Trimestre en cours",
+            "semester": "Semestre en cours",
+            "year": "Année en cours",
         }
-        mode_label = "en cours" if mode == "current" else "précédent(e)"
-        return f"{names[period_type]} {mode_label} · {start:%d.%m.%Y %H:%M} → {end:%d.%m.%Y %H:%M}"
+        previous_labels = {
+            "day": "Jour précédent",
+            "week": "Semaine précédente",
+            "month": "Mois précédent",
+            "quarter": "Trimestre précédent",
+            "semester": "Semestre précédent",
+            "year": "Année précédente",
+        }
+        label = current_labels[period_type] if mode == "current" else previous_labels[period_type]
+        return f"{label} · {start:%d.%m.%Y %H:%M} → {end:%d.%m.%Y %H:%M}"

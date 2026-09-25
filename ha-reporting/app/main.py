@@ -800,6 +800,109 @@ def build_report_plan(report_id):
     }
 
 
+
+def execute_report(report_id):
+    """Execute a persisted report over its resolved period.
+
+    Alpha.17 intentionally reuses the already validated DeviceAnalysisEngine.
+    Sources are queried sequentially and only normalized summaries/previews are
+    retained in the final report result, keeping memory bounded per source.
+    """
+    report = load_report(report_id)
+    timezone_name = home_assistant_timezone()
+    resolved = PeriodEngine(timezone_name).resolve(report.get("period") or {})
+
+    start_epoch = resolved.start.timestamp()
+    end_epoch = resolved.end.timestamp()
+    step = 300
+
+    started = time.time()
+    device_engine = DeviceAnalysisEngine(resolve_provider)
+
+    catalog_results = []
+    total_devices = 0
+    total_sources = 0
+    sources_ok = 0
+    sources_no_data = 0
+    sources_unsupported = 0
+    sources_error = 0
+    sources_invalid = 0
+
+    for catalog_id in report.get("catalogs") or []:
+        catalog = load_catalog(catalog_id)
+        default_provider = (catalog.get("defaults") or {}).get(
+            "provider", "victoria_metrics"
+        )
+
+        devices_out = []
+
+        for device_id, device in (catalog.get("devices") or {}).items():
+            if not bool(device.get("enabled", True)):
+                continue
+
+            result = device_engine.analyze(
+                catalog_id=catalog_id,
+                catalog_name=catalog.get("name", catalog_id),
+                device_id=device_id,
+                device=device,
+                default_provider=default_provider,
+                start=start_epoch,
+                end=end_epoch,
+                step=step,
+            )
+
+            total_devices += 1
+            total_sources += result["summary"]["sources_total"]
+            sources_ok += result["summary"]["sources_ok"]
+            sources_no_data += result["summary"]["sources_no_data"]
+            sources_unsupported += result["summary"]["sources_unsupported"]
+            sources_error += result["summary"]["sources_error"]
+
+            for source in result.get("sources") or []:
+                analysis = source.get("analysis") or {}
+                validation = analysis.get("validation") or {}
+                if source.get("status") == "ok" and validation.get("valid") is False:
+                    sources_invalid += 1
+
+            devices_out.append(result)
+
+        catalog_results.append(
+            {
+                "id": catalog_id,
+                "name": catalog.get("name", catalog_id),
+                "provider": default_provider,
+                "devices": devices_out,
+            }
+        )
+
+    finished = time.time()
+
+    return {
+        "report_version": 1,
+        "report": report_summary(report),
+        "resolved_period": resolved.as_dict(),
+        "execution": {
+            "status": "completed",
+            "data_queries_executed": True,
+            "sampling_step_seconds": step,
+            "started_at_epoch": started,
+            "finished_at_epoch": finished,
+            "duration_seconds": finished - started,
+        },
+        "summary": {
+            "catalogs_total": len(catalog_results),
+            "devices_total": total_devices,
+            "sources_total": total_sources,
+            "sources_ok": sources_ok,
+            "sources_no_data": sources_no_data,
+            "sources_unsupported": sources_unsupported,
+            "sources_error": sources_error,
+            "sources_invalid": sources_invalid,
+        },
+        "catalogs": catalog_results,
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         pass
@@ -870,6 +973,9 @@ class Handler(BaseHTTPRequestHandler):
             if "/api/report/" in path and path.endswith("/preview"):
                 parts = self.path_parts_after_report(path)
                 return self.send_payload(200, {"plan": build_report_plan(parts[0])})
+            if "/api/report/" in path and path.endswith("/execute"):
+                parts = self.path_parts_after_report(path)
+                return self.send_payload(200, {"result": execute_report(parts[0])})
             if path.endswith("/api/catalogs"):
                 return self.send_payload(200, {"catalog": create_catalog(payload)})
             if path.endswith("/api/categories"):

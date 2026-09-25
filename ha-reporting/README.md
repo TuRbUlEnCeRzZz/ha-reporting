@@ -1,3 +1,3 @@
 # HA Reporting
 
-Version **0.1.0-alpha.18** — data-quality, period-boundary and cumulative-counter reliability hardening.
+Version **0.1.0-alpha.19** — quality-aware N / N-x report comparisons.

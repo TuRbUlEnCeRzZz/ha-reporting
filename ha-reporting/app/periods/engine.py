@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import calendar
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -165,6 +166,121 @@ class PeriodEngine:
         total = dt.year * 12 + (dt.month - 1) + months
         year, month_index = divmod(total, 12)
         return dt.replace(year=year, month=month_index + 1, day=1)
+
+    def comparison_targets(
+        self,
+        base: ResolvedPeriod,
+        comparison_spec: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        spec = comparison_spec or {}
+        previous_periods = self._bounded_count(spec.get("previous_periods", 0))
+        previous_years = self._bounded_count(spec.get("previous_years", 0))
+
+        output = []
+        for offset in range(1, previous_periods + 1):
+            output.append(
+                self._comparison_target(base, "previous_period", offset)
+            )
+        for offset in range(1, previous_years + 1):
+            output.append(
+                self._comparison_target(base, "previous_year", offset)
+            )
+        return output
+
+    @staticmethod
+    def _bounded_count(raw: Any) -> int:
+        try:
+            value = int(raw or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Le nombre de périodes de comparaison doit être un entier") from exc
+        if value < 0 or value > 5:
+            raise ValueError("Les comparaisons N-x sont limitées à 5 périodes par type")
+        return value
+
+    def _comparison_target(
+        self,
+        base: ResolvedPeriod,
+        kind: str,
+        offset: int,
+    ) -> dict[str, Any]:
+        if kind == "previous_period":
+            if base.period_type == "custom":
+                duration = base.end - base.start
+                start = base.start - duration * offset
+                end = base.end - duration * offset
+            else:
+                start = self._shift_preserving_position(
+                    base.start, base.period_type, -offset
+                )
+                end = self._shift_preserving_position(
+                    base.end, base.period_type, -offset
+                )
+            label = (
+                f"N-{offset} période"
+                if offset == 1
+                else f"N-{offset} périodes"
+            )
+            target_id = f"period_{offset}"
+        elif kind == "previous_year":
+            start = self._add_years_preserve_day(base.start, -offset)
+            end = self._add_years_preserve_day(base.end, -offset)
+            label = f"N-{offset} an" if offset == 1 else f"N-{offset} ans"
+            target_id = f"year_{offset}"
+        else:
+            raise ValueError(f"Type de comparaison inconnu: {kind}")
+
+        resolved = ResolvedPeriod(
+            period_type=base.period_type,
+            mode="comparison",
+            timezone=self.timezone_name,
+            start=start,
+            end=end,
+            label=(
+                f"{label} · {start:%d.%m.%Y %H:%M} → "
+                f"{end:%d.%m.%Y %H:%M}"
+            ),
+        )
+        return {
+            "id": target_id,
+            "kind": kind,
+            "offset": offset,
+            "label": label,
+            "resolved_period": resolved,
+        }
+
+    def _shift_preserving_position(
+        self,
+        dt: datetime,
+        period_type: str,
+        amount: int,
+    ) -> datetime:
+        if period_type == "day":
+            return dt + timedelta(days=amount)
+        if period_type == "week":
+            return dt + timedelta(weeks=amount)
+        if period_type == "month":
+            return self._add_months_preserve_day(dt, amount)
+        if period_type == "quarter":
+            return self._add_months_preserve_day(dt, amount * 3)
+        if period_type == "semester":
+            return self._add_months_preserve_day(dt, amount * 6)
+        if period_type == "year":
+            return self._add_years_preserve_day(dt, amount)
+        raise ValueError(period_type)
+
+    @staticmethod
+    def _add_months_preserve_day(dt: datetime, months: int) -> datetime:
+        total = dt.year * 12 + (dt.month - 1) + months
+        year, month_index = divmod(total, 12)
+        month = month_index + 1
+        day = min(dt.day, calendar.monthrange(year, month)[1])
+        return dt.replace(year=year, month=month, day=day)
+
+    @staticmethod
+    def _add_years_preserve_day(dt: datetime, years: int) -> datetime:
+        year = dt.year + years
+        day = min(dt.day, calendar.monthrange(year, dt.month)[1])
+        return dt.replace(year=year, day=day)
 
     @staticmethod
     def _label(period_type: str, mode: str, start: datetime, end: datetime) -> str:

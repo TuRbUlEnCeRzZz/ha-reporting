@@ -395,6 +395,11 @@ function renderReports(){
       ? `${esc(period.start || "")} → ${esc(period.end || "")}`
       : `${periodTypeLabel(period.type)} ${periodModeLabel(period.mode)}`;
 
+    const comparisons = report.comparisons || {};
+    const comparisonLabels = [];
+    if(Number(comparisons.previous_periods || 0) > 0) comparisonLabels.push(`N-1…N-${comparisons.previous_periods} période(s)`);
+    if(Number(comparisons.previous_years || 0) > 0) comparisonLabels.push(`N-1…N-${comparisons.previous_years} an(s)`);
+
     return `
       <div class="reportCard">
         <div class="reportHeader">
@@ -402,6 +407,7 @@ function renderReports(){
             <div class="reportTitle">${esc(report.name)}</div>
             <div class="reportMeta">${esc(report.id)} · ${esc((report.catalog_names || []).join(", "))}</div>
             <span class="reportPeriodPill">${custom}</span>
+            ${comparisonLabels.length ? `<span class="reportPeriodPill">${esc(comparisonLabels.join(" · "))}</span>` : ""}
           </div>
           <div class="reportActions">
             <button class="primary" onclick="previewReport('${esc(report.id)}')">Aperçu</button>
@@ -455,6 +461,10 @@ async function showReportForm(reportId=null, push=true){
   $("reportCustomStart").value = period.start || "";
   $("reportCustomEnd").value = period.end || "";
 
+  const comparisons = report ? (report.comparisons || {}) : {};
+  $("reportPreviousPeriods").value = String(comparisons.previous_periods || 0);
+  $("reportPreviousYears").value = String(comparisons.previous_years || 0);
+
   renderReportCatalogChoices(report ? report.catalogs : []);
   updateReportPeriodFields();
 
@@ -480,7 +490,11 @@ function reportPayloadFromForm(){
   return {
     name:$("reportName").value,
     catalogs:catalogIds,
-    period
+    period,
+    comparisons:{
+      previous_periods:Number($("reportPreviousPeriods").value || 0),
+      previous_years:Number($("reportPreviousYears").value || 0)
+    }
   };
 }
 
@@ -579,7 +593,19 @@ function renderReportPlan(plan){
       <div class="seriesStat"><div class="label">Catalogues</div><div class="value">${esc(scope.catalog_count)}</div></div>
       <div class="seriesStat"><div class="label">Appareils</div><div class="value">${esc(scope.device_count)}</div></div>
       <div class="seriesStat"><div class="label">Sources</div><div class="value">${esc(scope.source_count)}</div></div>
+      <div class="seriesStat"><div class="label">Comparaisons</div><div class="value">${esc(scope.comparison_period_count || 0)}</div></div>
+      <div class="seriesStat"><div class="label">Requêtes estimées</div><div class="value">${esc(scope.estimated_source_queries || scope.source_count)}</div></div>
     </div>
+
+    ${(plan.comparison_targets || []).length ? `
+      <div class="comparisonPlanBox">
+        <h3>Périodes de comparaison</h3>
+        ${(plan.comparison_targets || []).map(target => `
+          <div class="comparisonPlanRow">
+            <b>${esc(target.label)}</b>
+            <span>${esc(target.resolved_period.start)} → ${esc(target.resolved_period.end)}</span>
+          </div>`).join("")}
+      </div>` : ""}
 
     ${catalogsHtml}
 
@@ -664,6 +690,89 @@ function renderExecutedSource(source, period){
     </div>`;
 }
 
+function signedValue(value, unit=""){
+  if(value == null || Number.isNaN(Number(value))) return "—";
+  const number = Number(value);
+  const sign = number > 0 ? "+" : "";
+  return `${sign}${number.toFixed(Math.abs(number) >= 100 ? 1 : 2)}${unit ? " " + unit : ""}`;
+}
+
+function comparisonStatusLabel(status){
+  return ({
+    comparable:"Comparable",
+    partial:"Partielle",
+    reconstructed:"Reconstruite",
+    unavailable:"Indisponible"
+  })[status] || status;
+}
+
+function comparisonSourceCard(source){
+  const status = source.comparison_status || "unavailable";
+  const unit = source.unit || "";
+  const rows = (source.values || []).map(value => `
+    <div class="comparisonValueRow">
+      <div class="comparisonMetricName">${esc(value.label)}</div>
+      <div><span class="comparisonMiniLabel">N</span>${formatSeriesNumber(value.base,unit)}</div>
+      <div><span class="comparisonMiniLabel">Réf.</span>${formatSeriesNumber(value.reference,unit)}</div>
+      <div><span class="comparisonMiniLabel">Écart</span>${signedValue(value.absolute_change,unit)}</div>
+      <div><span class="comparisonMiniLabel">%</span>${value.relative_change_percent == null ? "—" : signedValue(value.relative_change_percent,"%")}</div>
+    </div>`).join("");
+
+  const bq = source.base_quality || {};
+  const rq = source.reference_quality || {};
+  const qualityText = `N couverture ${bq.period_coverage_percent == null ? "—" : Number(bq.period_coverage_percent).toFixed(1)+" %"} · ` +
+    `Réf. couverture ${rq.period_coverage_percent == null ? "—" : Number(rq.period_coverage_percent).toFixed(1)+" %"}`;
+
+  return `
+    <div class="comparisonSource comparison-${status}">
+      <div class="executedSourceHeader">
+        <div>
+          <div class="executedSourceName">${esc(source.sensor_key)}</div>
+          <div class="executedSourceEntity">${esc(source.entity_id)}</div>
+        </div>
+        <div class="comparisonPills">
+          <span class="metricPill">${esc(source.metric)}</span>
+          <span class="comparisonStatus ${status}">${esc(comparisonStatusLabel(status))}</span>
+        </div>
+      </div>
+      ${rows || `<div class="sourceMessage">Comparaison non calculable.</div>`}
+      <div class="comparisonQuality">${esc(qualityText)}</div>
+      ${(source.reasons || []).length ? `<div class="metricNotes">${source.reasons.map(r => `<span>${esc(r)}</span>`).join("")}</div>` : ""}
+    </div>`;
+}
+
+function renderComparisonTarget(target){
+  const summary = target.summary || {};
+  const catalogs = (target.catalogs || []).map(catalog => `
+    <div class="comparisonCatalog">
+      <h4>${esc(catalog.name)}</h4>
+      ${(catalog.devices || []).map(device => `
+        <div class="comparisonDevice">
+          <div class="comparisonDeviceTitle">${esc(device.name)}</div>
+          <div class="comparisonSourceGrid">
+            ${(device.sources || []).map(comparisonSourceCard).join("")}
+          </div>
+        </div>`).join("")}
+    </div>`).join("");
+
+  return `
+    <section class="comparisonTarget">
+      <div class="comparisonTargetHeader">
+        <div>
+          <h3>${esc(target.label)}</h3>
+          <div class="muted">${esc(target.resolved_period.start)} → ${esc(target.resolved_period.end)}</div>
+        </div>
+      </div>
+      <div class="comparisonSummary">
+        <div class="seriesStat good"><div class="label">Comparables</div><div class="value">${esc(summary.sources_comparable || 0)}</div></div>
+        <div class="seriesStat"><div class="label">Partielles</div><div class="value">${esc(summary.sources_partial || 0)}</div></div>
+        <div class="seriesStat"><div class="label">Reconstruites</div><div class="value">${esc(summary.sources_reconstructed || 0)}</div></div>
+        <div class="seriesStat"><div class="label">Indisponibles</div><div class="value">${esc(summary.sources_unavailable || 0)}</div></div>
+      </div>
+      ${catalogs}
+    </section>`;
+}
+
 function renderExecutedReport(result){
   const summary = result.summary || {};
   const period = result.resolved_period || {};
@@ -713,6 +822,13 @@ function renderExecutedReport(result){
 
     ${catalogHtml}
 
+    ${(result.comparisons || {}).enabled ? `
+      <section class="comparisonsSection">
+        <h2>Comparaisons N / N-x</h2>
+        <p class="muted">Les écarts sont calculés uniquement lorsque les deux périodes fournissent des statistiques comparables. La qualité de chaque côté reste visible.</p>
+        ${((result.comparisons || {}).targets || []).map(renderComparisonTarget).join("")}
+      </section>` : ""}
+
     <details class="jsonDetails">
       <summary>Voir le JSON complet du rapport exécuté</summary>
       <div class="seriesPreview">${esc(JSON.stringify(result, null, 2))}</div>
@@ -739,8 +855,10 @@ async function executeReport(reportId){
       return;
     }
 
+    const comparisonCount = (data.result.comparisons || {}).target_count || 0;
     $("reportPreviewStatus").textContent =
-      `✓ Rapport exécuté · ${data.result.summary.sources_ok}/${data.result.summary.sources_total} source(s) OK`;
+      `✓ Rapport exécuté · ${data.result.summary.sources_ok}/${data.result.summary.sources_total} source(s) OK` +
+      (comparisonCount ? ` · ${comparisonCount} comparaison(s)` : "");
 
     renderExecutedReport(data.result);
   }finally{

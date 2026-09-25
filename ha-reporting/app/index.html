@@ -15,7 +15,7 @@
   </button>
   <div>
     <h1>HA Reporting</h1>
-    <div class="subtitle">0.1.0-alpha.18 · Catalogues & rapports</div>
+    <div class="subtitle">0.1.0-alpha.19 · Catalogues & rapports</div>
   </div>
 </header>
 
@@ -49,7 +49,7 @@
   <section id="reportFormPage" class="hidden">
     <div class="card">
       <h2 id="reportFormTitle">Nouveau rapport</h2>
-      <p class="muted">Cette version définit le périmètre et résout la période. L'exécution des requêtes du rapport viendra à l'étape suivante.</p>
+      <p class="muted">Définis le périmètre, la période et les comparaisons N / N-x du rapport.</p>
 
       <div class="grid two">
         <label>Nom
@@ -90,6 +90,27 @@
         </label>
         <label>Fin
           <input id="reportCustomEnd" type="datetime-local">
+        </label>
+      </div>
+
+      <h3>Comparaisons</h3>
+      <p class="muted">Les unités sont explicites : N-1 période n'est pas la même chose que N-1 an.</p>
+      <div class="grid two">
+        <label>Périodes précédentes (N-x)
+          <select id="reportPreviousPeriods">
+            <option value="0">Aucune</option>
+            <option value="1">N-1 période</option>
+            <option value="2">N-1 à N-2 périodes</option>
+            <option value="3">N-1 à N-3 périodes</option>
+          </select>
+        </label>
+        <label>Même période des années précédentes
+          <select id="reportPreviousYears">
+            <option value="0">Aucune</option>
+            <option value="1">N-1 an</option>
+            <option value="2">N-1 à N-2 ans</option>
+            <option value="3">N-1 à N-3 ans</option>
+          </select>
         </label>
       </div>
 

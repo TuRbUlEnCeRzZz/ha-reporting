@@ -15,6 +15,7 @@ from providers.victoriametrics import VictoriaMetricsProvider
 from models_normalized import NormalizedSeries
 from analysis.device import DeviceAnalysisEngine
 from periods.engine import PeriodEngine
+from comparisons.engine import ComparisonEngine
 
 PORT = 8099
 TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
@@ -652,6 +653,24 @@ def _validated_period_spec(payload):
     return spec
 
 
+def _validated_comparisons(payload):
+    raw = payload.get("comparisons") or {}
+
+    def count(name):
+        try:
+            value = int(raw.get(name, 0) or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name} doit être un entier") from exc
+        if value < 0 or value > 5:
+            raise ValueError("Chaque type de comparaison est limité à 5 périodes")
+        return value
+
+    return {
+        "previous_periods": count("previous_periods"),
+        "previous_years": count("previous_years"),
+    }
+
+
 def report_summary(data):
     catalog_ids = data.get("catalogs") or []
     catalog_names = []
@@ -667,6 +686,10 @@ def report_summary(data):
         "catalogs": catalog_ids,
         "catalog_names": catalog_names,
         "period": data.get("period") or {},
+        "comparisons": data.get("comparisons") or {
+            "previous_periods": 0,
+            "previous_years": 0,
+        },
     }
 
 
@@ -708,6 +731,7 @@ def create_report(payload):
         "name": name,
         "catalogs": _validate_report_catalogs(payload.get("catalogs")),
         "period": _validated_period_spec(payload),
+        "comparisons": _validated_comparisons(payload),
     }
     save_report(data)
     log.info("Report created: %s", report_id)
@@ -728,6 +752,9 @@ def update_report(report_id, payload):
 
     if "period" in payload:
         data["period"] = _validated_period_spec(payload)
+
+    if "comparisons" in payload:
+        data["comparisons"] = _validated_comparisons(payload)
 
     save_report(data)
     log.info("Report updated: %s", report_id)
@@ -782,6 +809,11 @@ def build_report_plan(report_id):
             }
         )
 
+    comparison_targets = PeriodEngine(timezone_name).comparison_targets(
+        resolved,
+        report.get("comparisons") or {},
+    )
+
     return {
         "report_version": 1,
         "report": report_summary(report),
@@ -790,7 +822,19 @@ def build_report_plan(report_id):
             "catalog_count": len(catalog_plans),
             "device_count": device_count,
             "source_count": source_count,
+            "comparison_period_count": len(comparison_targets),
+            "estimated_source_queries": source_count * (1 + len(comparison_targets)),
         },
+        "comparison_targets": [
+            {
+                "id": target["id"],
+                "kind": target["kind"],
+                "offset": target["offset"],
+                "label": target["label"],
+                "resolved_period": target["resolved_period"].as_dict(),
+            }
+            for target in comparison_targets
+        ],
         "catalogs": catalog_plans,
         "execution": {
             "status": "planned",
@@ -801,21 +845,9 @@ def build_report_plan(report_id):
 
 
 
-def execute_report(report_id):
-    """Execute a persisted report over its resolved period.
-
-    Alpha.17 intentionally reuses the already validated DeviceAnalysisEngine.
-    Sources are queried sequentially and only normalized summaries/previews are
-    retained in the final report result, keeping memory bounded per source.
-    """
-    report = load_report(report_id)
-    timezone_name = home_assistant_timezone()
-    resolved = PeriodEngine(timezone_name).resolve(report.get("period") or {})
-
+def _execute_report_period(report, resolved, step=300):
     start_epoch = resolved.start.timestamp()
     end_epoch = resolved.end.timestamp()
-    step = 300
-
     started = time.time()
     device_engine = DeviceAnalysisEngine(resolve_provider)
 
@@ -833,7 +865,6 @@ def execute_report(report_id):
         default_provider = (catalog.get("defaults") or {}).get(
             "provider", "victoria_metrics"
         )
-
         devices_out = []
 
         for device_id, device in (catalog.get("devices") or {}).items():
@@ -858,7 +889,6 @@ def execute_report(report_id):
             sources_invalid += result["summary"].get("sources_invalid", 0)
             sources_unsupported += result["summary"]["sources_unsupported"]
             sources_error += result["summary"]["sources_error"]
-
             devices_out.append(result)
 
         catalog_results.append(
@@ -871,10 +901,7 @@ def execute_report(report_id):
         )
 
     finished = time.time()
-
     return {
-        "report_version": 1,
-        "report": report_summary(report),
         "resolved_period": resolved.as_dict(),
         "execution": {
             "status": "completed",
@@ -896,6 +923,52 @@ def execute_report(report_id):
         },
         "catalogs": catalog_results,
     }
+
+
+def execute_report(report_id):
+    report = load_report(report_id)
+    timezone_name = home_assistant_timezone()
+    period_engine = PeriodEngine(timezone_name)
+    resolved = period_engine.resolve(report.get("period") or {})
+    step = 300
+
+    full_started = time.time()
+    base = _execute_report_period(report, resolved, step=step)
+    target_specs = period_engine.comparison_targets(
+        resolved,
+        report.get("comparisons") or {},
+    )
+
+    comparison_engine = ComparisonEngine()
+    comparison_targets = []
+
+    for target in target_specs:
+        reference = _execute_report_period(
+            report,
+            target["resolved_period"],
+            step=step,
+        )
+        comparison_targets.append(
+            comparison_engine.compare_target(base, reference, target)
+        )
+
+    finished = time.time()
+    result = {
+        "report_version": 1,
+        "report": report_summary(report),
+        **base,
+        "execution": {
+            **base["execution"],
+            "comparison_periods_executed": len(comparison_targets),
+            "total_duration_seconds": finished - full_started,
+        },
+        "comparisons": {
+            "enabled": bool(comparison_targets),
+            "target_count": len(comparison_targets),
+            "targets": comparison_targets,
+        },
+    }
+    return result
 
 
 class Handler(BaseHTTPRequestHandler):

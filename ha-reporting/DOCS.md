@@ -1,64 +1,74 @@
-# HA Reporting — 0.1.0-alpha.18
+# HA Reporting — 0.1.0-alpha.19
 
-Data-reliability hardening before period comparisons.
+Quality-aware N / N-x comparison engine.
 
-## Strict report boundaries
+## Report comparison configuration
 
-Report periods use `[start,end)` semantics. Alpha.18 now enforces this in both
-the VictoriaMetrics provider and statistics engine.
+Reports can now request two explicit comparison families:
 
-A 31-day month sampled every 300 seconds expects exactly 8928 points.
+- **Previous periods**: N-1, N-2, N-3… periods of the report type.
+- **Previous years**: the same date window one, two, three… years earlier.
 
-## Period coverage vs sample density
+The units are intentionally explicit. `N-1 period` is never silently treated as
+`N-1 year`.
 
-The former single density value is split into:
+For a complete August 2026 monthly report:
 
-- **Period coverage**: how much of the requested period lies between the first
-  and last available samples.
-- **Sample density**: how complete the samples are inside that observed interval.
+- N-1 period = July 2026
+- N-2 periods = June 2026
+- N-1 year = August 2025
 
-This distinguishes a source that only started halfway through a month from a
-source that existed all month but was sparsely recorded.
+For a partial current period, both start and end are shifted so that elapsed
+positions remain comparable (e.g. 1–25 September -> 1–25 August).
 
-## No history is neutral
+Custom periods use their exact duration for previous-period comparisons.
 
-An empty historical result is now shown as:
+## Comparison statistics
 
-`Pas d'historique disponible sur cette période.`
+Metric-aware comparison fields:
 
-It remains a `no_data` status and is no longer styled as a provider/statistical
-error.
+- power: peak, P95, mean
+- temperature/humidity/voltage/current: min, mean, max
+- energy: period delta
+- runtime: period runtime
+- cycles: period cycles
 
-## Safer cumulative counters
+Each comparable field contains:
 
-Energy and cycle counters now prefer first-to-last delta when no plausible reset
-is detected.
+- N value
+- reference value
+- absolute difference
+- relative difference (%) when reference != 0
 
-Downward transitions are treated as resets only when the new value is close to
-the counter baseline. Other downward jumps are ignored and surfaced as
-warnings.
+## Quality-aware comparison status
 
-When a genuine reset is used, the result is explicitly marked as reconstructed.
+Every source comparison is classified descriptively as:
 
-Normalized statistics expose:
-- direct delta;
-- reconstructed delta;
-- mode (`direct`, `reconstructed`, `undetermined`);
-- resets detected;
-- negative transitions;
-- anomalies ignored.
+- `comparable`
+- `partial`
+- `reconstructed`
+- `unavailable`
 
-## Invalid data remains invalid
+Rules currently used:
 
-Statistically invalid results are no longer accidentally converted into
-`no_data`. Device and report summaries now distinguish:
+- missing/no-data/invalid source -> unavailable
+- reconstructed cumulative counter -> reconstructed
+- period coverage below 95% -> partial
+- for gauge metrics, sample density below 80% -> partial
 
-- OK;
-- no history;
-- invalid;
-- unsupported;
-- errors.
+Counter density is not used as an automatic partial criterion when direct
+first-to-last delta is available; period coverage remains relevant.
+
+The reasons and the N/reference quality metadata stay in normalized JSON.
+
+## Execution
+
+One report execution now runs N plus every configured comparison period and then
+passes normalized results to the provider-independent ComparisonEngine.
+
+The preview estimates the number of source queries before execution.
 
 ## Next milestone
 
-The report pipeline is now ready for N / N-1 / N-x comparison work.
+Alpha.20 can consolidate the comparison UX/semantics and begin the reusable HTML
+report-rendering layer once real N/N-x data has been validated.

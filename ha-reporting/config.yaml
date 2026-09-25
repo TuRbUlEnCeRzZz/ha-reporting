@@ -1,5 +1,5 @@
 name: "HA Reporting"
-version: "0.1.0-alpha.9"
+version: "0.1.0-alpha.10"
 slug: "ha_reporting"
 description: "Modular reporting engine for Home Assistant"
 url: "https://github.com/TuRbUlEnCeRzZz/ha-reporting"

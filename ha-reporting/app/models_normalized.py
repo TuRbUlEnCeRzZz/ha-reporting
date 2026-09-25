@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import Any
 
+from reporting_stats.engine import MetricStatisticsEngine
+
 
 @dataclass(frozen=True)
 class NormalizedSeries:
@@ -30,6 +32,15 @@ class NormalizedSeries:
         mean = (
             sum(value for _, value in numeric) / len(numeric)
             if numeric else None
+        )
+
+        metric_analysis = MetricStatisticsEngine().analyze(
+            metric=self.metric,
+            points=self.points,
+            start=self.start,
+            end=self.end,
+            step=self.step,
+            unit=self.unit,
         )
 
         return {
@@ -67,6 +78,7 @@ class NormalizedSeries:
             },
             # Alpha.9 includes a small preview only. The reporting engine can
             # consume the full internal `points` list without flooding the UI.
+            "analysis": metric_analysis,
             "preview": [
                 {"timestamp": ts, "value": value}
                 for ts, value in self.points[:12]

@@ -182,39 +182,114 @@ function formatSeriesNumber(value, unit=""){
   return `${value}${unit ? " " + unit : ""}`;
 }
 
+function localDateTime(timestamp){
+  if(timestamp === null || timestamp === undefined) return "—";
+  return new Date(Number(timestamp) * 1000).toLocaleString();
+}
+
 function renderSeriesResult(result){
   const stats = result.statistics || {};
+  const analysis = result.analysis || {};
+  const metricStats = analysis.statistics || {};
+  const quality = analysis.quality || {};
   const source = result.source || {};
   const unit = source.unit || "";
-  const max = stats.max || {};
-  const first = stats.first || {};
-  const last = stats.last || {};
+  const max = metricStats.max || stats.max || {};
+  const last = metricStats.last || stats.last || {};
 
   $("seriesBadge").textContent = stats.points ? "Données reçues" : "Aucune donnée";
   $("seriesBadge").className = "providerBadge " + (stats.points ? "ok" : "error");
+
+  let businessStats = "";
+
+  if(["energy_total","runtime","cycles"].includes(source.metric)){
+    businessStats = `
+      <div class="seriesStat accentStat">
+        <div class="label">Variation période</div>
+        <div class="value">${formatSeriesNumber(metricStats.delta,unit)}</div>
+      </div>
+      <div class="seriesStat">
+        <div class="label">Reset(s)</div>
+        <div class="value">${esc(metricStats.resets_detected ?? 0)}</div>
+      </div>`;
+  }else if(source.metric === "power"){
+    businessStats = `
+      <div class="seriesStat accentStat">
+        <div class="label">Pic</div>
+        <div class="value">${formatSeriesNumber(max.value,unit)}</div>
+        <div class="subvalue">${esc(localDateTime(max.timestamp))}</div>
+      </div>
+      <div class="seriesStat">
+        <div class="label">P95</div>
+        <div class="value">${formatSeriesNumber(metricStats.p95,unit)}</div>
+      </div>`;
+  }else{
+    businessStats = `
+      <div class="seriesStat accentStat">
+        <div class="label">Minimum</div>
+        <div class="value">${formatSeriesNumber((metricStats.min||{}).value,unit)}</div>
+      </div>
+      <div class="seriesStat">
+        <div class="label">Maximum</div>
+        <div class="value">${formatSeriesNumber((metricStats.max||{}).value,unit)}</div>
+      </div>`;
+  }
+
+  const coverage = quality.coverage_percent;
+  const qualityClass = coverage == null ? "" : coverage >= 95 ? "good" : coverage >= 80 ? "warn" : "bad";
 
   $("seriesResult").classList.remove("hidden");
   $("seriesResult").innerHTML = `
     <div class="seriesMeta">
       ${esc(source.entity_id)} · ${esc(source.metric)} · provider ${esc(result.provider)} · pas ${esc(result.period.step)} s
     </div>
-    <div class="seriesSummary">
-      <div class="seriesStat"><div class="label">Points</div><div class="value">${esc(stats.points)}</div></div>
-      <div class="seriesStat"><div class="label">Premier</div><div class="value">${formatSeriesNumber(first.value,unit)}</div></div>
-      <div class="seriesStat"><div class="label">Dernier</div><div class="value">${formatSeriesNumber(last.value,unit)}</div></div>
-      <div class="seriesStat"><div class="label">Moyenne</div><div class="value">${formatSeriesNumber(stats.mean,unit)}</div></div>
-      <div class="seriesStat"><div class="label">Maximum</div><div class="value">${formatSeriesNumber(max.value,unit)}</div></div>
+
+    <h4>Analyse métier</h4>
+    <div class="seriesSummary businessSummary">
+      ${businessStats}
+      <div class="seriesStat">
+        <div class="label">Moyenne</div>
+        <div class="value">${formatSeriesNumber(metricStats.mean ?? stats.mean,unit)}</div>
+      </div>
+      <div class="seriesStat">
+        <div class="label">Dernier</div>
+        <div class="value">${formatSeriesNumber(last.value,unit)}</div>
+      </div>
     </div>
-    <div class="seriesPreview">${esc(JSON.stringify({
-      provider:result.provider,
-      source:result.source,
-      period:result.period,
-      statistics:result.statistics,
-      preview:result.preview
-    }, null, 2))}</div>
+
+    <h4>Qualité des données</h4>
+    <div class="qualityGrid">
+      <div class="seriesStat ${qualityClass}">
+        <div class="label">Couverture</div>
+        <div class="value">${coverage == null ? "—" : Number(coverage).toFixed(1) + " %"}</div>
+      </div>
+      <div class="seriesStat">
+        <div class="label">Points reçus / attendus</div>
+        <div class="value">${esc(quality.received_points ?? stats.points)} / ${esc(quality.expected_points ?? "—")}</div>
+      </div>
+      <div class="seriesStat">
+        <div class="label">Trous détectés</div>
+        <div class="value">${esc(quality.gap_count ?? "—")}</div>
+      </div>
+      <div class="seriesStat">
+        <div class="label">Plus grand trou</div>
+        <div class="value">${quality.largest_gap_seconds == null ? "—" : Math.round(quality.largest_gap_seconds) + " s"}</div>
+      </div>
+    </div>
+
+    <details class="jsonDetails">
+      <summary>Voir le JSON normalisé</summary>
+      <div class="seriesPreview">${esc(JSON.stringify({
+        provider:result.provider,
+        source:result.source,
+        period:result.period,
+        statistics:result.statistics,
+        analysis:result.analysis,
+        preview:result.preview
+      }, null, 2))}</div>
+    </details>
   `;
 }
-
 async function testCatalogSeries(){
   const catalogId = $("seriesCatalog").value;
   const deviceId = $("seriesDevice").value;

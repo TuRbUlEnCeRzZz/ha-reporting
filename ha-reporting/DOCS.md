@@ -1,51 +1,38 @@
-# HA Reporting — 0.1.0-alpha.9
+# HA Reporting — 0.1.0-alpha.10
 
-First real catalog -> DataProvider -> VictoriaMetrics -> normalized-series milestone.
+First metric-aware statistics milestone.
 
-## Provider save feedback
+## Metric-aware calculations
 
-`Tester la connexion` and `Enregistrer` now have distinct feedback:
+Power:
+- first / last
+- minimum / maximum
+- mean
+- peak timestamp
+- P95
 
-- Test -> `Connexion VictoriaMetrics réussie`
-- Save -> `Configuration enregistrée · VictoriaMetrics connecté`
-- A configuration can still be saved while VictoriaMetrics is temporarily unavailable.
+Energy total / Runtime / Cycles:
+- first / last
+- delta over the selected period
+- simple counter-reset detection
 
-## Real series test
+Temperature / Humidity / Voltage / Current:
+- first / last
+- minimum / maximum
+- mean
 
-Open **Sources de données** and use **Test d'une source réelle**.
+## Data-quality diagnostics
 
-Choose:
+Every normalized series now includes:
+- expected points
+- received points
+- coverage percentage
+- first / last timestamp
+- gap count (> 1.5 × requested step)
+- largest gap in seconds
 
-1. a catalog;
-2. a device;
-3. a sensor;
-4. a period (1 h, 6 h, 24 h, 7 days).
+This deliberately turns the real-source test view into a diagnostic tool.
 
-HA Reporting resolves the source from the persistent catalog, calls the generic `DataProvider`, queries VictoriaMetrics, then returns a normalized result.
+## Next step
 
-The UI displays:
-
-- number of points;
-- first value;
-- last value;
-- mean;
-- maximum;
-- a JSON preview of the normalized result.
-
-## Normalized structure
-
-The internal result separates:
-
-- provider;
-- source identity and metric;
-- period;
-- statistics;
-- time-series points.
-
-This structure is deliberately provider-independent so later statistics/reporting code does not depend directly on VictoriaMetrics.
-
-## Scope
-
-Alpha.9 is a data retrieval/normalization milestone, not yet the final statistics engine.
-
-The next step can introduce metric-aware calculations (energy delta/increase, power peak timestamp, runtime/cycle differences, etc.) on top of normalized provider data.
+The next milestone can analyze a complete device at once (for example Vinothèque: power + energy + compressor runtime + cycles + state) instead of one source at a time.

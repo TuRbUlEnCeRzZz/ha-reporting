@@ -1,5 +1,5 @@
 # HA Reporting
 
-Version **0.1.0-alpha.9**.
+Version **0.1.0-alpha.10**.
 
-First end-to-end real data path: catalog sensor -> DataProvider -> VictoriaMetrics -> normalized series.
+Metric-aware statistics and data-quality diagnostics.

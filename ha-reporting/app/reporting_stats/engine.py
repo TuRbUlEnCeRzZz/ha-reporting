@@ -56,8 +56,56 @@ class MetricStatisticsEngine:
             stats = self._gauge_stats(numeric)
 
         result["statistics"] = stats
-        result["status"] = "ok"
+        result["validation"] = self._validate(
+            metric=metric,
+            statistics=stats,
+            start=start,
+            end=end,
+        )
+        result["status"] = (
+            "ok"
+            if result["validation"].get("valid", True)
+            else "invalid"
+        )
         return result
+
+    @staticmethod
+    def _validate(metric, statistics, start, end):
+        """Apply conservative plausibility checks without inventing domain limits.
+
+        HA Reporting deliberately avoids arbitrary temperature/humidity ranges:
+        a freezer, sauna or industrial sensor may legitimately be outside
+        household ranges. Guardrails only enforce invariants that are generally
+        true for the metric type.
+        """
+        issues = []
+        warnings = []
+
+        if metric in {"energy_total", "runtime", "cycles"}:
+            delta = statistics.get("delta")
+            if delta is not None and delta < 0:
+                issues.append("La variation d'un compteur cumulatif ne peut pas être négative.")
+
+        if metric == "runtime":
+            period_hours = max(0.0, (end - start) / 3600.0)
+            delta = statistics.get("delta")
+            if delta is not None and delta > period_hours * 1.05 + 0.02:
+                issues.append("Le temps de fonctionnement dépasse la durée physique de la période.")
+            if statistics.get("anomalies_ignored", 0) > 0:
+                warnings.append(
+                    f"{statistics.get('anomalies_ignored', 0)} anomalie(s) de compteur ignorée(s)."
+                )
+
+        if metric == "cycles":
+            delta = statistics.get("delta")
+            if delta is not None and abs(delta - round(delta)) > 1e-6:
+                warnings.append("Le nombre de cycles n'est pas entier.")
+
+        return {
+            "valid": not issues,
+            "issues": issues,
+            "warnings": warnings,
+        }
 
     @staticmethod
     def _numeric_points(points):

@@ -1,23 +1,55 @@
-# HA Reporting — 0.1.0-alpha.14
+# HA Reporting — 0.1.0-alpha.15
 
-VictoriaMetrics numeric-series resolver.
+Metric-specific analysis cards + generic guardrails.
 
-A Home Assistant numeric entity can expose several VictoriaMetrics series using
-the same labels. For a temperature entity this can include:
+## Metric-specific cards
 
-- `°C_device_class_str`
-- `°C_friendly_name_str`
-- `°C_state_class_str`
-- `°C_value`
+Device analysis no longer uses the generic "Complément" layout.
 
-Only the `*_value` series contains the numeric sensor history.
+### Temperature / Humidity / Voltage / Current
+- Minimum + timestamp
+- Mean
+- Maximum + timestamp
 
-Alpha.14 therefore:
-1. ignores metadata `*_str` series;
-2. keeps only numeric `*_value` candidates;
-3. uses the only numeric candidate when unique;
-4. if several numeric candidates remain, prefers exact `<unit>_value`;
-5. still returns an explicit ambiguity error when selection cannot be made safely.
+### Power
+- Peak + timestamp
+- P95
+- Mean
 
-The resolver is generic and applies to temperature, humidity, voltage, current
-and future numeric Home Assistant sensors following the same VM convention.
+### Energy total
+- Period consumption
+- Counter at start
+- Counter at end
+- Reset count
+
+### Runtime
+- Runtime during period
+- Duty cycle (% of selected period)
+- Ignored counter anomalies
+- Reset count
+
+### Cycles
+- Cycles during period
+- Counter at start
+- Counter at end
+- Reset count
+
+## Generic statistical guardrails
+
+The statistics engine now exposes a `validation` object.
+
+Conservative invariants only are enforced:
+- cumulative counter deltas must not be negative;
+- runtime cannot exceed wall-clock duration;
+- runtime ignored anomalies are surfaced as warnings;
+- non-integer cycle deltas are flagged as warnings.
+
+HA Reporting intentionally does not impose arbitrary temperature or humidity
+ranges because valid domains can differ widely (freezer, room, oven, industrial
+sensor, etc.).
+
+## Next milestone
+
+With catalogs, provider retrieval, normalization, statistics, diagnostics and
+device analysis now stable enough, alpha.16 can start the report-definition and
+period/comparison engine.

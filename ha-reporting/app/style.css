@@ -433,3 +433,38 @@ th{font-size:12px;color:var(--hr-secondary)}
 }
 
 .fieldHelp{display:block;margin-top:3px;color:var(--hr-secondary);font-size:11px;line-height:1.35}
+
+.metricGrid{
+  display:grid;
+  gap:12px;
+  margin-top:14px;
+}
+.metricGrid-1{grid-template-columns:1fr}
+.metricGrid-2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.metricGrid-3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.metricCell{
+  min-width:0;
+  padding-right:8px;
+}
+.metricCell + .metricCell{
+  border-left:1px solid var(--hr-divider);
+  padding-left:12px;
+}
+.metricNotes{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  margin-top:10px;
+  color:var(--hr-secondary);
+  font-size:11px;
+}
+.metricNotes .error{color:var(--hr-error)}
+@media(max-width:650px){
+  .metricGrid-2,.metricGrid-3{grid-template-columns:1fr}
+  .metricCell + .metricCell{
+    border-left:0;
+    border-top:1px solid var(--hr-divider);
+    padding-left:0;
+    padding-top:10px;
+  }
+}

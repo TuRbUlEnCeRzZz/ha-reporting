@@ -814,40 +814,148 @@ function qualityBadge(quality){
   return `<span class="qualityPill ${cls}">densité ${Number(coverage).toFixed(1)} %</span>`;
 }
 
-function businessValueForSource(source){
-  const stats = (source.analysis || {}).statistics || {};
+function metricCardData(source, period){
+  const analysis = source.analysis || {};
+  const stats = analysis.statistics || {};
+  const validation = analysis.validation || {};
   const unit = source.unit || "";
+  const periodHours = period && period.duration_seconds
+    ? Number(period.duration_seconds) / 3600
+    : null;
 
-  if(["energy_total","runtime","cycles"].includes(source.metric)){
-    if(source.metric === "runtime" && stats.plausible === false){
-      return {label:"Variation période", value:"Incohérente"};
-    }
-    return {
-      label:"Variation période",
-      value:formatSeriesNumber(stats.delta, unit)
-    };
-  }
+  const item = {
+    cells: [],
+    note: "",
+    invalid: validation.valid === false,
+    warnings: validation.warnings || [],
+    issues: validation.issues || []
+  };
 
   if(source.metric === "power"){
     const peak = stats.max || {};
-    return {
-      label:"Pic",
-      value:formatSeriesNumber(peak.value, unit),
-      sub:localDateTime(peak.timestamp)
-    };
+    item.cells = [
+      {
+        label:"Pic",
+        value:formatSeriesNumber(peak.value,unit),
+        sub:localDateTime(peak.timestamp)
+      },
+      {
+        label:"P95",
+        value:formatSeriesNumber(stats.p95,unit)
+      },
+      {
+        label:"Moyenne",
+        value:formatSeriesNumber(stats.mean,unit)
+      }
+    ];
+    return item;
   }
 
-  if(["temperature","humidity","voltage","current"].includes(source.metric)){
-    return {
-      label:"Moyenne",
-      value:formatSeriesNumber(stats.mean, unit)
-    };
+  if(source.metric === "temperature" || source.metric === "humidity" ||
+     source.metric === "voltage" || source.metric === "current"){
+    const min = stats.min || {};
+    const max = stats.max || {};
+    item.cells = [
+      {
+        label:"Minimum",
+        value:formatSeriesNumber(min.value,unit),
+        sub:localDateTime(min.timestamp)
+      },
+      {
+        label:"Moyenne",
+        value:formatSeriesNumber(stats.mean,unit)
+      },
+      {
+        label:"Maximum",
+        value:formatSeriesNumber(max.value,unit),
+        sub:localDateTime(max.timestamp)
+      }
+    ];
+    return item;
   }
 
-  return {
-    label:"Résultat",
-    value:"—"
-  };
+  if(source.metric === "energy_total"){
+    item.cells = [
+      {
+        label:"Consommation période",
+        value:formatSeriesNumber(stats.delta,unit)
+      },
+      {
+        label:"Début compteur",
+        value:formatSeriesNumber((stats.first||{}).value,unit)
+      },
+      {
+        label:"Fin compteur",
+        value:formatSeriesNumber((stats.last||{}).value,unit)
+      }
+    ];
+    item.note = `${stats.resets_detected ?? 0} reset(s)`;
+    return item;
+  }
+
+  if(source.metric === "runtime"){
+    const duty = (
+      stats.delta != null &&
+      periodHours != null &&
+      periodHours > 0
+    ) ? (Number(stats.delta) / periodHours * 100) : null;
+
+    item.cells = [
+      {
+        label:"Temps période",
+        value:stats.plausible === false
+          ? "Incohérent"
+          : formatSeriesNumber(stats.delta,unit)
+      },
+      {
+        label:"Taux fonctionnement",
+        value:duty == null ? "—" : `${Math.max(0, Math.min(100, duty)).toFixed(1)} %`
+      },
+      {
+        label:"Anomalies ignorées",
+        value:String(stats.anomalies_ignored ?? 0)
+      }
+    ];
+    item.note = `${stats.resets_detected ?? 0} reset(s)`;
+    return item;
+  }
+
+  if(source.metric === "cycles"){
+    item.cells = [
+      {
+        label:"Cycles période",
+        value:formatSeriesNumber(stats.delta,unit)
+      },
+      {
+        label:"Début compteur",
+        value:formatSeriesNumber((stats.first||{}).value,unit)
+      },
+      {
+        label:"Fin compteur",
+        value:formatSeriesNumber((stats.last||{}).value,unit)
+      }
+    ];
+    item.note = `${stats.resets_detected ?? 0} reset(s)`;
+    return item;
+  }
+
+  item.cells = [
+    {
+      label:"Résultat",
+      value:"—"
+    }
+  ];
+  return item;
+}
+
+function sourceMetricCells(card){
+  return (card.cells || []).map(cell => `
+    <div class="metricCell">
+      <div class="sourceStatLabel">${esc(cell.label)}</div>
+      <div class="sourceStatValue">${cell.value}</div>
+      ${cell.sub ? `<div class="sourceSub">${esc(cell.sub)}</div>` : ""}
+    </div>
+  `).join("");
 }
 
 function renderDeviceAnalysis(result){
@@ -884,22 +992,15 @@ function renderDeviceAnalysis(result){
     }
 
     const quality = (source.analysis || {}).quality || {};
-    const business = businessValueForSource(source);
-    const stats = (source.analysis || {}).statistics || {};
-
-    let secondary = "";
-    if(source.metric === "power"){
-      secondary = `P95 ${formatSeriesNumber(stats.p95, source.unit || "")}`;
-    }else if(source.metric === "runtime"){
-      secondary = `${esc(stats.resets_detected ?? 0)} reset(s) · ${esc(stats.anomalies_ignored ?? 0)} anomalie(s) ignorée(s)`;
-    }else if(["energy_total","cycles"].includes(source.metric)){
-      secondary = `${esc(stats.resets_detected ?? 0)} reset(s)`;
-    }else if(stats.min && stats.max){
-      secondary = `${formatSeriesNumber(stats.min.value, source.unit || "")} → ${formatSeriesNumber(stats.max.value, source.unit || "")}`;
-    }
+    const card = metricCardData(source, result.period || {});
+    const validation = (source.analysis || {}).validation || {};
+    const validationMessages = [
+      ...(validation.issues || []),
+      ...(validation.warnings || [])
+    ];
 
     return `
-      <div class="sourceCard">
+      <div class="sourceCard ${card.invalid ? "errorCard" : ""}">
         <div class="sourceHeader">
           <div>
             <div class="sourceTitle">${esc(source.sensor_key)}</div>
@@ -908,17 +1009,15 @@ function renderDeviceAnalysis(result){
           <span class="metricPill">${esc(source.metric)}</span>
         </div>
 
-        <div class="sourceStats">
-          <div>
-            <div class="sourceStatLabel">${esc(business.label)}</div>
-            <div class="sourceStatValue">${business.value}</div>
-            ${business.sub ? `<div class="sourceSub">${esc(business.sub)}</div>` : ""}
-          </div>
-          <div>
-            <div class="sourceStatLabel">Complément</div>
-            <div class="sourceStatSmall">${secondary || "—"}</div>
-          </div>
+        <div class="metricGrid metricGrid-${Math.min(3,(card.cells || []).length)}">
+          ${sourceMetricCells(card)}
         </div>
+
+        ${(card.note || validationMessages.length) ? `
+          <div class="metricNotes">
+            ${card.note ? `<span>${esc(card.note)}</span>` : ""}
+            ${validationMessages.map(message => `<span class="${card.invalid ? "error" : ""}">${esc(message)}</span>`).join("")}
+          </div>` : ""}
 
         <div class="sourceFooter">
           ${qualityBadge(quality)}

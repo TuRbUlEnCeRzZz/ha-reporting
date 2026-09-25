@@ -7,47 +7,53 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <h1>HA Reporting</h1>
-  <div>0.1.0-alpha.5 · Gestionnaire de catalogues</div>
+<header class="topbar">
+  <button id="backButton" class="iconButton hidden" aria-label="Retour" title="Retour">←</button>
+  <div>
+    <h1>HA Reporting</h1>
+    <div class="subtitle">0.1.0-alpha.6 · Gestion des catalogues</div>
+  </div>
 </header>
 
 <main>
-  <nav>
-    <button onclick="showHome()">Catalogues</button>
-    <button onclick="showNewCatalog()">+ Nouveau catalogue</button>
-  </nav>
-
-  <section id="homePage" class="card">
-    <h2>Catalogues</h2>
-    <div id="catalogList">Chargement…</div>
+  <section id="homePage">
+    <div class="toolbar">
+      <div>
+        <h2>Catalogues</h2>
+        <p class="muted">Les catalogues regroupent des appareils et leurs sources de données.</p>
+      </div>
+      <button class="primary" id="newCatalogButton">+ Nouveau catalogue</button>
+    </div>
+    <div id="catalogList"></div>
   </section>
 
-  <section id="catalogPage" class="card hidden">
-    <h2>Nouveau catalogue</h2>
-    <div class="grid">
-      <label>Nom
-        <input id="catalogName" placeholder="Électroménager">
-      </label>
-      <label>ID automatique
-        <input id="catalogId" disabled>
-      </label>
-      <label>Provider
-        <select id="provider">
-          <option value="victoria_metrics">VictoriaMetrics</option>
-        </select>
-      </label>
+  <section id="catalogPage" class="hidden">
+    <div class="card">
+      <h2>Nouveau catalogue</h2>
+      <div class="grid three">
+        <label>Nom
+          <input id="catalogName" placeholder="Électroménager">
+        </label>
+        <label>ID automatique
+          <input id="catalogId" disabled>
+        </label>
+        <label>Provider
+          <select id="provider">
+            <option value="victoria_metrics">VictoriaMetrics</option>
+          </select>
+        </label>
+      </div>
+      <div class="actions">
+        <button class="primary" id="createCatalogButton">Créer et ajouter un appareil</button>
+        <span id="catalogMessage" class="statusText"></span>
+      </div>
     </div>
-    <p>
-      <button onclick="createCatalog()">Créer et ajouter un appareil</button>
-      <span id="catalogMessage"></span>
-    </p>
   </section>
 
   <section id="devicePage" class="hidden">
     <div class="card">
       <h2 id="deviceTitle">Ajouter un appareil</h2>
-      <div class="grid">
+      <div class="grid three">
         <label>Nom
           <input id="deviceName" placeholder="Vinothèque">
         </label>
@@ -57,25 +63,31 @@
         <label>Catégorie
           <div class="inline">
             <select id="category"></select>
-            <button title="Créer une catégorie" onclick="createCategory()">+</button>
+            <button id="addCategoryButton" title="Créer une catégorie">+</button>
           </div>
         </label>
       </div>
     </div>
 
     <div class="card">
-      <h2>Entités Home Assistant</h2>
+      <div class="toolbar compact">
+        <div>
+          <h2>Entités Home Assistant</h2>
+          <p class="muted">Sélectionne les sources que HA Reporting pourra exploiter.</p>
+        </div>
+        <button id="autoSelectButton">Détection auto</button>
+      </div>
 
       <div class="filters">
         <input id="query" placeholder="Rechercher : vinotheque…">
         <label class="checkLabel"><input type="checkbox" id="sensorOnly" checked> Capteurs uniquement</label>
         <label class="checkLabel"><input type="checkbox" id="selectedOnly"> Sélectionnées uniquement</label>
-        <button onclick="loadEntities()">Actualiser</button>
+        <button id="refreshEntitiesButton">Actualiser</button>
       </div>
 
-      <p id="entityStatus"></p>
+      <p id="entityStatus" class="muted"></p>
 
-      <div class="scroll">
+      <div class="tableWrap">
         <table>
           <thead>
             <tr>
@@ -91,11 +103,24 @@
         </table>
       </div>
 
-      <button onclick="saveDevice()">Ajouter l'appareil</button>
-      <span id="saveMessage"></span>
+      <div class="actions">
+        <button class="primary" id="saveDeviceButton">Ajouter l'appareil</button>
+        <span id="saveMessage" class="statusText"></span>
+      </div>
     </div>
   </section>
 </main>
+
+<div id="editModal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modalCard">
+    <h3 id="modalTitle">Modifier</h3>
+    <div id="modalBody"></div>
+    <div class="actions end">
+      <button id="modalCancel">Annuler</button>
+      <button class="primary" id="modalSave">Enregistrer</button>
+    </div>
+  </div>
+</div>
 
 <script src="app.js"></script>
 </body>

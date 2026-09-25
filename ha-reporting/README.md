@@ -1,5 +1,5 @@
 # HA Reporting
 
-Version **0.1.0-alpha.5**.
+Version **0.1.0-alpha.6**.
 
-Catalog manager with automatic IDs, multiple devices, custom categories and entity filters.
+Catalog management UI with Home Assistant theme bridging, expandable device lists, Back navigation, editing and deletion.

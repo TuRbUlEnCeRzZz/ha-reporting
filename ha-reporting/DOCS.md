@@ -1,32 +1,23 @@
-# HA Reporting — 0.1.0-alpha.13
+# HA Reporting — 0.1.0-alpha.14
 
-Hotfix for VictoriaMetrics source discovery.
+VictoriaMetrics numeric-series resolver.
 
-## What was fixed
+A Home Assistant numeric entity can expose several VictoriaMetrics series using
+the same labels. For a temperature entity this can include:
 
-Alpha.12 still required a hardcoded VictoriaMetrics metric name for every HA Reporting metric type.
-That meant a newly added temperature source failed with:
+- `°C_device_class_str`
+- `°C_friendly_name_str`
+- `°C_state_class_str`
+- `°C_value`
 
-`Aucun mapping VictoriaMetrics défini pour metric='temperature', unit='°C'`
+Only the `*_value` series contains the numeric sensor history.
 
-Alpha.12.1 removes that limitation for numeric sensors.
+Alpha.14 therefore:
+1. ignores metadata `*_str` series;
+2. keeps only numeric `*_value` candidates;
+3. uses the only numeric candidate when unique;
+4. if several numeric candidates remain, prefers exact `<unit>_value`;
+5. still returns an explicit ambiguity error when selection cannot be made safely.
 
-## Query strategy
-
-Known mappings still use exact metric names first:
-
-- power -> `W_value`
-- energy_total -> `kWh_value`
-- runtime -> `h_value`
-- cycles -> `cycles_value`
-
-For other numeric metrics, HA Reporting now queries VictoriaMetrics by Home Assistant labels:
-
-`{db="homeassistant",domain="sensor",entity_id="..."}`
-
-If an exact known mapping returns no data, HA Reporting also falls back to this label selector.
-
-If exactly one series matches, it is used.
-If several different series match the same entity labels, HA Reporting stops with an explicit ambiguity error instead of choosing silently.
-
-This allows temperature, humidity, voltage/current and future numeric sensors to work without adding a new hardcoded metric-name mapping for each type.
+The resolver is generic and applies to temperature, humidity, voltage, current
+and future numeric Home Assistant sensors following the same VM convention.

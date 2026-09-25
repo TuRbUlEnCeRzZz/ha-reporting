@@ -41,7 +41,7 @@ class VictoriaMetricsProvider(DataProvider):
             url,
             headers={
                 "Accept": "application/json",
-                "User-Agent": "HA-Reporting/0.1.0-alpha.13",
+                "User-Agent": "HA-Reporting/0.1.0-alpha.14",
             },
         )
 
@@ -193,14 +193,40 @@ class VictoriaMetricsProvider(DataProvider):
         result: list[dict[str, Any]],
         source: dict[str, Any],
     ) -> dict[str, Any] | None:
+        """Select the numeric value series and ignore HA metadata series."""
         if not result:
             return None
-        if len(result) == 1:
-            return result[0]
 
-        names = sorted({cls._series_name(series) for series in result})
+        value_series = [
+            series
+            for series in result
+            if cls._series_name(series).endswith("_value")
+        ]
+
+        if not value_series:
+            names = sorted({cls._series_name(series) for series in result})
+            raise ProviderError(
+                "Aucune série numérique '*_value' trouvée pour "
+                f"{source.get('entity_id')}. Séries trouvées: {', '.join(names)}"
+            )
+
+        if len(value_series) == 1:
+            return value_series[0]
+
+        unit = str(source.get("unit") or "").strip()
+        if unit:
+            expected_name = f"{unit}_value"
+            exact_unit_matches = [
+                series
+                for series in value_series
+                if cls._series_name(series) == expected_name
+            ]
+            if len(exact_unit_matches) == 1:
+                return exact_unit_matches[0]
+
+        names = sorted({cls._series_name(series) for series in value_series})
         raise ProviderError(
-            "Plusieurs séries VictoriaMetrics correspondent à "
+            "Plusieurs séries numériques VictoriaMetrics correspondent à "
             f"{source.get('entity_id')}: {', '.join(names)}"
         )
 

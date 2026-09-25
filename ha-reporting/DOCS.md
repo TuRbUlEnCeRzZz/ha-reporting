@@ -1,17 +1,32 @@
-# HA Reporting — 0.1.0-alpha.12
+# HA Reporting — 0.1.0-alpha.12.1
 
-Reliability + non-destructive device source editing.
+Hotfix for VictoriaMetrics source discovery.
 
-## Existing device sensor editor
-Use **Capteurs** on an existing device to add, remove or reclassify sources without recreating the device or catalog. Existing source keys and the device ID remain stable.
+## What was fixed
 
-## Duplicate catalog names
-A catalog ID is deterministic from the name. If that ID already exists, HA Reporting refuses creation:
-- no overwrite;
-- no implicit `vinotheque2`;
-- explicit error.
+Alpha.12 still required a hardcoded VictoriaMetrics metric name for every HA Reporting metric type.
+That meant a newly added temperature source failed with:
 
-## Runtime reliability
-Runtime is physically bounded by wall-clock time. Alpha.12 ignores impossible positive jumps, reconstructs plausible resets, tracks ignored anomalies and never presents an impossible runtime as a valid delta.
+`Aucun mapping VictoriaMetrics défini pour metric='temperature', unit='°C'`
 
-Sample density remains a diagnostic indicator, not an automatic error verdict.
+Alpha.12.1 removes that limitation for numeric sensors.
+
+## Query strategy
+
+Known mappings still use exact metric names first:
+
+- power -> `W_value`
+- energy_total -> `kWh_value`
+- runtime -> `h_value`
+- cycles -> `cycles_value`
+
+For other numeric metrics, HA Reporting now queries VictoriaMetrics by Home Assistant labels:
+
+`{db="homeassistant",domain="sensor",entity_id="..."}`
+
+If an exact known mapping returns no data, HA Reporting also falls back to this label selector.
+
+If exactly one series matches, it is used.
+If several different series match the same entity labels, HA Reporting stops with an explicit ambiguity error instead of choosing silently.
+
+This allows temperature, humidity, voltage/current and future numeric sensors to work without adding a new hardcoded metric-name mapping for each type.

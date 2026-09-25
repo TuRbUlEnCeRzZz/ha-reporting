@@ -1,12 +1,14 @@
 # Changelog
 
-## 0.1.0-alpha.12
-- Add **Capteurs** editor for existing devices.
-- Add/remove sensors without rebuilding devices/catalogs.
-- Preserve stable existing sensor keys.
-- Refuse duplicate catalog IDs without overwrite or implicit suffix.
-- Harden runtime reconstruction using wall-clock physical limits.
-- Report ignored runtime anomalies.
+## 0.1.0-alpha.12.1
 
-## 0.1.0-alpha.11
-- Complete-device analysis.
+- Fix temperature and other unknown numeric metrics in VictoriaMetrics.
+- Add label-based VictoriaMetrics series discovery.
+- Keep exact known mappings as the preferred fast path.
+- Fall back to entity-label discovery when an exact mapping has no data.
+- Reject ambiguous multi-series matches explicitly.
+
+## 0.1.0-alpha.12
+
+- Non-destructive sensor editing.
+- Runtime hardening.

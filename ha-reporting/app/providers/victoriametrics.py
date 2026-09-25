@@ -41,7 +41,7 @@ class VictoriaMetricsProvider(DataProvider):
             url,
             headers={
                 "Accept": "application/json",
-                "User-Agent": "HA-Reporting/0.1.0-alpha.12",
+                "User-Agent": "HA-Reporting/0.1.0-alpha.12.1",
             },
         )
 
@@ -124,10 +124,14 @@ class VictoriaMetricsProvider(DataProvider):
             )
 
     @staticmethod
-    def _metric_name_for_source(source: dict[str, Any]) -> str:
-        # Alpha.8 establishes the abstraction only. The mapping is deliberately
-        # conservative and mirrors the metric names already observed in the
-        # user's VictoriaMetrics installation.
+    def _metric_name_for_source(source: dict[str, Any]) -> str | None:
+        """Return a known exact VM metric name when HA Reporting knows it.
+
+        Unknown metric types deliberately return None. They are resolved through
+        the entity labels instead of failing. This keeps the provider usable for
+        temperature, humidity, voltage/current and future numeric sensors even
+        when the VictoriaMetrics metric-name convention is not yet known.
+        """
         metric = source.get("metric")
         unit = source.get("unit")
 
@@ -140,23 +144,64 @@ class VictoriaMetricsProvider(DataProvider):
         if metric == "cycles" or unit == "cycles":
             return "cycles_value"
 
-        raise ProviderError(
-            f"Aucun mapping VictoriaMetrics défini pour metric={metric!r}, unit={unit!r}"
-        )
+        return None
 
-    @classmethod
-    def expression_for_source(cls, source: dict[str, Any]) -> str:
-        metric_name = cls._metric_name_for_source(source)
+    @staticmethod
+    def _escaped_entity_label(source: dict[str, Any]) -> str:
         entity_id = source.get("entity_id")
         if not entity_id:
             raise ProviderError("Source sans entity_id")
 
-        # HA entity IDs are controlled by the user's own HA installation.
-        # Escape quote/backslash defensively before embedding the label value.
-        entity_id = str(entity_id).replace("\\", "\\\\").replace('"', '\\"')
+        entity_id = str(entity_id)
+        if "." in entity_id:
+            entity_id = entity_id.split(".", 1)[-1]
+
+        return entity_id.replace("\\", "\\\\").replace('"', '\\"')
+
+    @classmethod
+    def label_selector_for_source(cls, source: dict[str, Any]) -> str:
+        entity_id = cls._escaped_entity_label(source)
         return (
-            f'{metric_name}{{db="homeassistant",domain="sensor",'
-            f'entity_id="{entity_id.split(".", 1)[-1]}"}}'
+            f'{{db="homeassistant",domain="sensor",'
+            f'entity_id="{entity_id}"}}'
+        )
+
+    @classmethod
+    def expression_for_source(cls, source: dict[str, Any]) -> str:
+        """Build the preferred query expression.
+
+        Known HA/VM metric conventions use an exact metric name. Unknown numeric
+        metrics fall back to a label-only selector so adding a new sensor type to
+        a catalog does not require a provider-code change.
+        """
+        selector = cls.label_selector_for_source(source)
+        metric_name = cls._metric_name_for_source(source)
+
+        if metric_name:
+            return metric_name + selector
+
+        return selector
+
+    @staticmethod
+    def _series_name(series: dict[str, Any]) -> str:
+        metric = series.get("metric") or {}
+        return str(metric.get("__name__") or "<sans nom>")
+
+    @classmethod
+    def _select_single_series(
+        cls,
+        result: list[dict[str, Any]],
+        source: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if not result:
+            return None
+        if len(result) == 1:
+            return result[0]
+
+        names = sorted({cls._series_name(series) for series in result})
+        raise ProviderError(
+            "Plusieurs séries VictoriaMetrics correspondent à "
+            f"{source.get('entity_id')}: {', '.join(names)}"
         )
 
     def get_series(
@@ -166,14 +211,35 @@ class VictoriaMetricsProvider(DataProvider):
         end: float,
         step: int | None = None,
     ) -> list[tuple[float, Any]]:
-        expression = self.expression_for_source(source)
-        payload = self.range_query(expression, start, end, step or 300)
+        requested_step = step or 300
+        preferred_expression = self.expression_for_source(source)
+
+        payload = self.range_query(
+            preferred_expression,
+            start,
+            end,
+            requested_step,
+        )
         result = (payload.get("data") or {}).get("result") or []
-        if not result:
+
+        # If a known exact metric name did not produce data, fall back to the
+        # entity labels. This makes the provider resilient to VM naming changes.
+        exact_name = self._metric_name_for_source(source)
+        if not result and exact_name:
+            fallback_expression = self.label_selector_for_source(source)
+            payload = self.range_query(
+                fallback_expression,
+                start,
+                end,
+                requested_step,
+            )
+            result = (payload.get("data") or {}).get("result") or []
+
+        series = self._select_single_series(result, source)
+        if series is None:
             return []
 
-        # The expected source is a single HA entity time series.
-        values = result[0].get("values") or []
+        values = series.get("values") or []
         output = []
         for timestamp, value in values:
             try:
@@ -182,3 +248,4 @@ class VictoriaMetricsProvider(DataProvider):
                 parsed = value
             output.append((float(timestamp), parsed))
         return output
+

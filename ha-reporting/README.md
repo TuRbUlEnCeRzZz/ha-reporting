@@ -1,5 +1,5 @@
 # HA Reporting
 
-Version **0.1.0-alpha.7**.
+Version **0.1.0-alpha.8**.
 
-UI refinement release with Home Assistant-style navigation, disclosure chevrons, action tooltips and improved Liquid Glass theme support.
+First DataProvider/VictoriaMetrics milestone with persistent provider configuration and connection testing.

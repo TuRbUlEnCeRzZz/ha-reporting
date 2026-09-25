@@ -15,7 +15,7 @@
   </button>
   <div>
     <h1>HA Reporting</h1>
-    <div class="subtitle">0.1.0-alpha.7 · Gestion des catalogues</div>
+    <div class="subtitle">0.1.0-alpha.8 · Gestion des catalogues</div>
   </div>
 </header>
 
@@ -26,9 +26,45 @@
         <h2>Catalogues</h2>
         <p class="muted">Les catalogues regroupent des appareils et leurs sources de données.</p>
       </div>
-      <button class="primary" id="newCatalogButton">+ Nouveau catalogue</button>
+      <div class="toolbarButtons">
+        <button id="providersButton">Sources de données</button>
+        <button class="primary" id="newCatalogButton">+ Nouveau catalogue</button>
+      </div>
     </div>
     <div id="catalogList"></div>
+  </section>
+
+  <section id="providersPage" class="hidden">
+    <div class="card">
+      <h2>Sources de données</h2>
+      <p class="muted">Les providers fournissent les séries temporelles au moteur de reporting. Les catalogues restent indépendants de leur implémentation.</p>
+
+      <div class="providerCard">
+        <div class="providerHeading">
+          <div>
+            <h3>VictoriaMetrics</h3>
+            <p class="muted">Premier provider implémenté dans HA Reporting.</p>
+          </div>
+          <span id="vmBadge" class="providerBadge">Non configuré</span>
+        </div>
+
+        <div class="grid two">
+          <label>URL VictoriaMetrics
+            <input id="vmUrl" placeholder="http://adresse-victoriametrics:8428">
+          </label>
+          <div class="capabilityBox">
+            <span class="muted">Interface DataProvider</span>
+            <div id="vmCapabilities" class="capabilities"></div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="vmTestButton">Tester la connexion</button>
+          <button class="primary" id="vmSaveButton">Enregistrer</button>
+          <span id="vmStatusText" class="statusText"></span>
+        </div>
+      </div>
+    </div>
   </section>
 
   <section id="catalogPage" class="hidden">

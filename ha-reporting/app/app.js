@@ -89,8 +89,62 @@ function syncHomeAssistantTheme(){
     // If the parent is not directly readable, the generic light/dark fallbacks remain active.
   }
 }
+async function showProviders(push=true){
+  setPage("providersPage", {}, push);
+  await loadProviders();
+}
+
+function renderCapabilities(capabilities){
+  const names = {
+    series:"series",
+    first:"first",
+    last:"last",
+    min:"min",
+    max:"max",
+    mean:"mean",
+    sum:"sum",
+    max_timestamp:"max + timestamp",
+    state_duration:"state duration",
+    state_changes:"state changes"
+  };
+  $("vmCapabilities").innerHTML = Object.entries(names).map(([key,label]) =>
+    `<span class="capability ${capabilities && capabilities[key] ? "" : "off"}">${esc(label)}</span>`
+  ).join("");
+}
+
+function renderProviderStatus(status){
+  const badge = $("vmBadge");
+  badge.className = "providerBadge";
+
+  if(!status || !status.configured){
+    badge.textContent = "Non configuré";
+    $("vmStatusText").textContent = "";
+  }else if(status.available){
+    badge.textContent = "Connecté";
+    badge.classList.add("ok");
+    $("vmStatusText").textContent = "✓ " + status.message;
+    $("vmStatusText").classList.remove("error");
+  }else{
+    badge.textContent = "Indisponible";
+    badge.classList.add("error");
+    $("vmStatusText").textContent = "Erreur : " + status.message;
+    $("vmStatusText").classList.add("error");
+  }
+
+  renderCapabilities(status && status.details ? status.details.capabilities : {});
+}
+
+async function loadProviders(){
+  const response = await fetch("api/providers");
+  const data = await response.json();
+  const vm = (data.providers || []).find(p => p.id === "victoria_metrics");
+  if(!vm) return;
+  $("vmUrl").value = vm.url || "";
+  renderProviderStatus(vm.status);
+}
+
 function setPage(page, state={}, push=true){
-  ["homePage","catalogPage","devicePage"].forEach(id => $(id).classList.add("hidden"));
+  ["homePage","providersPage","catalogPage","devicePage"].forEach(id => $(id).classList.add("hidden"));
   $(page).classList.remove("hidden");
   $("backButton").classList.toggle("hidden", page === "homePage");
   if(push) history.pushState({page, ...state}, "", "");
@@ -124,9 +178,43 @@ async function addDeviceTo(id, name, push=true){
 
 $("backButton").addEventListener("click", () => history.back());
 $("newCatalogButton").addEventListener("click", () => showNewCatalog());
+$("providersButton").addEventListener("click", () => showProviders());
+
+$("vmTestButton").addEventListener("click", async () => {
+  $("vmStatusText").textContent = "Test en cours…";
+  $("vmStatusText").classList.remove("error");
+  const response = await fetch("api/providers/victoria_metrics/test", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({url:$("vmUrl").value})
+  });
+  const data = await response.json();
+  if(!response.ok){
+    $("vmStatusText").textContent = "Erreur : " + data.error;
+    $("vmStatusText").classList.add("error");
+    return;
+  }
+  renderProviderStatus(data.status);
+});
+
+$("vmSaveButton").addEventListener("click", async () => {
+  const response = await fetch("api/providers/victoria_metrics", {
+    method:"PATCH",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({url:$("vmUrl").value})
+  });
+  const data = await response.json();
+  if(!response.ok){
+    $("vmStatusText").textContent = "Erreur : " + data.error;
+    $("vmStatusText").classList.add("error");
+    return;
+  }
+  renderProviderStatus(data);
+});
 window.addEventListener("popstate", async event => {
   const state = event.state || {page:"homePage"};
-  if(state.page === "catalogPage") showNewCatalog(false);
+  if(state.page === "providersPage") await showProviders(false);
+  else if(state.page === "catalogPage") showNewCatalog(false);
   else if(state.page === "devicePage") await addDeviceTo(state.catalogId, state.catalogName, false);
   else showHome(false);
 });

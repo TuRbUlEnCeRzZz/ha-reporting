@@ -10,11 +10,14 @@ from urllib.parse import urlparse, unquote
 
 import yaml
 
+from providers.victoriametrics import VictoriaMetricsProvider
+
 PORT = 8099
 TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 HA_STATES_URL = "http://supervisor/core/api/states"
 CATALOG_DIR = Path("/config/catalogs")
 CATEGORY_FILE = Path("/config/categories.yaml")
+PROVIDER_FILE = Path("/config/providers.yaml")
 CATALOG_DIR.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_CATEGORIES = [
@@ -368,6 +371,57 @@ def delete_device(catalog_id, device_id):
     return {"ok": True, "catalog": catalog_summary(data)}
 
 
+
+def provider_config():
+    if not PROVIDER_FILE.exists():
+        return {"victoria_metrics": {"url": ""}}
+    raw = yaml.safe_load(PROVIDER_FILE.read_text(encoding="utf-8")) or {}
+    raw.setdefault("victoria_metrics", {"url": ""})
+    raw["victoria_metrics"].setdefault("url", "")
+    return raw
+
+
+def save_provider_config(payload):
+    url = str(payload.get("url") or "").strip().rstrip("/")
+    if url and not (url.startswith("http://") or url.startswith("https://")):
+        raise ValueError("L'URL doit commencer par http:// ou https://")
+
+    config = provider_config()
+    config["victoria_metrics"] = {"url": url}
+    PROVIDER_FILE.write_text(
+        yaml.safe_dump(config, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    log.info("VictoriaMetrics provider configuration updated")
+    return provider_status()
+
+
+def victoria_provider(url_override=None):
+    if url_override is not None:
+        url = str(url_override or "").strip().rstrip("/")
+    else:
+        url = (provider_config().get("victoria_metrics") or {}).get("url", "")
+    return VictoriaMetricsProvider(url)
+
+
+def provider_status(url_override=None):
+    provider = victoria_provider(url_override)
+    return provider.health_check().as_dict()
+
+
+def provider_overview():
+    status = provider_status()
+    return {
+        "providers": [
+            {
+                "id": "victoria_metrics",
+                "name": "VictoriaMetrics",
+                "url": victoria_provider().base_url,
+                "status": status,
+            }
+        ]
+    }
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         pass
@@ -394,6 +448,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path.endswith("/api/entities"):
                 return self.send_payload(200, {"entities": home_assistant_states()})
+            if path.endswith("/api/providers"):
+                return self.send_payload(200, provider_overview())
             if path.endswith("/api/catalogs"):
                 return self.send_payload(200, {"catalogs": list_catalogs()})
             if path.endswith("/api/categories"):
@@ -414,6 +470,8 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             payload = self.json_body()
+            if path.endswith("/api/providers/victoria_metrics/test"):
+                return self.send_payload(200, {"status": provider_status(payload.get("url"))})
             if path.endswith("/api/catalogs"):
                 return self.send_payload(200, {"catalog": create_catalog(payload)})
             if path.endswith("/api/categories"):
@@ -430,6 +488,8 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             payload = self.json_body()
+            if path.endswith("/api/providers/victoria_metrics"):
+                return self.send_payload(200, save_provider_config(payload))
             if "/api/catalog/" in path:
                 parts = self.path_parts_after_catalog(path)
                 if len(parts) == 1:

@@ -1,3 +1,5 @@
 # HA Reporting
 
-0.1.0-alpha.4 visual catalog editor.
+Version **0.1.0-alpha.5**.
+
+Catalog manager with automatic IDs, multiple devices, custom categories and entity filters.

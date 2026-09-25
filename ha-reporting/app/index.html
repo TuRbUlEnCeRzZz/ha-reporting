@@ -1,8 +1,102 @@
-<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>HA Reporting</title><link rel="stylesheet" href="style.css"></head>
-<body><header><h1>HA Reporting</h1><div>0.1.0-alpha.4 · Éditeur de catalogues</div></header><main>
-<nav><button onclick="page('list')">Catalogues</button><button onclick="page('edit')">+ Nouveau catalogue</button></nav>
-<section id="list" class="card"><h2>Catalogues</h2><div id="catalogs">Chargement…</div></section>
-<section id="edit" class="hide"><div class="card"><h2>Nouveau catalogue</h2><div class="grid"><label>Nom<input id="cn" value="Réfrigération"></label><label>ID<input id="ci" value="refrigeration"></label><label>Provider<select id="provider"><option value="victoria_metrics">VictoriaMetrics</option></select></label></div></div>
-<div class="card"><h2>Appareil</h2><div class="grid"><label>Nom<input id="dn" value="Vinothèque"></label><label>ID<input id="di" value="vinotheque"></label><label>Catégorie<select id="cat"><option value="refrigeration">Réfrigération</option><option value="appliance">Électroménager</option><option value="climate">Climat</option><option value="other">Autre</option></select></label></div></div>
-<div class="card"><h2>Entités Home Assistant</h2><div class="search"><input id="q" value="vinotheque"><button onclick="loadEntities()">Actualiser</button></div><p id="status"></p><div class="scroll"><table><thead><tr><th>Inclure</th><th>Entité</th><th>État</th><th>Unité</th><th>Device class</th><th>Métrique</th></tr></thead><tbody id="rows"></tbody></table></div><button onclick="save()">Enregistrer le catalogue</button> <b id="saved"></b></div></section>
-</main><script src="app.js"></script></body></html>
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>HA Reporting</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>HA Reporting</h1>
+  <div>0.1.0-alpha.5 · Gestionnaire de catalogues</div>
+</header>
+
+<main>
+  <nav>
+    <button onclick="showHome()">Catalogues</button>
+    <button onclick="showNewCatalog()">+ Nouveau catalogue</button>
+  </nav>
+
+  <section id="homePage" class="card">
+    <h2>Catalogues</h2>
+    <div id="catalogList">Chargement…</div>
+  </section>
+
+  <section id="catalogPage" class="card hidden">
+    <h2>Nouveau catalogue</h2>
+    <div class="grid">
+      <label>Nom
+        <input id="catalogName" placeholder="Électroménager">
+      </label>
+      <label>ID automatique
+        <input id="catalogId" disabled>
+      </label>
+      <label>Provider
+        <select id="provider">
+          <option value="victoria_metrics">VictoriaMetrics</option>
+        </select>
+      </label>
+    </div>
+    <p>
+      <button onclick="createCatalog()">Créer et ajouter un appareil</button>
+      <span id="catalogMessage"></span>
+    </p>
+  </section>
+
+  <section id="devicePage" class="hidden">
+    <div class="card">
+      <h2 id="deviceTitle">Ajouter un appareil</h2>
+      <div class="grid">
+        <label>Nom
+          <input id="deviceName" placeholder="Vinothèque">
+        </label>
+        <label>ID automatique
+          <input id="deviceId" disabled>
+        </label>
+        <label>Catégorie
+          <div class="inline">
+            <select id="category"></select>
+            <button title="Créer une catégorie" onclick="createCategory()">+</button>
+          </div>
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Entités Home Assistant</h2>
+
+      <div class="filters">
+        <input id="query" placeholder="Rechercher : vinotheque…">
+        <label class="checkLabel"><input type="checkbox" id="sensorOnly" checked> Capteurs uniquement</label>
+        <label class="checkLabel"><input type="checkbox" id="selectedOnly"> Sélectionnées uniquement</label>
+        <button onclick="loadEntities()">Actualiser</button>
+      </div>
+
+      <p id="entityStatus"></p>
+
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Inclure</th>
+              <th>Entité</th>
+              <th>État</th>
+              <th>Unité</th>
+              <th>Device class</th>
+              <th>Métrique</th>
+            </tr>
+          </thead>
+          <tbody id="entityRows"></tbody>
+        </table>
+      </div>
+
+      <button onclick="saveDevice()">Ajouter l'appareil</button>
+      <span id="saveMessage"></span>
+    </div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

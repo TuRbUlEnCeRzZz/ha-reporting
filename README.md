@@ -1,3 +1,3 @@
 # HA Reporting
 
-Current: **0.1.0-alpha.4**.
+Current development version: **0.1.0-alpha.5**.

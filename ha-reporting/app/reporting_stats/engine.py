@@ -8,8 +8,10 @@ from typing import Any
 @dataclass(frozen=True)
 class DataQuality:
     expected_points: int
+    observed_expected_points: int
     received_points: int
-    coverage_percent: float | None
+    period_coverage_percent: float | None
+    sample_density_percent: float | None
     first_timestamp: float | None
     last_timestamp: float | None
     gap_count: int
@@ -18,8 +20,10 @@ class DataQuality:
     def as_dict(self) -> dict[str, Any]:
         return {
             "expected_points": self.expected_points,
+            "observed_expected_points": self.observed_expected_points,
             "received_points": self.received_points,
-            "coverage_percent": self.coverage_percent,
+            "period_coverage_percent": self.period_coverage_percent,
+            "sample_density_percent": self.sample_density_percent,
             "first_timestamp": self.first_timestamp,
             "last_timestamp": self.last_timestamp,
             "gap_count": self.gap_count,
@@ -32,8 +36,8 @@ class MetricStatisticsEngine:
     GAUGE_METRICS = {"power", "temperature", "humidity", "voltage", "current"}
 
     def analyze(self, metric, points, start, end, step, unit=None):
-        numeric = self._numeric_points(points)
-        quality = self._quality(points, start, end, step)
+        numeric = self._numeric_points(points, start, end)
+        quality = self._quality(numeric, start, end, step)
 
         result = {
             "metric": metric,
@@ -48,8 +52,8 @@ class MetricStatisticsEngine:
 
         if metric == "runtime":
             stats = self._runtime_stats(numeric, start, end)
-        elif metric in self.COUNTER_METRICS:
-            stats = self._counter_stats(numeric)
+        elif metric in {"energy_total", "cycles"}:
+            stats = self._counter_stats(numeric, metric)
         elif metric == "power":
             stats = self._power_stats(numeric)
         else:
@@ -62,22 +66,11 @@ class MetricStatisticsEngine:
             start=start,
             end=end,
         )
-        result["status"] = (
-            "ok"
-            if result["validation"].get("valid", True)
-            else "invalid"
-        )
+        result["status"] = "ok" if result["validation"]["valid"] else "invalid"
         return result
 
     @staticmethod
     def _validate(metric, statistics, start, end):
-        """Apply conservative plausibility checks without inventing domain limits.
-
-        HA Reporting deliberately avoids arbitrary temperature/humidity ranges:
-        a freezer, sauna or industrial sensor may legitimately be outside
-        household ranges. Guardrails only enforce invariants that are generally
-        true for the metric type.
-        """
         issues = []
         warnings = []
 
@@ -85,6 +78,8 @@ class MetricStatisticsEngine:
             delta = statistics.get("delta")
             if delta is not None and delta < 0:
                 issues.append("La variation d'un compteur cumulatif ne peut pas être négative.")
+            if delta is None:
+                issues.append("La variation du compteur n'a pas pu être déterminée de manière fiable.")
 
         if metric == "runtime":
             period_hours = max(0.0, (end - start) / 3600.0)
@@ -93,7 +88,17 @@ class MetricStatisticsEngine:
                 issues.append("Le temps de fonctionnement dépasse la durée physique de la période.")
             if statistics.get("anomalies_ignored", 0) > 0:
                 warnings.append(
-                    f"{statistics.get('anomalies_ignored', 0)} anomalie(s) de compteur ignorée(s)."
+                    f"{statistics.get('anomalies_ignored', 0)} anomalie(s) de compteur runtime ignorée(s)."
+                )
+
+        if metric in {"energy_total", "cycles"}:
+            if statistics.get("reconstruction_required"):
+                warnings.append(
+                    f"Variation reconstruite à partir de {statistics.get('resets_detected', 0)} reset(s) détecté(s)."
+                )
+            if statistics.get("anomalies_ignored", 0) > 0:
+                warnings.append(
+                    f"{statistics.get('anomalies_ignored', 0)} baisse(s) de compteur jugée(s) non plausible(s) et ignorée(s)."
                 )
 
         if metric == "cycles":
@@ -108,24 +113,54 @@ class MetricStatisticsEngine:
         }
 
     @staticmethod
-    def _numeric_points(points):
-        output = []
+    def _numeric_points(points, start, end):
+        # Deduplicate, sort and enforce the report contract [start,end).
+        by_timestamp = {}
         for ts, value in points:
             try:
                 value = float(value)
                 ts = float(ts)
             except (TypeError, ValueError):
                 continue
-            if math.isfinite(value) and math.isfinite(ts):
-                output.append((ts, value))
-        return output
+            if not (math.isfinite(value) and math.isfinite(ts)):
+                continue
+            if ts < start or ts >= end:
+                continue
+            by_timestamp[ts] = value
+        return sorted(by_timestamp.items(), key=lambda item: item[0])
 
     @staticmethod
     def _quality(points, start, end, step):
         timestamps = [float(ts) for ts, _ in points]
-        expected = int(math.floor((end - start) / step)) + 1 if step > 0 and end >= start else 0
-        received = len(points)
-        coverage = min(100.0, received / expected * 100.0) if expected else None
+        duration = max(0.0, end - start)
+
+        expected = (
+            int(math.ceil(duration / step))
+            if step > 0 and duration > 0
+            else 0
+        )
+        received = len(timestamps)
+
+        first_ts = timestamps[0] if timestamps else None
+        last_ts = timestamps[-1] if timestamps else None
+
+        observed_expected = 0
+        period_coverage = 0.0 if duration > 0 else None
+        sample_density = None
+
+        if timestamps and step > 0 and duration > 0:
+            observed_start = max(start, first_ts)
+            observed_end = min(end, last_ts + step)
+            observed_span = max(0.0, observed_end - observed_start)
+
+            period_coverage = min(100.0, observed_span / duration * 100.0)
+            observed_expected = (
+                int(math.ceil(observed_span / step))
+                if observed_span > 0
+                else 0
+            )
+            if observed_expected > 0:
+                sample_density = min(100.0, received / observed_expected * 100.0)
 
         gap_count = 0
         largest_gap = None
@@ -142,10 +177,12 @@ class MetricStatisticsEngine:
 
         return DataQuality(
             expected_points=expected,
+            observed_expected_points=observed_expected,
             received_points=received,
-            coverage_percent=coverage,
-            first_timestamp=timestamps[0] if timestamps else None,
-            last_timestamp=timestamps[-1] if timestamps else None,
+            period_coverage_percent=period_coverage,
+            sample_density_percent=sample_density,
+            first_timestamp=first_ts,
+            last_timestamp=last_ts,
             gap_count=gap_count,
             largest_gap_seconds=largest_gap,
         )
@@ -170,7 +207,6 @@ class MetricStatisticsEngine:
         rank = max(1, math.ceil(0.95 * len(ordered)))
         base["p95"] = ordered[rank - 1]
         return base
-
 
     @staticmethod
     def _runtime_stats(points, start, end):
@@ -224,25 +260,59 @@ class MetricStatisticsEngine:
         }
 
     @staticmethod
-    def _counter_stats(points):
+    def _counter_stats(points, metric):
         first = points[0]
         last = points[-1]
-        delta = 0.0
+
+        reconstructed_delta = 0.0
         resets = 0
+        anomalies = 0
+        negative_transitions = 0
         previous = first[1]
+
+        def looks_like_reset(previous_value, current_value):
+            if previous_value <= 0 or current_value < 0:
+                return False
+            absolute_floor = 2.0 if metric == "cycles" else 0.5
+            relative_floor = abs(previous_value) * 0.10
+            return current_value <= max(absolute_floor, relative_floor)
 
         for _, value in points[1:]:
             diff = value - previous
             if diff >= 0:
-                delta += diff
+                reconstructed_delta += diff
             else:
-                resets += 1
-                delta += max(0.0, value)
+                negative_transitions += 1
+                if looks_like_reset(previous, value):
+                    resets += 1
+                    reconstructed_delta += max(0.0, value)
+                else:
+                    anomalies += 1
             previous = value
+
+        direct_delta = last[1] - first[1]
+
+        if resets > 0:
+            delta = reconstructed_delta
+            mode = "reconstructed"
+        elif direct_delta >= 0:
+            # Prefer first->last for monotonic cumulative counters; this is
+            # robust to missing intermediate samples.
+            delta = direct_delta
+            mode = "direct"
+        else:
+            delta = None
+            mode = "undetermined"
 
         return {
             "first": {"timestamp": first[0], "value": first[1]},
             "last": {"timestamp": last[0], "value": last[1]},
             "delta": delta,
+            "direct_delta": direct_delta,
+            "reconstructed_delta": reconstructed_delta,
+            "mode": mode,
+            "reconstruction_required": resets > 0,
             "resets_detected": resets,
+            "negative_transitions": negative_transitions,
+            "anomalies_ignored": anomalies,
         }

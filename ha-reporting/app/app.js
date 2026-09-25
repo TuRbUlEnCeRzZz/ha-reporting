@@ -205,8 +205,9 @@ function renderSeriesResult(result){
   const max = metricStats.max || stats.max || {};
   const last = metricStats.last || stats.last || {};
 
-  $("seriesBadge").textContent = stats.points ? "Données reçues" : "Aucune donnée";
-  $("seriesBadge").className = "providerBadge " + (stats.points ? "ok" : "error");
+  const hasData = Number(stats.points || 0) > 0;
+  $("seriesBadge").textContent = hasData ? "Données reçues" : "Sans historique";
+  $("seriesBadge").className = "providerBadge " + (hasData ? "ok" : "");
 
   let businessStats = "";
 
@@ -243,8 +244,9 @@ function renderSeriesResult(result){
       </div>`;
   }
 
-  const coverage = quality.coverage_percent;
-  const qualityClass = coverage == null ? "" : coverage >= 95 ? "good" : coverage >= 80 ? "warn" : "bad";
+  const coverage = quality.period_coverage_percent;
+  const density = quality.sample_density_percent;
+  const densityClass = density == null ? "" : density >= 95 ? "good" : density >= 80 ? "warn" : "bad";
 
   $("seriesResult").classList.remove("hidden");
   $("seriesResult").innerHTML = `
@@ -267,21 +269,21 @@ function renderSeriesResult(result){
 
     <h4>Qualité des données</h4>
     <div class="qualityGrid">
-      <div class="seriesStat ${qualityClass}">
-        <div class="label">Couverture</div>
+      <div class="seriesStat">
+        <div class="label">Couverture période</div>
         <div class="value">${coverage == null ? "—" : Number(coverage).toFixed(1) + " %"}</div>
       </div>
+      <div class="seriesStat ${densityClass}">
+        <div class="label">Densité disponible</div>
+        <div class="value">${density == null ? "—" : Number(density).toFixed(1) + " %"}</div>
+      </div>
       <div class="seriesStat">
-        <div class="label">Points reçus / attendus</div>
+        <div class="label">Points reçus / période</div>
         <div class="value">${esc(quality.received_points ?? stats.points)} / ${esc(quality.expected_points ?? "—")}</div>
       </div>
       <div class="seriesStat">
         <div class="label">Trous détectés</div>
         <div class="value">${esc(quality.gap_count ?? "—")}</div>
-      </div>
-      <div class="seriesStat">
-        <div class="label">Plus grand trou</div>
-        <div class="value">${quality.largest_gap_seconds == null ? "—" : Math.round(quality.largest_gap_seconds) + " s"}</div>
       </div>
     </div>
 
@@ -298,6 +300,7 @@ function renderSeriesResult(result){
     </details>
   `;
 }
+
 async function testCatalogSeries(){
   const catalogId = $("seriesCatalog").value;
   const deviceId = $("seriesDevice").value;
@@ -595,7 +598,21 @@ function renderExecutedSource(source, period){
   const status = source.status || "error";
   const quality = (source.analysis || {}).quality || {};
 
-  if(status !== "ok"){
+  if(status === "no_data"){
+    return `
+      <div class="executedSource noDataCard">
+        <div class="executedSourceHeader">
+          <div>
+            <div class="executedSourceName">${esc(source.sensor_key)}</div>
+            <div class="executedSourceEntity">${esc(source.entity_id)}</div>
+          </div>
+          <span class="metricPill">${esc(source.metric)}</span>
+        </div>
+        <div class="sourceMessage">Pas d'historique disponible sur cette période.</div>
+      </div>`;
+  }
+
+  if(status === "error" || status === "unsupported"){
     return `
       <div class="executedSource errorCard">
         <div class="executedSourceHeader">
@@ -605,7 +622,7 @@ function renderExecutedSource(source, period){
           </div>
           <span class="metricPill">${esc(source.metric)}</span>
         </div>
-        <div class="sourceMessage">${esc(source.message || (status === "no_data" ? "Aucune donnée" : status))}</div>
+        <div class="sourceMessage">${esc(source.message || status)}</div>
       </div>`;
   }
 
@@ -618,8 +635,14 @@ function renderExecutedSource(source, period){
     </div>
   `).join("");
 
+  const validation = (source.analysis || {}).validation || {};
+  const messages = [
+    ...(validation.issues || []),
+    ...(validation.warnings || [])
+  ];
+
   return `
-    <div class="executedSource ${card.invalid ? "errorCard" : ""}">
+    <div class="executedSource ${(status === "invalid" || card.invalid) ? "errorCard" : ""}">
       <div class="executedSourceHeader">
         <div>
           <div class="executedSourceName">${esc(source.sensor_key)}</div>
@@ -628,9 +651,15 @@ function renderExecutedSource(source, period){
         <span class="metricPill">${esc(source.metric)}</span>
       </div>
       <div class="executedMetrics">${cells}</div>
+      ${(card.note || messages.length) ? `
+        <div class="metricNotes">
+          ${card.note ? `<span>${esc(card.note)}</span>` : ""}
+          ${messages.map(message => `<span class="${status === "invalid" ? "error" : ""}">${esc(message)}</span>`).join("")}
+        </div>` : ""}
       <div class="sourceFooter">
         ${qualityBadge(quality)}
         <span>${esc(source.points ?? 0)} point(s)</span>
+        <span>${esc(quality.gap_count ?? 0)} trou(s)</span>
       </div>
     </div>`;
 }
@@ -679,6 +708,7 @@ function renderExecutedReport(result){
       <div class="seriesStat"><div class="label">Sans données</div><div class="value">${esc(summary.sources_no_data)}</div></div>
       <div class="seriesStat ${summary.sources_error ? "bad" : ""}"><div class="label">Erreurs</div><div class="value">${esc(summary.sources_error)}</div></div>
       <div class="seriesStat ${summary.sources_invalid ? "bad" : ""}"><div class="label">Invalides</div><div class="value">${esc(summary.sources_invalid)}</div></div>
+      <div class="seriesStat"><div class="label">Non supportées</div><div class="value">${esc(summary.sources_unsupported)}</div></div>
     </div>
 
     ${catalogHtml}
@@ -1196,11 +1226,24 @@ async function showDeviceAnalysis(catalogId, deviceId, push=true){
 }
 
 function qualityBadge(quality){
-  const coverage = quality && quality.coverage_percent;
-  if(coverage == null) return '<span class="qualityPill">densité —</span>';
+  const coverage = quality && quality.period_coverage_percent;
+  const density = quality && quality.sample_density_percent;
 
-  const cls = coverage >= 95 ? "good" : coverage >= 80 ? "warn" : "bad";
-  return `<span class="qualityPill ${cls}">densité ${Number(coverage).toFixed(1)} %</span>`;
+  const coverageText = coverage == null
+    ? "couverture —"
+    : `couverture ${Number(coverage).toFixed(1)} %`;
+
+  const densityClass = density == null
+    ? ""
+    : density >= 95 ? "good" : density >= 80 ? "warn" : "bad";
+
+  const densityText = density == null
+    ? "densité —"
+    : `densité ${Number(density).toFixed(1)} %`;
+
+  return `
+    <span class="qualityPill">${coverageText}</span>
+    <span class="qualityPill ${densityClass}">${densityText}</span>`;
 }
 
 function metricCardData(source, period){
@@ -1278,7 +1321,8 @@ function metricCardData(source, period){
         value:formatSeriesNumber((stats.last||{}).value,unit)
       }
     ];
-    item.note = `${stats.resets_detected ?? 0} reset(s)`;
+    const mode = stats.mode === "reconstructed" ? "reconstruite" : "directe";
+    item.note = `${mode} · ${stats.resets_detected ?? 0} reset(s) · ${stats.anomalies_ignored ?? 0} baisse(s) ignorée(s)`;
     return item;
   }
 
@@ -1324,7 +1368,8 @@ function metricCardData(source, period){
         value:formatSeriesNumber((stats.last||{}).value,unit)
       }
     ];
-    item.note = `${stats.resets_detected ?? 0} reset(s)`;
+    const mode = stats.mode === "reconstructed" ? "reconstruit" : "direct";
+    item.note = `${mode} · ${stats.resets_detected ?? 0} reset(s) · ${stats.anomalies_ignored ?? 0} baisse(s) ignorée(s)`;
     return item;
   }
 
@@ -1366,7 +1411,21 @@ function renderDeviceAnalysis(result){
         </div>`;
     }
 
-    if(source.status === "error" || source.status === "no_data"){
+    if(source.status === "no_data"){
+      return `
+        <div class="sourceCard noDataCard">
+          <div class="sourceHeader">
+            <div>
+              <div class="sourceTitle">${esc(source.sensor_key)}</div>
+              <div class="sourceEntity">${esc(source.entity_id)}</div>
+            </div>
+            <span class="metricPill">${esc(source.metric)}</span>
+          </div>
+          <div class="sourceMessage">Pas d'historique disponible sur cette période.</div>
+        </div>`;
+    }
+
+    if(source.status === "error"){
       return `
         <div class="sourceCard errorCard">
           <div class="sourceHeader">
@@ -1376,7 +1435,7 @@ function renderDeviceAnalysis(result){
             </div>
             <span class="metricPill">${esc(source.metric)}</span>
           </div>
-          <div class="sourceMessage">${source.status === "no_data" ? "Aucune donnée" : "Erreur"} · ${esc(source.message || "")}</div>
+          <div class="sourceMessage">Erreur · ${esc(source.message || "")}</div>
         </div>`;
     }
 
@@ -1426,6 +1485,14 @@ function renderDeviceAnalysis(result){
       <div class="seriesStat good">
         <div class="label">Analysées</div>
         <div class="value">${esc(summary.sources_ok)}</div>
+      </div>
+      <div class="seriesStat">
+        <div class="label">Sans historique</div>
+        <div class="value">${esc(summary.sources_no_data ?? 0)}</div>
+      </div>
+      <div class="seriesStat ${summary.sources_invalid ? "bad" : ""}">
+        <div class="label">Invalides</div>
+        <div class="value">${esc(summary.sources_invalid ?? 0)}</div>
       </div>
       <div class="seriesStat">
         <div class="label">Non supportées</div>

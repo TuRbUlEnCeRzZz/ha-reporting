@@ -1,4 +1,5 @@
 import json
+import math
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -41,7 +42,7 @@ class VictoriaMetricsProvider(DataProvider):
             url,
             headers={
                 "Accept": "application/json",
-                "User-Agent": "HA-Reporting/0.1.0-alpha.17",
+                "User-Agent": "HA-Reporting/0.1.0-alpha.18",
             },
         )
 
@@ -240,10 +241,11 @@ class VictoriaMetricsProvider(DataProvider):
         requested_step = step or 300
         preferred_expression = self.expression_for_source(source)
 
+        query_end = math.nextafter(float(end), -math.inf)
         payload = self.range_query(
             preferred_expression,
             start,
-            end,
+            query_end,
             requested_step,
         )
         result = (payload.get("data") or {}).get("result") or []
@@ -256,7 +258,7 @@ class VictoriaMetricsProvider(DataProvider):
             payload = self.range_query(
                 fallback_expression,
                 start,
-                end,
+                query_end,
                 requested_step,
             )
             result = (payload.get("data") or {}).get("result") or []
@@ -272,6 +274,10 @@ class VictoriaMetricsProvider(DataProvider):
                 parsed: Any = float(value)
             except (TypeError, ValueError):
                 parsed = value
-            output.append((float(timestamp), parsed))
+            ts = float(timestamp)
+            if float(start) <= ts < float(end):
+                output.append((ts, parsed))
+
+        output.sort(key=lambda item: item[0])
         return output
 

@@ -1,57 +1,64 @@
-# HA Reporting — 0.1.0-alpha.17
+# HA Reporting — 0.1.0-alpha.18
 
-First real report-execution milestone.
+Data-reliability hardening before period comparisons.
 
-## Report execution
+## Strict report boundaries
 
-A planned report can now be executed from its preview.
+Report periods use `[start,end)` semantics. Alpha.18 now enforces this in both
+the VictoriaMetrics provider and statistics engine.
 
-Execution:
-1. freezes the report's resolved period;
-2. loads all selected catalogs;
-3. loads each enabled device;
-4. analyzes every configured source through DataProvider;
-5. reuses the metric-aware statistics engine;
-6. isolates source failures;
-7. aggregates one normalized multi-catalog report result.
+A 31-day month sampled every 300 seconds expects exactly 8928 points.
 
-The final result contains only source summaries/previews, not all raw points, so
-memory remains bounded per queried source.
+## Period coverage vs sample density
 
-## Current execution resolution
+The former single density value is split into:
 
-Alpha.17 uses a 300-second query step, identical to the validated device-analysis
-workflow. The step is included explicitly in execution metadata.
+- **Period coverage**: how much of the requested period lies between the first
+  and last available samples.
+- **Sample density**: how complete the samples are inside that observed interval.
 
-Long-period query optimization will be handled before beta so that annual reports
-can remain accurate without unnecessary VictoriaMetrics load.
+This distinguishes a source that only started halfway through a month from a
+source that existed all month but was sparsely recorded.
 
-## UI
+## No history is neutral
 
-The report preview now offers:
+An empty historical result is now shown as:
 
-- `Actualiser la période`
-- `Exécuter le rapport`
+`Pas d'historique disponible sur cette période.`
 
-Executed reports display:
-- exact resolved period;
-- execution duration;
-- device/source status totals;
-- catalog -> device -> source hierarchy;
-- metric-specific source cards;
-- full normalized report JSON.
+It remains a `no_data` status and is no longer styled as a provider/statistical
+error.
 
-## Period wording
+## Safer cumulative counters
 
-French labels were also corrected:
-- `Mois précédent`
-- `Semaine précédente`
-- `Année précédente`
-etc.
+Energy and cycle counters now prefer first-to-last delta when no plausible reset
+is detected.
+
+Downward transitions are treated as resets only when the new value is close to
+the counter baseline. Other downward jumps are ignored and surfaced as
+warnings.
+
+When a genuine reset is used, the result is explicitly marked as reconstructed.
+
+Normalized statistics expose:
+- direct delta;
+- reconstructed delta;
+- mode (`direct`, `reconstructed`, `undetermined`);
+- resets detected;
+- negative transitions;
+- anomalies ignored.
+
+## Invalid data remains invalid
+
+Statistically invalid results are no longer accidentally converted into
+`no_data`. Device and report summaries now distinguish:
+
+- OK;
+- no history;
+- invalid;
+- unsupported;
+- errors.
 
 ## Next milestone
 
-The normalized executed report is now ready for a comparison engine:
-- N vs previous period;
-- same period previous year;
-- N-x offsets.
+The report pipeline is now ready for N / N-1 / N-x comparison work.

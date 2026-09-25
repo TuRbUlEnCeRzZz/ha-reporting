@@ -79,13 +79,20 @@ class DeviceAnalysisEngine:
                     unit=source.get("unit"),
                 )
 
+                analysis_status = analysis.get("status")
+                if analysis_status == "ok":
+                    source_status = "ok"
+                    message = None
+                elif analysis_status == "invalid":
+                    source_status = "invalid"
+                    message = "Données présentes mais analyse statistique invalide."
+                else:
+                    source_status = "no_data"
+                    message = "Pas d'historique disponible sur cette période."
+
                 item.update(
                     {
-                        "status": (
-                            "ok"
-                            if analysis.get("status") == "ok"
-                            else "no_data"
-                        ),
+                        "status": source_status,
                         "points": len(points),
                         "analysis": analysis,
                         "preview": [
@@ -94,6 +101,8 @@ class DeviceAnalysisEngine:
                         ],
                     }
                 )
+                if message:
+                    item["message"] = message
             except Exception as exc:
                 item.update(
                     {
@@ -131,6 +140,7 @@ class DeviceAnalysisEngine:
         statuses = {
             "ok": 0,
             "no_data": 0,
+            "invalid": 0,
             "unsupported": 0,
             "error": 0,
         }
@@ -147,6 +157,7 @@ class DeviceAnalysisEngine:
             "sources_total": len(results),
             "sources_ok": statuses["ok"],
             "sources_no_data": statuses["no_data"],
+            "sources_invalid": statuses["invalid"],
             "sources_unsupported": statuses["unsupported"],
             "sources_error": statuses["error"],
             "metrics": metric_counts,

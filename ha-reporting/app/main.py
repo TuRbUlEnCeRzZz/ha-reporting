@@ -855,14 +855,9 @@ def execute_report(report_id):
             total_sources += result["summary"]["sources_total"]
             sources_ok += result["summary"]["sources_ok"]
             sources_no_data += result["summary"]["sources_no_data"]
+            sources_invalid += result["summary"].get("sources_invalid", 0)
             sources_unsupported += result["summary"]["sources_unsupported"]
             sources_error += result["summary"]["sources_error"]
-
-            for source in result.get("sources") or []:
-                analysis = source.get("analysis") or {}
-                validation = analysis.get("validation") or {}
-                if source.get("status") == "ok" and validation.get("valid") is False:
-                    sources_invalid += 1
 
             devices_out.append(result)
 

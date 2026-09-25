@@ -206,10 +206,67 @@ def render_report_html(result: dict[str, Any]) -> str:
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{_e(title)}</title>
 <style>
-:root{{--ink:#172033;--muted:#667085;--line:#d9dee8;--paper:#fff;--soft:#f5f7fb;--accent:#2563eb;--good:#087a55;--warn:#a66700}}
-*{{box-sizing:border-box}} body{{margin:0;background:#eef1f6;color:var(--ink);font:14px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}} .page{{max-width:1180px;margin:28px auto;background:var(--paper);padding:38px 42px;box-shadow:0 12px 40px #17203318}} h1,h2,h3,h4,p{{margin-top:0}} h1{{font-size:28px;margin-bottom:6px}} h2{{font-size:20px;margin:28px 0 12px}} h3{{font-size:16px;margin:0}} h4{{font-size:12px;margin:0 0 3px;overflow-wrap:anywhere}} .muted,.quality,small{{color:var(--muted)}} .toolbar{{display:flex;justify-content:flex-end;margin-bottom:18px}} button{{border:0;border-radius:8px;background:var(--accent);color:#fff;padding:9px 14px;font-weight:700;cursor:pointer}} .hero{{border-bottom:2px solid var(--ink);padding-bottom:18px;margin-bottom:20px}} .hero-meta{{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted)}} .summary{{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin:18px 0 26px}} .summary.mini{{grid-template-columns:repeat(4,1fr)}} .summary>div{{background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:12px}} .summary span{{display:block;color:var(--muted);font-size:11px}} .summary strong{{font-size:19px}} .catalog{{break-inside:avoid-page}} .device{{border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0 20px;break-inside:avoid-page}} .device-title,.section-title{{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;margin-bottom:12px}} .device-title p,.section-title p{{color:var(--muted);margin:2px 0 0}} .device-title>span{{color:var(--muted);font-size:11px}} .source-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}} .source,.compare-source{{border:1px solid var(--line);border-radius:10px;padding:12px;break-inside:avoid}} .source-head{{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}} .pill{{font-size:9px;border:1px solid var(--line);border-radius:999px;padding:3px 7px;color:var(--muted)}} .metrics{{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0 8px}} .metric span{{display:block;font-size:9px;color:var(--muted)}} .metric strong{{display:block;font-size:14px;margin-top:2px}} .quality{{font-size:9px}} .source-error{{border-color:#d92d20}} .comparison-block{{margin-top:24px;border-top:2px solid var(--ink);padding-top:20px}} .compare-source{{margin-bottom:0}} .compare-value{{border-top:1px solid var(--line);padding-top:9px;margin-top:9px}} .compare-value-head{{display:flex;justify-content:space-between;gap:12px;font-size:11px}} .compare-bars{{margin-top:7px}} .compare-bars>div{{display:grid;grid-template-columns:32px 1fr 82px;gap:7px;align-items:center;font-size:9px;margin:4px 0}} .compare-bars i{{display:block;height:7px;background:var(--accent);border-radius:999px}} .compare-bars i.ref{{background:#8b5cf6}} .compare-bars b{{font-weight:600;text-align:right}} footer{{border-top:1px solid var(--line);margin-top:28px;padding-top:12px;color:var(--muted);font-size:10px}}
+:root{{--ink:#f2f4f7;--muted:#aeb7c2;--line:#39414b;--paper:#14191f;--canvas:#0c1015;--soft:#1a2028;--accent:#2563eb;--ref:#7c3aed;--good:#34d399;--warn:#f59e0b}}
+*{{box-sizing:border-box}}
+html{{color-scheme:dark;background:var(--canvas)}}
+body{{margin:0;background:var(--canvas);color:var(--ink);font:14px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
+.page{{max-width:1180px;margin:28px auto;background:var(--paper);padding:38px 42px;box-shadow:0 12px 40px #0008;border:1px solid #252c35}}
+h1,h2,h3,h4,p{{margin-top:0}} h1{{font-size:28px;margin-bottom:6px}} h2{{font-size:20px;margin:28px 0 12px}} h3{{font-size:16px;margin:0}} h4{{font-size:12px;margin:0 0 3px;overflow-wrap:anywhere}}
+.muted,.quality,small{{color:var(--muted)}}
+.toolbar{{display:flex;justify-content:flex-end;margin-bottom:18px}}
+button{{border:0;border-radius:8px;background:var(--accent);color:#fff;padding:9px 14px;font-weight:700;cursor:pointer}}
+.hero{{border-bottom:2px solid #66717e;padding-bottom:18px;margin-bottom:20px}}
+.hero-meta{{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted)}}
+.summary{{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin:18px 0 26px}}
+.summary.mini{{grid-template-columns:repeat(4,1fr)}}
+.summary>div{{background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:12px}}
+.summary span{{display:block;color:var(--muted);font-size:11px}} .summary strong{{font-size:19px}}
+.catalog{{break-inside:auto}}
+.catalog>h2,.device-title,.section-title,.comparisons>h1{{break-after:avoid-page;page-break-after:avoid}}
+.device{{background:#151b22;border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0 20px;break-inside:auto}}
+.device-title,.section-title{{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;margin-bottom:12px}}
+.device-title p,.section-title p{{color:var(--muted);margin:2px 0 0}} .device-title>span{{color:var(--muted);font-size:11px}}
+.source-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;break-inside:auto}}
+.source,.compare-source{{background:#171d24;border:1px solid var(--line);border-radius:10px;padding:12px;break-inside:avoid;page-break-inside:avoid}}
+.source-head{{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}}
+.pill{{font-size:9px;border:1px solid #4a5562;border-radius:999px;padding:3px 7px;color:var(--muted);background:#11161c}}
+.metrics{{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0 8px}}
+.metric span{{display:block;font-size:9px;color:var(--muted)}} .metric strong{{display:block;font-size:14px;margin-top:2px}}
+.quality{{font-size:9px}} .source-error{{border-color:#ef4444}}
+.comparisons{{margin-top:28px}}
+.comparison-block{{margin-top:24px;border-top:2px solid #66717e;padding-top:20px;break-inside:auto}}
+.compare-source{{margin-bottom:0}}
+.compare-value{{border-top:1px solid var(--line);padding-top:9px;margin-top:9px}}
+.compare-value-head{{display:flex;justify-content:space-between;gap:12px;font-size:11px}}
+.compare-bars{{margin-top:7px}}
+.compare-bars>div{{display:grid;grid-template-columns:32px 1fr 82px;gap:7px;align-items:center;font-size:9px;margin:4px 0}}
+.compare-bars i{{display:block;height:7px;background:var(--accent);border-radius:999px;box-shadow:inset 0 0 0 99px var(--accent)}}
+.compare-bars i.ref{{background:var(--ref);box-shadow:inset 0 0 0 99px var(--ref)}}
+.compare-bars b{{font-weight:600;text-align:right}}
+footer{{border-top:1px solid var(--line);margin-top:28px;padding-top:12px;color:var(--muted);font-size:10px}}
 @media(max-width:800px){{.page{{margin:0;padding:22px}}.summary,.summary.mini{{grid-template-columns:repeat(2,1fr)}}.source-grid{{grid-template-columns:1fr}}}}
-@media print{{@page{{size:A4;margin:12mm}} body{{background:#fff;font-size:10px}} .page{{max-width:none;margin:0;padding:0;box-shadow:none}} .toolbar{{display:none}} h1{{font-size:20px}} h2{{font-size:15px}} h3{{font-size:12px}} .summary{{gap:5px;margin:10px 0 15px}} .summary>div{{padding:7px}} .summary strong{{font-size:14px}} .source-grid{{gap:6px}} .source,.compare-source{{padding:8px}} .device{{padding:10px;margin:8px 0 12px}}}}
+@media print{{
+  @page{{size:A4;margin:10mm}}
+  html,body,.page,.summary>div,.device,.source,.compare-source,.pill,.compare-bars i{{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}}
+  html,body{{background:var(--canvas)!important;color:var(--ink)!important}}
+  body{{font-size:10px}}
+  .page{{max-width:none;margin:0;padding:0;background:var(--paper)!important;box-shadow:none;border:0}}
+  .toolbar{{display:none}}
+  h1{{font-size:20px}} h2{{font-size:15px}} h3{{font-size:12px}}
+  .hero{{padding-bottom:10px;margin-bottom:12px}}
+  .summary{{gap:5px;margin:10px 0 15px}}
+  .summary>div{{padding:7px;background:var(--soft)!important}}
+  .summary strong{{font-size:14px}}
+  .catalog,.device,.comparison-block{{break-inside:auto;page-break-inside:auto}}
+  .catalog>h2,.device-title,.section-title,.comparisons>h1{{break-after:avoid-page;page-break-after:avoid}}
+  .source-grid{{gap:6px;break-inside:auto;page-break-inside:auto}}
+  .source,.compare-source{{padding:8px;background:#171d24!important;break-inside:avoid;page-break-inside:avoid}}
+  .device{{padding:10px;margin:8px 0 12px;background:#151b22!important}}
+  .comparison-block{{margin-top:16px;padding-top:12px}}
+  .compare-bars i{{background:var(--accent)!important;box-shadow:inset 0 0 0 99px var(--accent)!important}}
+  .compare-bars i.ref{{background:var(--ref)!important;box-shadow:inset 0 0 0 99px var(--ref)!important}}
+  footer{{margin-top:16px}}
+}}
 </style></head><body><main class="page">
 <div class="toolbar"><button onclick="window.print()">Imprimer / enregistrer en PDF</button></div>
 <header class="hero"><h1>{_e(title)}</h1><div class="hero-meta"><span>{_e(period.get('label'))}</span><span>Fuseau {_e(period.get('timezone'))}</span><span>Généré le {_e(generated)}</span></div></header>

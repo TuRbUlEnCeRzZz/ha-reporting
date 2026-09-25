@@ -372,6 +372,11 @@ class HtmlRendererTests(unittest.TestCase):
         self.assertTrue(html.startswith('<!doctype html>'))
         self.assertIn('Imprimer / enregistrer en PDF',html)
         self.assertIn('@media print',html)
+        self.assertIn('print-color-adjust:exact',html)
+        self.assertIn('--paper:#14191f',html)
+        self.assertIn('background:var(--paper)!important',html)
+        self.assertIn('break-inside:auto',html)
+        self.assertNotIn('body{background:#fff',html)
         self.assertIn('Rapport &lt;Maison&gt;',html)
         self.assertIn('power&lt;script&gt;',html)
         self.assertNotIn('power<script>',html)
@@ -389,7 +394,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.1')
+        self.assertEqual(config['version'],'0.1.0-beta.2')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         for name in ['Dockerfile','run.sh','app/main.py','app/app.js','app/index.html','app/rendering/html_report.py']:

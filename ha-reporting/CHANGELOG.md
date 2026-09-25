@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-beta.2
+
+- Preserve the dark standalone HTML visual language when printing or saving as PDF.
+- Add exact print color adjustment so report backgrounds and N/reference comparison bars are retained by supporting browsers.
+- Stop forcing a white print canvas; use the same dark report palette for screen and print.
+- Relax print fragmentation for catalogs and devices while keeping individual source cards together, preventing orphan catalog headings and near-empty pages.
+- Keep headings attached to the content that follows and reduce print spacing without flattening cards or comparison graphics.
+- Add print-fidelity regressions for dark colors, chart bars, and pagination rules.
+
 ## 0.1.0-beta.1
 
 - Freeze the alpha.23 runtime/statistics behavior as the first beta baseline.

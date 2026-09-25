@@ -1,9 +1,10 @@
-# HA Reporting — 0.1.0-beta.1
+# HA Reporting — 0.1.0-beta.2
 
-Première bêta pour Home Assistant OS, notamment sur Raspberry Pi 4 (aarch64).
+Deuxième bêta pour Home Assistant OS, notamment sur Raspberry Pi 4 (aarch64).
 Les calculs, contrôles de qualité, rollups, comparaisons et vérifications runtime
-de l’alpha.23 sont conservés. La nouveauté de beta.1 est une couche de rendu
-indépendante qui transforme un rapport exécuté en document HTML autonome.
+de l’alpha.23 restent gelés. beta.2 consolide la sortie imprimable : le document
+HTML et la sortie PDF navigateur partagent désormais le même thème sombre et
+conservent les graphiques de comparaison.
 
 ## Rapport HTML et sortie PDF
 
@@ -15,12 +16,14 @@ autonome généré à partir des mêmes résultats structurés. Le rendu compren
 - des cartes adaptées aux métriques puissance, énergie, temps, cycles et température ;
 - les indicateurs de couverture/densité et les vérifications runtime ;
 - les comparaisons N/N-x avec mini-graphiques N / référence ;
-- une feuille de style A4 dédiée à l’impression.
+- une feuille de style A4 sombre dédiée à l’impression, avec couleurs et graphiques préservés ;
+- des règles de pagination qui laissent les catalogues/appareils se fragmenter entre pages tout en gardant chaque carte source intacte.
 
 Le document n’utilise aucune ressource web externe. Le bouton **Imprimer /
 enregistrer en PDF** s’appuie pour l’instant sur la fonction d’impression du
-navigateur. La génération PDF serveur et l’envoi Paperless restent des étapes
-suivantes ; beta.1 établit le contrat de rendu HTML qui leur servira de base.
+navigateur. beta.2 demande explicitement la fidélité des couleurs d’impression
+(`print-color-adjust: exact`) et ne force plus un fond blanc en mode print.
+La génération PDF serveur et l’envoi Paperless restent des étapes suivantes.
 
 L’URL technique est `GET /api/report/{id}/html`. Elle réexécute le rapport au
 moment de l’ouverture afin que le document reflète les données courantes.
@@ -29,7 +32,7 @@ moment de l’ouverture afin que le document reflète les données courantes.
 
 Les longues périodes utilisent toujours les rollups VictoriaMetrics. Lorsqu'un
 rollup runtime signale une reconstruction, une baisse ou une incohérence,
-beta.1 lit les points bruts uniquement pour cette source et sa fenêtre réellement
+beta.2 lit les points bruts uniquement pour cette source et sa fenêtre réellement
 observée. Cette lecture sert d'abord à **classifier** les transitions négatives.
 
 Quatre classes sont distinguées : `rounding`, `minor_correction`,
@@ -104,7 +107,7 @@ restent disponibles. Les règles de comparaison sont conservées.
    `Dockerfile`) vers `/addons/ha-reporting` sur Home Assistant OS.
 3. Actualiser le magasin des add-ons, puis installer ou reconstruire l'add-on
    local HA Reporting selon le mode d'installation existant.
-4. Vérifier la version 0.1.0-beta.1 dans les journaux et relancer les rapports.
+4. Vérifier la version 0.1.0-beta.2 dans les journaux et relancer les rapports.
 
 Ne pas copier le dossier de dépôt complet à la place du dossier de l'add-on.
 Pour une installation issue d'un dépôt Git, mettre à jour les fichiers du même
@@ -116,4 +119,4 @@ L'archive contient les sources à construire par Supervisor, pas une image OCI.
 - [Rollups MetricsQL](https://docs.victoriametrics.com/victoriametrics/metricsql/)
 - [Export JSONL VictoriaMetrics](https://docs.victoriametrics.com/victoriametrics/single-server-victoriametrics/#how-to-export-data-in-json-line-format)
 
-Voir `VALIDATION-beta1.md` à la racine du dépôt pour les tests et résultats.
+Voir `VALIDATION-beta2.md` à la racine du dépôt pour les tests et résultats.

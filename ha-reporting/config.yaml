@@ -1,0 +1,23 @@
+name: "HA Reporting"
+version: "0.1.0-alpha.1"
+slug: "ha_reporting"
+description: "Modular reporting engine for Home Assistant"
+url: "https://github.com/TuRbUlEnCeRzZz/ha-reporting"
+startup: application
+boot: auto
+init: false
+stage: experimental
+arch:
+  - aarch64
+  - amd64
+
+map:
+  - type: addon_config
+    read_only: false
+    path: /config
+
+options:
+  log_level: "info"
+
+schema:
+  log_level: "list(trace|debug|info|notice|warning|error|fatal)"

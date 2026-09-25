@@ -17,6 +17,7 @@ from models_normalized import NormalizedSeries
 from analysis.device import DeviceAnalysisEngine
 from periods.engine import PeriodEngine
 from comparisons.engine import ComparisonEngine
+from rendering.html_report import render_report_html
 
 PORT = 8099
 TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
@@ -1096,6 +1097,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_payload(200, {"reports": list_reports()})
             if path.endswith("/api/timezone"):
                 return self.send_payload(200, {"timezone": home_assistant_timezone()})
+            if "/api/report/" in path and path.endswith("/html"):
+                parts = self.path_parts_after_report(path)
+                if len(parts) == 2 and parts[1] == "html":
+                    rendered = render_report_html(execute_report(parts[0])).encode("utf-8")
+                    return self.send_payload(200, rendered, "text/html; charset=utf-8")
             if "/api/report/" in path:
                 parts = self.path_parts_after_report(path)
                 return self.send_payload(200, {"report": report_summary(load_report(parts[0]))})

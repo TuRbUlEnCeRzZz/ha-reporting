@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.0-beta.1
+
+- Freeze the alpha.23 runtime/statistics behavior as the first beta baseline.
+- Add a standalone HTML report renderer with no external assets or JavaScript dependencies.
+- Add a dedicated `GET /api/report/{id}/html` endpoint that executes the report and returns the rendered document.
+- Add a `Rapport HTML / PDF` action in the report preview after a successful execution.
+- Add print-specific A4 styling and an `Imprimer / enregistrer en PDF` action.
+- Render metric-aware source cards for power, energy, runtime, cycles and temperature.
+- Preserve data-quality context, runtime verification and fallback indicators in the rendered report.
+- Add N/N-x comparison sections with compact base/reference bar charts and absolute/relative deltas when applicable.
+- Keep HTML output self-contained and escape catalog, device and entity text before rendering.
+- Add renderer regressions and packaging checks for the new rendering module.
+
 ## 0.1.0-alpha.23
 
 - Classify runtime negative transitions as rounding, minor correction, reset candidate or large drop.

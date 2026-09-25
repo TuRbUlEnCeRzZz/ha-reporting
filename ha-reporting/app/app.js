@@ -542,6 +542,7 @@ async function previewReport(reportId, push=true){
   $("reportPreviewSubtitle").textContent = "Résolution de la période et du périmètre. Le rapport peut ensuite être exécuté sur les données réelles.";
   $("reportPreviewStatus").textContent = "Résolution en cours…";
   $("reportPreviewResult").classList.add("hidden");
+  $("reportHtmlButton").classList.add("hidden");
 
   setPage("reportPreviewPage", {reportId}, push);
 
@@ -889,6 +890,7 @@ async function executeReport(reportId){
       (comparisonCount ? ` · ${comparisonCount} comparaison(s)` : "");
 
     renderExecutedReport(data.result);
+    $("reportHtmlButton").classList.remove("hidden");
   }finally{
     $("executeReportButton").disabled = false;
   }
@@ -948,6 +950,10 @@ $("refreshReportPreviewButton").addEventListener("click", () => {
 });
 $("executeReportButton").addEventListener("click", () => {
   if(previewReportId) executeReport(previewReportId);
+});
+$("reportHtmlButton").addEventListener("click", () => {
+  if(!previewReportId) return;
+  window.open(`api/report/${encodeURIComponent(previewReportId)}/html`, "_blank", "noopener");
 });
 $("providersButton").addEventListener("click", () => showProviders());
 $("seriesCatalog").addEventListener("change", populateSeriesDevices);

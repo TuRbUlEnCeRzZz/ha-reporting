@@ -19,6 +19,7 @@ from providers.base import ProviderCapabilities, ProviderStatus, ProviderError
 from providers.victoriametrics import VictoriaMetricsProvider as VM
 from periods.engine import PeriodEngine
 from comparisons.engine import ComparisonEngine
+from rendering.html_report import render_report_html
 import main
 
 SOURCE = {'entity_id': 'sensor.runtime', 'metric': 'runtime', 'unit': 'h'}
@@ -352,6 +353,35 @@ class ReportTests(unittest.TestCase):
                 else:
                     self.assertNotIn('verification',r)
 
+
+class HtmlRendererTests(unittest.TestCase):
+    def sample_result(self):
+        return {
+            'report': {'name':'Rapport <Maison>'},
+            'resolved_period': {'label':'Année en cours','timezone':'Europe/Zurich','semantics':'[start, end)'},
+            'execution': {'analysis_mode':'provider_rollup','duration_seconds':0.25,'total_duration_seconds':0.5,'finished_at_epoch':1790371460},
+            'summary': {'devices_total':1,'sources_total':2,'sources_ok':2,'sources_no_data':0,'sources_error':0,'sources_invalid':0,'sources_runtime_verified':1,'sources_fallback':0},
+            'catalogs': [{'name':'Électroménager','devices':[{'device':{'name':'Vinothèque','category':'refrigeration'},'summary':{'sources_ok':2,'sources_total':2},'sources':[
+                {'sensor_key':'power<script>','entity_id':'sensor.power','metric':'power','unit':'W','status':'ok','analysis':{'quality':{'period_coverage_percent':100,'density_applicable':True,'sample_density_percent':95},'statistics':{'max':{'value':100},'p95':70,'mean':40}}},
+                {'sensor_key':'runtime','entity_id':'sensor.runtime','metric':'runtime','unit':'h','status':'ok','verification':{'classification':'minor_corrections'},'analysis':{'quality':{'period_coverage_percent':10,'density_applicable':False,'sample_density_percent':None},'statistics':{'delta':20.2,'last':{'value':20.2},'resets_detected':0}}}
+            ]}]}],
+            'comparisons': {'enabled':True,'targets':[{'label':'N-1 an','resolved_period':{'label':'2025'},'summary':{'sources_comparable':1,'sources_partial':0,'sources_reconstructed':0,'sources_unavailable':0},'catalogs':[{'name':'Électroménager','devices':[{'name':'Vinothèque','sources':[{'sensor_key':'power','metric':'power','unit':'W','comparison_status':'comparable','reasons':[],'values':[{'label':'Moyenne','base':40,'reference':50,'absolute_change':-10,'relative_change_percent':-20,'relative_change_applicable':True}]}]}]}]}]}
+        }
+    def test_html_report_is_self_contained_printable_and_escaped(self):
+        html=render_report_html(self.sample_result())
+        self.assertTrue(html.startswith('<!doctype html>'))
+        self.assertIn('Imprimer / enregistrer en PDF',html)
+        self.assertIn('@media print',html)
+        self.assertIn('Rapport &lt;Maison&gt;',html)
+        self.assertIn('power&lt;script&gt;',html)
+        self.assertNotIn('power<script>',html)
+    def test_html_report_has_comparison_bars_and_runtime_verification(self):
+        html=render_report_html(self.sample_result())
+        self.assertIn('Comparaisons N / N-x',html)
+        self.assertIn('compare-bars',html)
+        self.assertIn('runtime vérifié',html)
+        self.assertIn('20.2 h',html)
+
 class PackageTests(unittest.TestCase):
     def test_yaml_and_installation_layout(self):
         import yaml
@@ -359,11 +389,14 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-alpha.23')
+        self.assertEqual(config['version'],'0.1.0-beta.1')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
-        for name in ['Dockerfile','run.sh','app/main.py','app/app.js','app/index.html']:
+        for name in ['Dockerfile','run.sh','app/main.py','app/app.js','app/index.html','app/rendering/html_report.py']:
             self.assertTrue((addon/name).is_file(),name)
+        index=(addon/'app/index.html').read_text()
+        self.assertIn('reportHtmlButton', index)
+        self.assertIn('Rapport HTML / PDF', index)
     def test_healthy_report_no_raw_transfer(self):
         p=FakeProvider(rollup())
         resolved=PeriodEngine('UTC').resolve({'type':'custom','start':'1970-01-01','end':'1971-01-01'})

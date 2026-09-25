@@ -1,43 +1,51 @@
-# HA Reporting — 0.1.0-alpha.8
+# HA Reporting — 0.1.0-alpha.9
 
-First data-provider milestone.
+First real catalog -> DataProvider -> VictoriaMetrics -> normalized-series milestone.
 
-## Architecture
+## Provider save feedback
 
-Reporting code must depend on the generic `DataProvider` interface rather than querying VictoriaMetrics directly.
+`Tester la connexion` and `Enregistrer` now have distinct feedback:
 
-The provider layer now exposes a common conceptual interface for:
+- Test -> `Connexion VictoriaMetrics réussie`
+- Save -> `Configuration enregistrée · VictoriaMetrics connecté`
+- A configuration can still be saved while VictoriaMetrics is temporarily unavailable.
 
-- series
-- first / last
-- min / max
-- mean / sum
-- max value with timestamp
-- future state duration / state changes
+## Real series test
 
-## VictoriaMetrics
+Open **Sources de données** and use **Test d'une source réelle**.
 
-VictoriaMetrics is the first implemented provider.
+Choose:
 
-The configuration is stored persistently in:
+1. a catalog;
+2. a device;
+3. a sensor;
+4. a period (1 h, 6 h, 24 h, 7 days).
 
-```text
-/config/providers.yaml
-```
+HA Reporting resolves the source from the persistent catalog, calls the generic `DataProvider`, queries VictoriaMetrics, then returns a normalized result.
 
-No private/local URL is committed to the public GitHub repository.
+The UI displays:
 
-Open **Sources de données** in HA Reporting, enter the VictoriaMetrics URL, then use **Tester la connexion**.
+- number of points;
+- first value;
+- last value;
+- mean;
+- maximum;
+- a JSON preview of the normalized result.
 
-The test uses the standard `/api/v1/query` endpoint with a constant query (`1`), so it does not depend on a particular metric being present.
+## Normalized structure
 
-## Initial source mapping
+The internal result separates:
 
-Alpha.8 establishes the first conservative mapping already observed in the Home Assistant/VictoriaMetrics installation:
+- provider;
+- source identity and metric;
+- period;
+- statistics;
+- time-series points.
 
-- power / W -> `W_value`
-- energy_total / kWh -> `kWh_value`
-- runtime / h -> `h_value`
-- cycles -> `cycles_value`
+This structure is deliberately provider-independent so later statistics/reporting code does not depend directly on VictoriaMetrics.
 
-The next milestone will validate this mapping against real catalog sensors and return normalized time-series data.
+## Scope
+
+Alpha.9 is a data retrieval/normalization milestone, not yet the final statistics engine.
+
+The next step can introduce metric-aware calculations (energy delta/increase, power peak timestamp, runtime/cycle differences, etc.) on top of normalized provider data.

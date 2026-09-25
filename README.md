@@ -1,5 +1,5 @@
 # HA Reporting
 
-Current development version: **0.1.0-alpha.8**.
+Current development version: **0.1.0-alpha.9**.
 
-Modular reporting engine for Home Assistant. VictoriaMetrics is now implemented behind a generic DataProvider interface.
+HA Reporting can now retrieve a real catalog sensor from VictoriaMetrics through its generic DataProvider interface and return normalized time-series data.

@@ -334,3 +334,35 @@ th{font-size:12px;color:var(--hr-secondary)}
 .capability{display:inline-block;padding:4px 8px;border-radius:999px;border:1px solid var(--hr-divider);font-size:12px}
 .capability.off{opacity:.45}
 @media(max-width:850px){.grid.two{grid-template-columns:1fr}}
+
+.grid.four{grid-template-columns:repeat(4,minmax(160px,1fr))}
+.dataTestCard{margin-top:14px}
+.seriesResult{
+  margin-top:16px;
+  padding:14px;
+  border:1px solid var(--hr-divider);
+  border-radius:10px;
+  background:color-mix(in srgb,var(--hr-bg) 70%,transparent);
+}
+.seriesSummary{
+  display:grid;
+  grid-template-columns:repeat(5,minmax(120px,1fr));
+  gap:10px;
+  margin-bottom:12px;
+}
+.seriesStat{
+  padding:10px;
+  border:1px solid var(--hr-divider);
+  border-radius:9px;
+}
+.seriesStat .label{color:var(--hr-secondary);font-size:12px}
+.seriesStat .value{font-size:17px;font-weight:700;margin-top:4px}
+.seriesMeta{color:var(--hr-secondary);font-size:12px;margin-bottom:10px}
+.seriesPreview{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;white-space:pre-wrap;overflow:auto;max-height:220px}
+@media(max-width:1000px){
+  .grid.four{grid-template-columns:repeat(2,1fr)}
+  .seriesSummary{grid-template-columns:repeat(2,1fr)}
+}
+@media(max-width:600px){
+  .grid.four,.seriesSummary{grid-template-columns:1fr}
+}

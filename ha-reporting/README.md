@@ -1,5 +1,5 @@
 # HA Reporting
 
-Version **0.1.0-alpha.8**.
+Version **0.1.0-alpha.9**.
 
-First DataProvider/VictoriaMetrics milestone with persistent provider configuration and connection testing.
+First end-to-end real data path: catalog sensor -> DataProvider -> VictoriaMetrics -> normalized series.

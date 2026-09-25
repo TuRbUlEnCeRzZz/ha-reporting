@@ -91,6 +91,8 @@ function syncHomeAssistantTheme(){
 }
 async function showProviders(push=true){
   setPage("providersPage", {}, push);
+  await loadCatalogs();
+  populateSeriesCatalogs();
   await loadProviders();
 }
 
@@ -132,6 +134,126 @@ function renderProviderStatus(status){
   }
 
   renderCapabilities(status && status.details ? status.details.capabilities : {});
+}
+
+function selectedCatalogObject(){
+  return catalogs.find(c => c.id === $("seriesCatalog").value);
+}
+
+function populateSeriesCatalogs(){
+  const usable = catalogs.filter(c => !c.error && (c.devices || []).length);
+  $("seriesCatalog").innerHTML = usable.length
+    ? usable.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("")
+    : '<option value="">Aucun catalogue avec appareil</option>';
+  populateSeriesDevices();
+}
+
+function populateSeriesDevices(){
+  const catalog = selectedCatalogObject();
+  const devices = catalog ? (catalog.devices || []) : [];
+  $("seriesDevice").innerHTML = devices.length
+    ? devices.map(d => `<option value="${esc(d.id)}">${esc(d.name)}</option>`).join("")
+    : '<option value="">Aucun appareil</option>';
+  populateSeriesSensors();
+}
+
+function populateSeriesSensors(){
+  const catalog = selectedCatalogObject();
+  const device = catalog
+    ? (catalog.devices || []).find(d => d.id === $("seriesDevice").value)
+    : null;
+  const sensors = device ? (device.entities || []) : [];
+
+  $("seriesSensor").innerHTML = sensors.length
+    ? sensors.map(s =>
+        `<option value="${esc(s.key)}">${esc(s.entity_id)} · ${esc(s.metric)}</option>`
+      ).join("")
+    : '<option value="">Aucun capteur</option>';
+}
+
+function formatSeriesNumber(value, unit=""){
+  if(value === null || value === undefined) return "—";
+  const n = Number(value);
+  if(Number.isFinite(n)){
+    const abs = Math.abs(n);
+    const digits = abs >= 100 ? 1 : abs >= 10 ? 2 : 3;
+    return `${n.toFixed(digits)}${unit ? " " + unit : ""}`;
+  }
+  return `${value}${unit ? " " + unit : ""}`;
+}
+
+function renderSeriesResult(result){
+  const stats = result.statistics || {};
+  const source = result.source || {};
+  const unit = source.unit || "";
+  const max = stats.max || {};
+  const first = stats.first || {};
+  const last = stats.last || {};
+
+  $("seriesBadge").textContent = stats.points ? "Données reçues" : "Aucune donnée";
+  $("seriesBadge").className = "providerBadge " + (stats.points ? "ok" : "error");
+
+  $("seriesResult").classList.remove("hidden");
+  $("seriesResult").innerHTML = `
+    <div class="seriesMeta">
+      ${esc(source.entity_id)} · ${esc(source.metric)} · provider ${esc(result.provider)} · pas ${esc(result.period.step)} s
+    </div>
+    <div class="seriesSummary">
+      <div class="seriesStat"><div class="label">Points</div><div class="value">${esc(stats.points)}</div></div>
+      <div class="seriesStat"><div class="label">Premier</div><div class="value">${formatSeriesNumber(first.value,unit)}</div></div>
+      <div class="seriesStat"><div class="label">Dernier</div><div class="value">${formatSeriesNumber(last.value,unit)}</div></div>
+      <div class="seriesStat"><div class="label">Moyenne</div><div class="value">${formatSeriesNumber(stats.mean,unit)}</div></div>
+      <div class="seriesStat"><div class="label">Maximum</div><div class="value">${formatSeriesNumber(max.value,unit)}</div></div>
+    </div>
+    <div class="seriesPreview">${esc(JSON.stringify({
+      provider:result.provider,
+      source:result.source,
+      period:result.period,
+      statistics:result.statistics,
+      preview:result.preview
+    }, null, 2))}</div>
+  `;
+}
+
+async function testCatalogSeries(){
+  const catalogId = $("seriesCatalog").value;
+  const deviceId = $("seriesDevice").value;
+  const sensorKey = $("seriesSensor").value;
+
+  if(!catalogId || !deviceId || !sensorKey){
+    $("seriesStatusText").textContent = "Sélection incomplète";
+    $("seriesStatusText").classList.add("error");
+    return;
+  }
+
+  $("seriesStatusText").textContent = "Interrogation en cours…";
+  $("seriesStatusText").classList.remove("error");
+  $("seriesResult").classList.add("hidden");
+
+  const response = await fetch("api/data/test-series", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      catalog_id:catalogId,
+      device_id:deviceId,
+      sensor_key:sensorKey,
+      hours:Number($("seriesHours").value),
+      step:300
+    })
+  });
+  const data = await response.json();
+
+  if(!response.ok){
+    $("seriesStatusText").textContent = "Erreur : " + data.error;
+    $("seriesStatusText").classList.add("error");
+    $("seriesBadge").textContent = "Erreur";
+    $("seriesBadge").className = "providerBadge error";
+    return;
+  }
+
+  $("seriesStatusText").textContent = "✓ Série normalisée reçue";
+  $("seriesStatusText").classList.remove("error");
+  renderSeriesResult(data.result);
 }
 
 async function loadProviders(){
@@ -179,6 +301,9 @@ async function addDeviceTo(id, name, push=true){
 $("backButton").addEventListener("click", () => history.back());
 $("newCatalogButton").addEventListener("click", () => showNewCatalog());
 $("providersButton").addEventListener("click", () => showProviders());
+$("seriesCatalog").addEventListener("change", populateSeriesDevices);
+$("seriesDevice").addEventListener("change", populateSeriesSensors);
+$("seriesTestButton").addEventListener("click", testCatalogSeries);
 
 $("vmTestButton").addEventListener("click", async () => {
   $("vmStatusText").textContent = "Test en cours…";
@@ -195,6 +320,10 @@ $("vmTestButton").addEventListener("click", async () => {
     return;
   }
   renderProviderStatus(data.status);
+  if(data.status.available){
+    $("vmStatusText").textContent = "✓ Connexion VictoriaMetrics réussie";
+    $("vmStatusText").classList.remove("error");
+  }
 });
 
 $("vmSaveButton").addEventListener("click", async () => {
@@ -204,12 +333,22 @@ $("vmSaveButton").addEventListener("click", async () => {
     body:JSON.stringify({url:$("vmUrl").value})
   });
   const data = await response.json();
+
   if(!response.ok){
-    $("vmStatusText").textContent = "Erreur : " + data.error;
+    $("vmStatusText").textContent = "Erreur d'enregistrement : " + data.error;
     $("vmStatusText").classList.add("error");
     return;
   }
+
   renderProviderStatus(data);
+
+  if(data.available){
+    $("vmStatusText").textContent = "✓ Configuration enregistrée · VictoriaMetrics connecté";
+    $("vmStatusText").classList.remove("error");
+  }else{
+    $("vmStatusText").textContent = "✓ Configuration enregistrée · ⚠ " + data.message;
+    $("vmStatusText").classList.add("error");
+  }
 });
 window.addEventListener("popstate", async event => {
   const state = event.state || {page:"homePage"};
@@ -227,6 +366,9 @@ async function loadCatalogs(){
   const data = await response.json();
   catalogs = data.catalogs || [];
   renderCatalogs();
+  if(!$("providersPage").classList.contains("hidden")){
+    populateSeriesCatalogs();
+  }
 }
 
 function renderCatalogs(){

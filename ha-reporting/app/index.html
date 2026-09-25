@@ -15,7 +15,7 @@
   </button>
   <div>
     <h1>HA Reporting</h1>
-    <div class="subtitle">0.1.0-alpha.8 · Gestion des catalogues</div>
+    <div class="subtitle">0.1.0-alpha.9 · Gestion des catalogues</div>
   </div>
 </header>
 
@@ -63,6 +63,43 @@
           <button class="primary" id="vmSaveButton">Enregistrer</button>
           <span id="vmStatusText" class="statusText"></span>
         </div>
+      </div>
+
+      <div class="providerCard dataTestCard">
+        <div class="providerHeading">
+          <div>
+            <h3>Test d'une source réelle</h3>
+            <p class="muted">Sélectionne un capteur déjà présent dans un catalogue. HA Reporting interrogera VictoriaMetrics via DataProvider et retournera une série normalisée.</p>
+          </div>
+          <span id="seriesBadge" class="providerBadge">En attente</span>
+        </div>
+
+        <div class="grid four">
+          <label>Catalogue
+            <select id="seriesCatalog"></select>
+          </label>
+          <label>Appareil
+            <select id="seriesDevice"></select>
+          </label>
+          <label>Capteur
+            <select id="seriesSensor"></select>
+          </label>
+          <label>Période
+            <select id="seriesHours">
+              <option value="1">1 heure</option>
+              <option value="6">6 heures</option>
+              <option value="24" selected>24 heures</option>
+              <option value="168">7 jours</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="actions">
+          <button class="primary" id="seriesTestButton">Interroger VictoriaMetrics</button>
+          <span id="seriesStatusText" class="statusText"></span>
+        </div>
+
+        <div id="seriesResult" class="seriesResult hidden"></div>
       </div>
     </div>
   </section>

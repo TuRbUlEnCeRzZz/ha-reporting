@@ -1,5 +1,5 @@
 # HA Reporting
 
-Modular reporting engine for Home Assistant.
+Version **0.1.0-alpha.2**.
 
-This first alpha validates installation and startup on Home Assistant OS. The reporting engine itself will be introduced incrementally after the bootstrap is confirmed working.
+Loads and validates persistent YAML catalogs from `/config/catalogs`. See `DOCS.md`.

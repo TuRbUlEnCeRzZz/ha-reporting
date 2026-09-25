@@ -1,0 +1,1 @@
+"""HA Reporting catalog subsystem."""

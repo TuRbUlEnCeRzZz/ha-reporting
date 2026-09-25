@@ -34,6 +34,9 @@ class DataQuality:
 class MetricStatisticsEngine:
     COUNTER_METRICS = {"energy_total", "runtime", "cycles"}
     GAUGE_METRICS = {"power", "temperature", "humidity", "voltage", "current"}
+    RUNTIME_ROUNDING_TOLERANCE_HOURS = 0.0005
+    RUNTIME_MINOR_CORRECTION_TOLERANCE_HOURS = 0.02
+    RUNTIME_MINOR_CORRECTION_MAX_TRANSITIONS = 2
 
     def analyze(self, metric, points, start, end, step, unit=None):
         numeric = self._numeric_points(points, start, end)
@@ -483,22 +486,49 @@ class MetricStatisticsEngine:
         negative_transitions = []
         transition_count = 0
         rounding_count = 0
+        minor_count = 0
+        reset_candidate_count = 0
+        large_drop_count = 0
         descent = 0.0
         for (prev_ts, prev), (ts, value) in zip(points, points[1:]):
             if value < prev:
                 drop = prev - value
                 descent += drop
-                # Diagnostic only. This does not forgive a reset or relax any
-                # physical allowance. 0.0005 h is half of a 0.001 h quantum.
-                candidate = 0 < drop <= 0.0005 + 1e-12 and value > 0.02
+                rounding = (
+                    0 < drop <= MetricStatisticsEngine.RUNTIME_ROUNDING_TOLERANCE_HOURS + 1e-12
+                    and value > MetricStatisticsEngine.RUNTIME_MINOR_CORRECTION_TOLERANCE_HOURS
+                )
+                if rounding:
+                    classification = "rounding"
+                    rounding_count += 1
+                elif (
+                    0 < drop <= MetricStatisticsEngine.RUNTIME_MINOR_CORRECTION_TOLERANCE_HOURS + 1e-12
+                    and value > MetricStatisticsEngine.RUNTIME_MINOR_CORRECTION_TOLERANCE_HOURS
+                ):
+                    classification = "minor_correction"
+                    minor_count += 1
+                elif value <= MetricStatisticsEngine.RUNTIME_MINOR_CORRECTION_TOLERANCE_HOURS:
+                    classification = "reset_candidate"
+                    reset_candidate_count += 1
+                else:
+                    classification = "large_drop"
+                    large_drop_count += 1
                 transition_count += 1
-                rounding_count += int(candidate)
                 if len(negative_transitions) < 20:
                     negative_transitions.append({
                         "previous_timestamp": prev_ts, "timestamp": ts,
                         "previous_value": prev, "value": value, "drop_hours": drop,
-                        "rounding_compatible": candidate,
+                        "rounding_compatible": rounding,
+                        "classification": classification,
                     })
+
+        benign_corrections_only = (
+            transition_count > 0
+            and transition_count <= MetricStatisticsEngine.RUNTIME_MINOR_CORRECTION_MAX_TRANSITIONS
+            and reset_candidate_count == 0
+            and large_drop_count == 0
+            and descent <= MetricStatisticsEngine.RUNTIME_MINOR_CORRECTION_TOLERANCE_HOURS + 1e-12
+        )
 
         return {
             "first": {"timestamp": first[0], "value": first[1]},
@@ -513,10 +543,17 @@ class MetricStatisticsEngine:
                 "negative_transitions": transition_count,
                 "total_descent_hours": descent,
                 "rounding_compatible_transitions": rounding_count,
+                "minor_correction_transitions": minor_count,
+                "reset_candidate_transitions": reset_candidate_count,
+                "large_drop_transitions": large_drop_count,
+                "benign_corrections_only": benign_corrections_only,
                 "examples": negative_transitions[:20],
                 "examples_truncated": transition_count > 20,
-                "rounding_tolerance_hours": 0.0005,
-                "classification_only": True,
+                "rounding_tolerance_hours": MetricStatisticsEngine.RUNTIME_ROUNDING_TOLERANCE_HOURS,
+                "minor_correction_tolerance_hours": MetricStatisticsEngine.RUNTIME_MINOR_CORRECTION_TOLERANCE_HOURS,
+                "minor_correction_max_transitions": MetricStatisticsEngine.RUNTIME_MINOR_CORRECTION_MAX_TRANSITIONS,
+                "classification_only": False,
+                "used_for_rollup_verification": True,
             },
             "physical_limit_hours": physical_limit,
             "plausible": plausible,

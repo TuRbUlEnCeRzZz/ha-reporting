@@ -100,13 +100,15 @@ class DeviceAnalysisEngine:
                         metric == "runtime"
                         and self._runtime_rollup_needs_fallback(analysis)
                     ):
-                        item["fallback"] = {
-                            "reason": "runtime_rollup_reconstruction",
+                        rollup_statistics = dict(analysis.get("statistics") or {})
+                        rollup_quality = dict(analysis.get("quality") or {})
+                        item["verification"] = {
+                            "reason": "runtime_rollup_suspect",
                             "status": "pending",
-                            "rollup_statistics": dict(analysis.get("statistics") or {}),
-                            "rollup_quality": dict(analysis.get("quality") or {}),
+                            "rollup_statistics": rollup_statistics,
+                            "rollup_quality": rollup_quality,
                         }
-                        fallback = self._runtime_detailed_fallback(
+                        raw_check = self._runtime_detailed_fallback(
                             provider=provider,
                             source=source,
                             rollup_analysis=analysis,
@@ -114,19 +116,61 @@ class DeviceAnalysisEngine:
                             end=end,
                             step=step,
                         )
-                        if fallback is not None:
-                            analysis = fallback["analysis"]
-                            points = fallback["points"]
+                        raw_statistics = dict(
+                            raw_check["analysis"].get("statistics") or {}
+                        )
+                        diagnostic = raw_statistics.get("transition_diagnostics") or {}
+                        raw_summary = {
+                            "delta": raw_statistics.get("delta"),
+                            "resets_detected": raw_statistics.get("resets_detected", 0),
+                            "anomalies_ignored": raw_statistics.get("anomalies_ignored", 0),
+                            "negative_values": raw_statistics.get("negative_values", 0),
+                            "plausible": raw_statistics.get("plausible"),
+                        }
+
+                        if (
+                            raw_check["analysis"].get("status") == "ok"
+                            and diagnostic.get("benign_corrections_only") is True
+                        ):
+                            analysis = self._accept_verified_runtime_corrections(
+                                analysis, diagnostic
+                            )
+                            item["verification"].update({
+                                "status": "completed",
+                                "classification": "minor_corrections",
+                                "sampling": "raw",
+                                "start": raw_check["start"],
+                                "end": raw_check["end"],
+                                "points": len(raw_check["points"]),
+                                "diagnostic": diagnostic,
+                                "raw_statistics": raw_summary,
+                            })
+                        else:
+                            item["verification"].update({
+                                "status": "completed",
+                                "classification": "fallback_required",
+                                "sampling": "raw",
+                                "start": raw_check["start"],
+                                "end": raw_check["end"],
+                                "points": len(raw_check["points"]),
+                                "diagnostic": diagnostic,
+                                "raw_statistics": raw_summary,
+                            })
+                            item["fallback"] = {
+                                "reason": "runtime_rollup_reconstruction",
+                                "status": "completed",
+                                "rollup_statistics": rollup_statistics,
+                                "rollup_quality": rollup_quality,
+                                "sampling": "raw",
+                                "start": raw_check["start"],
+                                "end": raw_check["end"],
+                                "points": len(raw_check["points"]),
+                                "diagnostic": diagnostic,
+                            }
+                            analysis = raw_check["analysis"]
+                            points = raw_check["points"]
                             points_count = len(points)
                             source_retrieval_mode = "series_fallback"
-                            item["fallback"].update({
-                                "status": "completed",
-                                "sampling": "raw",
-                                "start": fallback["start"],
-                                "end": fallback["end"],
-                                "points": points_count,
-                                "diagnostic": analysis["statistics"].get("transition_diagnostics"),
-                            })
                 elif retrieval_mode == "provider_rollup":
                     raise RuntimeError(
                         f"Le provider '{provider_id}' ne supporte pas "
@@ -173,6 +217,8 @@ class DeviceAnalysisEngine:
             except Exception as exc:
                 if "fallback" in item:
                     item["fallback"]["status"] = "failed"
+                if "verification" in item:
+                    item["verification"]["status"] = "failed"
                 item.update(
                     {
                         "status": "error",
@@ -216,6 +262,60 @@ class DeviceAnalysisEngine:
             or statistics.get("negative_transitions", 0) > 0
             or statistics.get("plausible") is False
         )
+
+    def _accept_verified_runtime_corrections(
+        self,
+        analysis: dict[str, Any],
+        diagnostic: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Keep provider rollup after raw verification of only benign corrections."""
+        accepted = dict(analysis)
+        statistics = dict(analysis.get("statistics") or {})
+        direct_delta = statistics.get("direct_delta")
+        if direct_delta is None or float(direct_delta) < 0:
+            raise RuntimeError("Correction runtime mineure incompatible avec un delta direct")
+
+        provider_mode = statistics.get("mode")
+        provider_resets = int(statistics.get("resets_detected", 0) or 0)
+        provider_delta = statistics.get("reconstructed_delta")
+        corrections = int(diagnostic.get("negative_transitions", 0) or 0)
+        descent = float(diagnostic.get("total_descent_hours", 0) or 0)
+
+        statistics.update({
+            "delta": float(direct_delta),
+            "mode": "direct_minor_corrections",
+            "reconstruction_required": False,
+            "resets_detected": 0,
+            "anomalies_ignored": 0,
+            "provider_mode_before_verification": provider_mode,
+            "provider_resets_detected": provider_resets,
+            "provider_reconstructed_delta": provider_delta,
+            "minor_corrections_accepted": corrections,
+            "minor_correction_descent_hours": descent,
+            "rounding_corrections_accepted": int(
+                diagnostic.get("rounding_compatible_transitions", 0) or 0
+            ),
+            "transition_diagnostics": dict(diagnostic),
+        })
+
+        physical_limit = statistics.get("physical_limit_hours")
+        if physical_limit is not None:
+            statistics["plausible"] = (
+                float(direct_delta) <= float(physical_limit) * 1.05 + 0.10
+            )
+
+        accepted["statistics"] = statistics
+        accepted["validation"] = self.statistics._validate(
+            metric="runtime",
+            statistics=statistics,
+            start=(analysis.get("quality") or {}).get("first_timestamp") or 0,
+            end=(analysis.get("quality") or {}).get("last_timestamp") or 0,
+        )
+        accepted["status"] = (
+            "ok" if accepted["validation"].get("valid", True) else "invalid"
+        )
+        accepted["retrieval_mode"] = "provider_rollup"
+        return accepted
 
     def _runtime_detailed_fallback(
         self,
@@ -322,6 +422,7 @@ class DeviceAnalysisEngine:
         }
         metric_counts: dict[str, int] = {}
         fallback_count = 0
+        verification_count = 0
 
         for item in results:
             status = item.get("status")
@@ -331,6 +432,8 @@ class DeviceAnalysisEngine:
             metric_counts[metric] = metric_counts.get(metric, 0) + 1
             if item.get("retrieval_mode") == "series_fallback":
                 fallback_count += 1
+            if (item.get("verification") or {}).get("status") == "completed":
+                verification_count += 1
 
         return {
             "sources_total": len(results),
@@ -340,5 +443,6 @@ class DeviceAnalysisEngine:
             "sources_unsupported": statuses["unsupported"],
             "sources_error": statuses["error"],
             "sources_fallback": fallback_count,
+            "sources_runtime_verified": verification_count,
             "metrics": metric_counts,
         }

@@ -72,6 +72,8 @@ class RuntimeTests(unittest.TestCase):
         a=self.stats([(0,.0004),(1,0),(3601,1)])
         self.assertEqual(a['statistics']['resets_detected'],1)
         self.assertEqual(a['statistics']['transition_diagnostics']['rounding_compatible_transitions'],0)
+        self.assertEqual(a['statistics']['transition_diagnostics']['reset_candidate_transitions'],1)
+        self.assertFalse(a['statistics']['transition_diagnostics']['benign_corrections_only'])
     def test_rounding_is_diagnostic_not_new_tolerance(self):
         a=self.stats([(0,1),(3600,1.169444444444),(3608,1.169),(7200,2)])
         self.assertEqual(a['statistics']['transition_diagnostics']['rounding_compatible_transitions'],1)
@@ -81,6 +83,8 @@ class RuntimeTests(unittest.TestCase):
     def test_61_seconds_is_not_rounding(self):
         a=self.stats([(0,8),(3600,8.359),(3679,8.342),(7200,9)])
         self.assertEqual(a['statistics']['transition_diagnostics']['rounding_compatible_transitions'],0)
+        self.assertEqual(a['statistics']['transition_diagnostics']['minor_correction_transitions'],1)
+        self.assertTrue(a['statistics']['transition_diagnostics']['benign_corrections_only'])
         self.assertEqual(a['statistics']['anomalies_ignored'],1)
     def test_impossible_increment_is_rejected(self):
         a=self.stats([(0,0),(1,100),(3600,1)])
@@ -129,14 +133,33 @@ class FallbackTests(unittest.TestCase):
     def test_drop_without_provider_reset_still_verified(self):
         p=FakeProvider(rollup(decreases=1))
         self.assertEqual(analyze_device(p)['summary']['sources_fallback'],1)
+    def test_verified_minor_correction_avoids_fallback(self):
+        points=[(1000,0.0),(2000,1.0),(2100,0.983),(4600,1.5)]
+        p=FakeProvider(rollup(last=1.5,resets=1,decreases=1,increase=1.517,descent=0.017,count=4),points)
+        r=analyze_device(p)
+        source=r['sources'][0]
+        self.assertEqual(r['summary']['sources_fallback'],0)
+        self.assertEqual(r['summary']['sources_runtime_verified'],1)
+        self.assertEqual(source['retrieval_mode'],'provider_rollup')
+        self.assertEqual(source['verification']['classification'],'minor_corrections')
+        self.assertEqual(source['analysis']['statistics']['mode'],'direct_minor_corrections')
+        self.assertAlmostEqual(source['analysis']['statistics']['delta'],1.5)
+    def test_tiny_return_to_zero_still_falls_back(self):
+        points=[(1000,0.0004),(1001,0.0),(4600,1.0)]
+        p=FakeProvider(rollup(first=.0004,last=1.0,resets=1,decreases=1,increase=1.0,descent=.0004,count=3),points)
+        r=analyze_device(p)
+        source=r['sources'][0]
+        self.assertEqual(r['summary']['sources_fallback'],1)
+        self.assertEqual(source['retrieval_mode'],'series_fallback')
+        self.assertEqual(source['fallback']['diagnostic']['reset_candidate_transitions'],1)
     def test_impossible_rollup_triggers_export(self):
         p=FakeProvider(rollup(last=500))
         self.assertEqual(analyze_device(p)['summary']['sources_fallback'],1)
     def test_empty_export_fails_closed(self):
         r=analyze_device(FakeProvider(points=[]))
         self.assertEqual(r['sources'][0]['status'],'error')
-        self.assertEqual(r['sources'][0]['fallback']['status'],'failed')
-        self.assertIn('rollup_statistics',r['sources'][0]['fallback'])
+        self.assertEqual(r['sources'][0]['verification']['status'],'failed')
+        self.assertIn('rollup_statistics',r['sources'][0]['verification'])
     def test_partial_export_fails_closed(self):
         r=analyze_device(FakeProvider(points=[(2800,.5),(4600,1)]))
         self.assertEqual(r['sources'][0]['status'],'error')
@@ -297,21 +320,37 @@ class ReportTests(unittest.TestCase):
         self.assertTrue(result['execution']['raw_series_transferred'])
         self.assertEqual(result['summary']['sources_fallback'],1)
         self.assertEqual(result['summary']['sources_total'],2)
+    def test_verified_runtime_counts_as_raw_transfer_without_fallback(self):
+        points=[(1000,0.0),(2000,1.0),(2100,0.983),(4600,1.5)]
+        p=FakeProvider(rollup(last=1.5,resets=1,decreases=1,increase=1.517,descent=0.017,count=4),points)
+        catalog={'devices':{'d':{'sensors':{'runtime':SOURCE}}}}
+        resolved=PeriodEngine('UTC').resolve({'type':'custom','start':'1970-01-01','end':'1971-01-01'})
+        with patch.object(main,'resolve_provider',return_value=p),patch.object(main,'load_catalog',return_value=catalog):
+            result=main._execute_report_period({'catalogs':['c']},resolved)
+        self.assertTrue(result['execution']['raw_series_transferred'])
+        self.assertEqual(result['summary']['sources_fallback'],0)
+        self.assertEqual(result['summary']['sources_runtime_verified'],1)
     def test_real_snapshots(self):
         data=json.loads((ROOT/'tests/fixtures/runtime_snapshots.json').read_text())
-        expected={'compressor_a':(20.152,2,1),'compressor_b':(58.792,1,0),'fan':(22.417,0,0)}
+        expected={'compressor_a':(20.152,2,1,1),'compressor_b':(58.792,1,0,1),'fan':(22.417,0,0,0)}
         for name,d in data.items():
             with self.subTest(name=name):
-                v=d['rollup']['values'];p=FakeProvider(d['rollup'],d['points'])
+                p=FakeProvider(d['rollup'],d['points'])
                 r=DeviceAnalysisEngine(lambda _:p).analyze(catalog_id='c',catalog_name='C',device_id='d',device={'sensors':{'x':SOURCE}},default_provider='victoria_metrics',start=1767222000,end=1790367701.692432,step=300,retrieval_mode='provider_rollup')['sources'][0]
                 self.assertEqual(r['status'],'ok')
                 self.assertAlmostEqual(r['analysis']['statistics']['delta'],expected[name][0])
+                self.assertEqual(r['retrieval_mode'],'provider_rollup')
+                self.assertNotIn('fallback',r)
                 if name!='fan':
-                    diag=r['fallback']['diagnostic']
+                    diag=r['verification']['diagnostic']
+                    self.assertEqual(r['verification']['classification'],'minor_corrections')
+                    self.assertTrue(diag['benign_corrections_only'])
                     self.assertEqual(diag['negative_transitions'],expected[name][1])
                     self.assertEqual(diag['rounding_compatible_transitions'],expected[name][2])
+                    self.assertEqual(diag['minor_correction_transitions'],expected[name][3])
+                    self.assertEqual(r['analysis']['statistics']['mode'],'direct_minor_corrections')
                 else:
-                    self.assertEqual(r['retrieval_mode'],'provider_rollup')
+                    self.assertNotIn('verification',r)
 
 class PackageTests(unittest.TestCase):
     def test_yaml_and_installation_layout(self):
@@ -320,7 +359,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-alpha.22')
+        self.assertEqual(config['version'],'0.1.0-alpha.23')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         for name in ['Dockerfile','run.sh','app/main.py','app/app.js','app/index.html']:

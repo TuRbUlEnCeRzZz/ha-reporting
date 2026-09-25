@@ -677,6 +677,11 @@ function renderExecutedSource(source, period){
   ];
   if(source.retrieval_mode === "series_fallback"){
     messages.unshift("Vérification sur les points bruts utilisée pour ce runtime.");
+  } else if((source.verification || {}).classification === "minor_corrections"){
+    const verification = source.verification || {};
+    const count = ((verification.diagnostic || {}).negative_transitions ?? 0);
+    const rawAnomalies = Number((verification.raw_statistics || {}).anomalies_ignored || 0);
+    messages.unshift(`${count} correction(s) mineure(s) runtime vérifiée(s) sur les points bruts ; fallback évité.${rawAnomalies ? ` ${rawAnomalies} irrégularité(s) locale(s) brute(s) signalée(s) par le contrôle détaillé.` : ""}`);
   }
 
   return `
@@ -828,6 +833,7 @@ function renderExecutedReport(result){
           ? `mode optimisé DataProvider · qualité nominale ${esc(exec.quality_nominal_step_seconds)} s`
           : `série détaillée · pas ${esc(exec.sampling_step_seconds)} s`} ·
         ${Number(exec.duration_seconds || 0).toFixed(2)} s
+        ${summary.sources_runtime_verified ? ` · ${esc(summary.sources_runtime_verified)} runtime(s) vérifié(s)` : ""}
         ${summary.sources_fallback ? ` · ${esc(summary.sources_fallback)} fallback(s) détaillé(s)` : ""}
       </div>
     </div>
@@ -1492,7 +1498,8 @@ function metricCardData(source, period){
         value:String(stats.anomalies_ignored ?? 0)
       }
     ];
-    item.note = `${stats.resets_detected ?? 0} reset(s)`;
+    const minor = Number(stats.minor_corrections_accepted || 0);
+    item.note = `${stats.resets_detected ?? 0} reset(s)${minor ? ` · ${minor} correction(s) mineure(s)` : ""}`;
     return item;
   }
 

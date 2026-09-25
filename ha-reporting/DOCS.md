@@ -1,26 +1,32 @@
-# HA Reporting — 0.1.0-alpha.22
+# HA Reporting — 0.1.0-alpha.23
 
 Version de consolidation pour Home Assistant OS, notamment sur Raspberry Pi 4
 (aarch64). Les architectures aarch64 et amd64 sont conservées. Aucun changement
 de catalogue, de définition de rapport ou de configuration n'est requis.
 
-## Runtimes et fallback ciblé
+## Runtimes, vérification brute et fallback ciblé
 
-Les longues périodes utilisent toujours les rollups VictoriaMetrics. Une
-reconstruction, une baisse signalée ou un runtime invalide déclenche une lecture
-brute uniquement de la source concernée, entre son premier et son dernier point
-observés dans le rapport. Les autres sources restent en rollup.
+Les longues périodes utilisent toujours les rollups VictoriaMetrics. Lorsqu'un
+rollup runtime signale une reconstruction, une baisse ou une incohérence,
+alpha.23 lit les points bruts uniquement pour cette source et sa fenêtre réellement
+observée. Cette lecture sert d'abord à **classifier** les transitions négatives.
 
-Alpha.21 utilisait `query_range` avec un pas de 300 secondes pour ce fallback.
-Cette grille pouvait manquer une baisse courte ainsi que les véritables
-premier et dernier points. Alpha.22 utilise `/api/v1/export` en lecture seule,
-avec les timestamps d'origine, puis le moteur de plausibilité existant.
+Quatre classes sont distinguées : `rounding`, `minor_correction`,
+`reset_candidate` et `large_drop`. Une correction est considérée bénigne seulement
+si la valeur d'arrivée reste au-dessus de 0,02 h, si chaque baisse reste petite,
+si la somme de toutes les baisses ne dépasse pas 0,02 h (72 s) et s'il n'y a pas
+plus de deux transitions négatives sur la fenêtre. Le seuil d'arrondi reste
+0,0005 h (1,8 s). Un retour proche de zéro n'est jamais classé bénin.
 
-Les contrôles physiques ne sont pas assouplis. La limite totale du moteur
-détaillé utilise désormais la durée entre les points réellement observés,
-sans ajouter la marge temporelle du fallback. Les valeurs runtime négatives
-sont invalides. Les resets réels, y compris un petit retour à zéro, restent
-reconstruits selon les règles existantes.
+Si la lecture brute confirme uniquement des corrections bénignes, le résultat
+reste en `provider_rollup`, le delta direct `last - first` est conservé et aucun
+fallback n'est compté. Le JSON expose alors `verification.classification =
+minor_corrections`. Si un reset candidat, une grande baisse, une donnée invalide
+ou un export ambigu est rencontré, le fallback brut alpha.22 reste actif.
+
+La vérification brute est donc un filet de sécurité, pas une tolérance aveugle.
+`execution.raw_series_transferred` reste vrai lorsqu'une vérification brute a eu
+lieu, même si le résultat final reste en rollup.
 
 ## Diagnostic conservé
 
@@ -48,8 +54,10 @@ Pour protéger la mémoire du Raspberry Pi, l'export est lu ligne par ligne,
 avec des limites de 200 000 points, 32 Mio au total et 1 Mio par ligne. Un
 dépassement échoue explicitement sans résultat tronqué.
 
-`retrieval_mode: series_fallback` et les compteurs de fallback sont conservés.
-`execution.raw_series_transferred` reflète maintenant un fallback effectué.
+`retrieval_mode: series_fallback` et les compteurs de fallback sont conservés
+pour les cas réellement suspects. Les corrections mineures vérifiées restent en
+`provider_rollup`. `summary.sources_runtime_verified` compte ces vérifications.
+`execution.raw_series_transferred` couvre à la fois vérifications et fallbacks.
 
 ## Périodes, DST et qualité
 
@@ -75,7 +83,7 @@ restent disponibles. Les règles de comparaison sont conservées.
    `Dockerfile`) vers `/addons/ha-reporting` sur Home Assistant OS.
 3. Actualiser le magasin des add-ons, puis installer ou reconstruire l'add-on
    local HA Reporting selon le mode d'installation existant.
-4. Vérifier la version 0.1.0-alpha.22 dans les journaux et relancer les rapports.
+4. Vérifier la version 0.1.0-alpha.23 dans les journaux et relancer les rapports.
 
 Ne pas copier le dossier de dépôt complet à la place du dossier de l'add-on.
 Pour une installation issue d'un dépôt Git, mettre à jour les fichiers du même
@@ -87,4 +95,4 @@ L'archive contient les sources à construire par Supervisor, pas une image OCI.
 - [Rollups MetricsQL](https://docs.victoriametrics.com/victoriametrics/metricsql/)
 - [Export JSONL VictoriaMetrics](https://docs.victoriametrics.com/victoriametrics/single-server-victoriametrics/#how-to-export-data-in-json-line-format)
 
-Voir `VALIDATION-alpha22.md` à la racine du dépôt pour les tests et résultats.
+Voir `VALIDATION-alpha23.md` à la racine du dépôt pour les tests et résultats.

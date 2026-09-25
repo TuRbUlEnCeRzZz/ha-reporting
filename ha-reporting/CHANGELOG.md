@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.0-alpha.23
+
+- Classify runtime negative transitions as rounding, minor correction, reset candidate or large drop.
+- Raw-verify suspicious runtime rollups before deciding whether a fallback is actually required.
+- Keep provider rollup and direct delta when raw history proves only benign minor corrections.
+- Preserve raw fallback for reset candidates, large drops, invalid data and ambiguous exports.
+- Accept at most two benign negative transitions totaling at most 0.02 h (72 s); a return near zero is never accepted as benign.
+- Expose `verification` diagnostics and `sources_runtime_verified` separately from fallbacks.
+- Keep `execution.raw_series_transferred` accurate when raw verification occurs without fallback.
+- Show verified minor runtime corrections in the report UI.
+- Add regressions for benign 61 s corrections, tiny return-to-zero resets and real anonymized runtime snapshots.
+
 ## 0.1.0-alpha.22
 
 - Preserve original runtime rollup diagnostics and raw negative transitions.

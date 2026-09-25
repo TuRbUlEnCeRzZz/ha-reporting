@@ -1,11 +1,11 @@
 # HA Reporting
 
-Add-on Home Assistant OS — version **0.1.0-alpha.22**.
+Add-on Home Assistant OS — version **0.1.0-alpha.23**.
 
 Le dossier `ha-reporting/` contient l'add-on à installer/construire.
 Voir [la documentation](ha-reporting/DOCS.md), le
 [changelog](ha-reporting/CHANGELOG.md) et le
-[rapport de validation](VALIDATION-alpha22.md).
+[rapport de validation](VALIDATION-alpha23.md).
 
 Tests locaux depuis ce dossier (Python 3.11+ avec PyYAML, Node.js) :
 

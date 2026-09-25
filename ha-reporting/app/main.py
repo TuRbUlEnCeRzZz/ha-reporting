@@ -918,6 +918,7 @@ def _execute_report_period(
     sources_error = 0
     sources_invalid = 0
     sources_fallback = 0
+    sources_runtime_verified = 0
 
     for catalog_id in report.get("catalogs") or []:
         catalog = load_catalog(catalog_id)
@@ -950,6 +951,7 @@ def _execute_report_period(
             sources_unsupported += result["summary"]["sources_unsupported"]
             sources_error += result["summary"]["sources_error"]
             sources_fallback += result["summary"].get("sources_fallback", 0)
+            sources_runtime_verified += result["summary"].get("sources_runtime_verified", 0)
             devices_out.append(result)
 
         catalog_results.append(
@@ -972,7 +974,11 @@ def _execute_report_period(
                 step if retrieval_mode == "series" else None
             ),
             "quality_nominal_step_seconds": step,
-            "raw_series_transferred": retrieval_mode == "series" or sources_fallback > 0,
+            "raw_series_transferred": (
+                retrieval_mode == "series"
+                or sources_fallback > 0
+                or sources_runtime_verified > 0
+            ),
             "started_at_epoch": started,
             "finished_at_epoch": finished,
             "duration_seconds": finished - started,
@@ -987,6 +993,7 @@ def _execute_report_period(
             "sources_error": sources_error,
             "sources_invalid": sources_invalid,
             "sources_fallback": sources_fallback,
+            "sources_runtime_verified": sources_runtime_verified,
         },
         "catalogs": catalog_results,
     }

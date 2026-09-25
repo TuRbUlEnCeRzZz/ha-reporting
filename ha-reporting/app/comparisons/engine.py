@@ -263,6 +263,7 @@ class ComparisonEngine:
             if metric in {"energy_total", "runtime", "cycles"} and mode in {
                 "reconstructed",
                 "provider_reconstructed",
+                "detailed_reconstructed",
             }:
                 reconstructed = True
                 reasons.append(f"{label}: compteur reconstruit après reset.")

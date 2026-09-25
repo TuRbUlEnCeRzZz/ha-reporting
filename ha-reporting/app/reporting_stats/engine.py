@@ -83,9 +83,16 @@ class MetricStatisticsEngine:
 
         if metric == "runtime":
             period_hours = max(0.0, (end - start) / 3600.0)
+            physical_limit = statistics.get(
+                "physical_limit_hours",
+                period_hours,
+            )
             delta = statistics.get("delta")
-            if delta is not None and delta > period_hours * 1.05 + 0.02:
-                issues.append("Le temps de fonctionnement dépasse la durée physique de la période.")
+            if delta is not None and delta > physical_limit * 1.05 + 0.10:
+                issues.append(
+                    "Le temps de fonctionnement dépasse la durée physique "
+                    "de la fenêtre réellement observée."
+                )
             if statistics.get("anomalies_ignored", 0) > 0:
                 warnings.append(
                     f"{statistics.get('anomalies_ignored', 0)} anomalie(s) de compteur runtime ignorée(s)."
@@ -126,7 +133,13 @@ class MetricStatisticsEngine:
         unit=None,
     ):
         values = dict((rollup or {}).get("values") or {})
-        quality = self._quality_from_rollup(values, start, end, step)
+        quality = self._quality_from_rollup(
+            metric,
+            values,
+            start,
+            end,
+            step,
+        )
 
         result = {
             "metric": metric,
@@ -163,7 +176,7 @@ class MetricStatisticsEngine:
         return result
 
     @staticmethod
-    def _quality_from_rollup(values, start, end, step):
+    def _quality_from_rollup(metric, values, start, end, step):
         duration = max(0.0, float(end) - float(start))
         expected = (
             int(math.ceil(duration / step))
@@ -178,6 +191,8 @@ class MetricStatisticsEngine:
         coverage = 0.0 if duration > 0 else None
         density = None
         observed_expected = 0
+
+        density_applicable = metric == "power"
 
         if (
             first_ts is not None
@@ -195,8 +210,14 @@ class MetricStatisticsEngine:
                 else 0
             )
 
+            # Only the high-rate power stream uses fixed-step presence density.
+            # Event-driven HA sensors legitimately publish only on state change.
             present_duration = values.get("present_duration")
-            if present_duration is not None and observed_span > 0:
+            if (
+                density_applicable
+                and present_duration is not None
+                and observed_span > 0
+            ):
                 density = min(
                     100.0,
                     max(0.0, float(present_duration)) / observed_span * 100.0,
@@ -208,11 +229,16 @@ class MetricStatisticsEngine:
             "received_points": received,
             "period_coverage_percent": coverage,
             "sample_density_percent": density,
+            "density_applicable": density_applicable,
             "first_timestamp": first_ts,
             "last_timestamp": last_ts,
             "gap_count": None,
             "largest_gap_seconds": None,
-            "quality_method": "provider_rollup_presence",
+            "quality_method": (
+                "provider_rollup_presence"
+                if density_applicable
+                else "provider_rollup_coverage"
+            ),
         }
 
     @staticmethod
@@ -287,12 +313,24 @@ class MetricStatisticsEngine:
         }
 
         if metric == "runtime":
-            physical_limit = max(0.0, (float(end) - float(start)) / 3600.0)
+            report_limit = max(
+                0.0,
+                (float(end) - float(start)) / 3600.0,
+            )
+            if first_ts is not None and last_ts is not None:
+                observed_limit = max(
+                    0.0,
+                    (float(last_ts) - float(first_ts)) / 3600.0,
+                )
+            else:
+                observed_limit = report_limit
+
             plausible = (
                 delta is not None
-                and delta <= physical_limit * 1.05 + 0.02
+                and delta <= observed_limit * 1.05 + 0.10
             )
-            statistics["physical_limit_hours"] = physical_limit
+            statistics["physical_limit_hours"] = observed_limit
+            statistics["report_period_limit_hours"] = report_limit
             statistics["plausible"] = plausible
 
         return statistics

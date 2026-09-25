@@ -95,6 +95,30 @@ class DeviceAnalysisEngine:
                         ) or 0
                     )
                     source_retrieval_mode = "provider_rollup"
+
+                    if (
+                        metric == "runtime"
+                        and self._runtime_rollup_needs_fallback(analysis)
+                    ):
+                        fallback = self._runtime_detailed_fallback(
+                            provider=provider,
+                            source=source,
+                            rollup_analysis=analysis,
+                            start=start,
+                            end=end,
+                            step=step,
+                        )
+                        if fallback is not None:
+                            analysis = fallback["analysis"]
+                            points = fallback["points"]
+                            points_count = len(points)
+                            source_retrieval_mode = "series_fallback"
+                            item["fallback"] = {
+                                "reason": "runtime_rollup_reconstruction",
+                                "start": fallback["start"],
+                                "end": fallback["end"],
+                                "points": points_count,
+                            }
                 elif retrieval_mode == "provider_rollup":
                     raise RuntimeError(
                         f"Le provider '{provider_id}' ne supporte pas "
@@ -172,6 +196,104 @@ class DeviceAnalysisEngine:
         }
 
     @staticmethod
+    def _runtime_rollup_needs_fallback(analysis: dict[str, Any]) -> bool:
+        if not analysis or analysis.get("status") == "no_numeric_data":
+            return False
+        statistics = analysis.get("statistics") or {}
+        return (
+            statistics.get("mode") == "provider_reconstructed"
+            or statistics.get("plausible") is False
+        )
+
+    def _runtime_detailed_fallback(
+        self,
+        provider,
+        source,
+        rollup_analysis,
+        start,
+        end,
+        step,
+    ):
+        quality = dict(rollup_analysis.get("quality") or {})
+        first_ts = quality.get("first_timestamp")
+        last_ts = quality.get("last_timestamp")
+
+        if first_ts is None or last_ts is None:
+            return None
+
+        fallback_start = max(float(start), float(first_ts) - step)
+        fallback_end = min(float(end), float(last_ts) + step)
+
+        if fallback_end <= fallback_start:
+            return None
+
+        points = provider.get_series(
+            source,
+            fallback_start,
+            fallback_end,
+            step,
+        )
+        detailed = self.statistics.analyze(
+            metric="runtime",
+            points=points,
+            start=fallback_start,
+            end=fallback_end,
+            step=step,
+            unit=source.get("unit"),
+        )
+
+        if detailed.get("status") == "no_numeric_data":
+            return None
+
+        detailed_quality = dict(detailed.get("quality") or {})
+        merged_quality = dict(quality)
+        merged_quality["received_points"] = detailed_quality.get(
+            "received_points", len(points)
+        )
+        merged_quality["observed_expected_points"] = detailed_quality.get(
+            "expected_points",
+            merged_quality.get("observed_expected_points", 0),
+        )
+        merged_quality["sample_density_percent"] = None
+        merged_quality["density_applicable"] = False
+        merged_quality["gap_count"] = detailed_quality.get("gap_count")
+        merged_quality["largest_gap_seconds"] = detailed_quality.get(
+            "largest_gap_seconds"
+        )
+        merged_quality["quality_method"] = (
+            "provider_rollup_coverage+series_fallback"
+        )
+        detailed["quality"] = merged_quality
+        detailed["retrieval_mode"] = "series_fallback"
+
+        statistics = detailed.get("statistics") or {}
+        resets = int(statistics.get("resets_detected", 0) or 0)
+        statistics["mode"] = (
+            "detailed_reconstructed" if resets > 0 else "detailed"
+        )
+        statistics["reconstruction_required"] = resets > 0
+        statistics["fallback_window"] = {
+            "start": fallback_start,
+            "end": fallback_end,
+            "duration_seconds": fallback_end - fallback_start,
+        }
+
+        validation = detailed.setdefault(
+            "validation",
+            {"valid": True, "issues": [], "warnings": []},
+        )
+        validation.setdefault("warnings", []).append(
+            "Runtime vérifié par fallback détaillé sur la fenêtre réellement observée."
+        )
+
+        return {
+            "analysis": detailed,
+            "points": points,
+            "start": fallback_start,
+            "end": fallback_end,
+        }
+
+    @staticmethod
     def _summary(results: list[dict[str, Any]]) -> dict[str, Any]:
         statuses = {
             "ok": 0,
@@ -181,6 +303,7 @@ class DeviceAnalysisEngine:
             "error": 0,
         }
         metric_counts: dict[str, int] = {}
+        fallback_count = 0
 
         for item in results:
             status = item.get("status")
@@ -188,6 +311,8 @@ class DeviceAnalysisEngine:
                 statuses[status] += 1
             metric = item.get("metric") or "unknown"
             metric_counts[metric] = metric_counts.get(metric, 0) + 1
+            if item.get("retrieval_mode") == "series_fallback":
+                fallback_count += 1
 
         return {
             "sources_total": len(results),
@@ -196,5 +321,6 @@ class DeviceAnalysisEngine:
             "sources_invalid": statuses["invalid"],
             "sources_unsupported": statuses["unsupported"],
             "sources_error": statuses["error"],
+            "sources_fallback": fallback_count,
             "metrics": metric_counts,
         }

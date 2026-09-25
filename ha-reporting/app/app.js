@@ -675,6 +675,9 @@ function renderExecutedSource(source, period){
     ...(validation.issues || []),
     ...(validation.warnings || [])
   ];
+  if(source.retrieval_mode === "series_fallback"){
+    messages.unshift("Fallback détaillé utilisé pour fiabiliser ce runtime.");
+  }
 
   return `
     <div class="executedSource ${(status === "invalid" || card.invalid) ? "errorCard" : ""}">
@@ -825,6 +828,7 @@ function renderExecutedReport(result){
           ? `mode optimisé DataProvider · qualité nominale ${esc(exec.quality_nominal_step_seconds)} s`
           : `série détaillée · pas ${esc(exec.sampling_step_seconds)} s`} ·
         ${Number(exec.duration_seconds || 0).toFixed(2)} s
+        ${summary.sources_fallback ? ` · ${esc(summary.sources_fallback)} fallback(s) détaillé(s)` : ""}
       </div>
     </div>
 
@@ -835,6 +839,7 @@ function renderExecutedReport(result){
       <div class="seriesStat ${summary.sources_error ? "bad" : ""}"><div class="label">Erreurs</div><div class="value">${esc(summary.sources_error)}</div></div>
       <div class="seriesStat ${summary.sources_invalid ? "bad" : ""}"><div class="label">Invalides</div><div class="value">${esc(summary.sources_invalid)}</div></div>
       <div class="seriesStat"><div class="label">Non supportées</div><div class="value">${esc(summary.sources_unsupported)}</div></div>
+      <div class="seriesStat"><div class="label">Fallbacks</div><div class="value">${esc(summary.sources_fallback ?? 0)}</div></div>
     </div>
 
     ${catalogHtml}
@@ -1363,18 +1368,21 @@ async function showDeviceAnalysis(catalogId, deviceId, push=true){
 function qualityBadge(quality){
   const coverage = quality && quality.period_coverage_percent;
   const density = quality && quality.sample_density_percent;
+  const densityApplicable = quality && quality.density_applicable !== false;
 
   const coverageText = coverage == null
     ? "couverture —"
     : `couverture ${Number(coverage).toFixed(1)} %`;
 
-  const densityClass = density == null
+  const densityClass = (!densityApplicable || density == null)
     ? ""
     : density >= 95 ? "good" : density >= 80 ? "warn" : "bad";
 
-  const densityText = density == null
-    ? "densité —"
-    : `densité ${Number(density).toFixed(1)} %`;
+  const densityText = !densityApplicable
+    ? "densité n/a"
+    : density == null
+      ? "densité —"
+      : `densité ${Number(density).toFixed(1)} %`;
 
   return `
     <span class="qualityPill">${coverageText}</span>

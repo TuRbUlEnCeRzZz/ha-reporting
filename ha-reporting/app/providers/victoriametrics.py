@@ -43,7 +43,7 @@ class VictoriaMetricsProvider(DataProvider):
             url,
             headers={
                 "Accept": "application/json",
-                "User-Agent": "HA-Reporting/0.1.0-alpha.20",
+                "User-Agent": "HA-Reporting/0.1.0-alpha.21",
             },
         )
 

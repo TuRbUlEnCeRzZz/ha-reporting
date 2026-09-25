@@ -1,17 +1,18 @@
 # Changelog
 
+## 0.1.0-alpha.21
+
+- Validate optimized runtime against the actually observed source window.
+- Add targeted detailed fallback for suspicious provider-rollup runtime.
+- Limit fallback queries to affected runtime history windows.
+- Add transparent `series_fallback` metadata and fallback counts.
+- Fix elapsed period duration across DST.
+- Preserve custom comparison elapsed duration across DST.
+- Make optimized data density metric-aware.
+- Display event-driven optimized sources as `density n/a`.
+- Retain provider-side density for power.
+
 ## 0.1.0-alpha.20
 
-- Add DataProvider `report_rollup` capability.
-- Add VictoriaMetrics server-side long-period report statistics.
-- Automatically use optimized provider rollups for periods longer than 45 days.
-- Keep detailed 300-second series mode for short periods.
-- Preserve min/max timestamps, mean, P95, counter deltas and quality metadata in optimized reports.
-- Add provider-side presence-based density for long periods.
-- Mark provider counter reconstruction explicitly.
-- Show execution strategy and estimated detailed points avoided in report preview.
-- Remove physically meaningless relative-percent temperature comparisons.
-
-## 0.1.0-alpha.19
-
-- Add quality-aware N / N-1 / N-x comparisons.
+- Scalable long-period provider rollups.
+- Long-period quality-aware comparisons.

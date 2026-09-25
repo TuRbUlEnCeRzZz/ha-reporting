@@ -29,7 +29,10 @@ class ResolvedPeriod:
             "end": self.end.isoformat(),
             "start_epoch": self.start.timestamp(),
             "end_epoch": self.end.timestamp(),
-            "duration_seconds": max(0.0, (self.end - self.start).total_seconds()),
+            "duration_seconds": max(
+                0.0,
+                self.end.timestamp() - self.start.timestamp(),
+            ),
             "label": self.label,
             "semantics": "[start, end)",
         }
@@ -205,9 +208,18 @@ class PeriodEngine:
     ) -> dict[str, Any]:
         if kind == "previous_period":
             if base.period_type == "custom":
-                duration = base.end - base.start
-                start = base.start - duration * offset
-                end = base.end - duration * offset
+                duration_seconds = max(
+                    0.0,
+                    base.end.timestamp() - base.start.timestamp(),
+                )
+                start = datetime.fromtimestamp(
+                    base.start.timestamp() - duration_seconds * offset,
+                    self.tz,
+                )
+                end = datetime.fromtimestamp(
+                    base.end.timestamp() - duration_seconds * offset,
+                    self.tz,
+                )
             else:
                 start = self._shift_preserving_position(
                     base.start, base.period_type, -offset

@@ -1,79 +1,44 @@
-# HA Reporting — 0.1.0-alpha.20
+# HA Reporting — 0.1.0-alpha.21
 
-Long-period scalability + comparison semantics.
+Optimized-report reliability hardening.
 
-## Automatic execution strategy
+## Targeted runtime fallback
 
-HA Reporting now chooses between two retrieval modes:
+Long reports still use fast provider-side rollups by default.
 
-### Detailed series
-Used for periods up to 45 days.
+If a runtime rollup is reconstructed after resets, or exceeds the physical
+duration of the source's actually observed first/last window, HA Reporting now
+re-runs only that runtime source through the detailed series engine.
 
-The existing 300-second series workflow remains unchanged and is still used for
-interactive/device analysis and short reports.
+The fallback:
+- is limited to the observed history window;
+- preserves report-level coverage;
+- reuses the already validated runtime reconstruction logic;
+- is exposed as `series_fallback` in JSON;
+- is counted in the report execution summary.
 
-### Provider rollup
-Used automatically for periods longer than 45 days.
+This keeps annual reports fast without trusting implausible rollup runtime
+reconstruction.
 
-Instead of transferring every 5-minute result to the add-on, HA Reporting asks
-the DataProvider to calculate report primitives on the provider side.
+## DST-safe elapsed durations
 
-VictoriaMetrics alpha.20 rollups use server-side MetricsQL functions for:
-- first / last + timestamps;
-- minimum / maximum + timestamps;
-- mean;
-- P95 for power;
-- sample count;
-- presence duration for data-quality estimation;
-- resets / decreases / increase for cumulative counters.
+`ResolvedPeriod.duration_seconds` now uses epoch timestamps, so elapsed duration
+is correct across CET/CEST changes.
 
-The normalized report/statistics/comparison layers do not depend on MetricsQL.
+Custom N-x periods also preserve exact elapsed seconds across DST boundaries.
 
-## Why this matters
+## Metric-aware optimized quality
 
-A 365-day period at 300 seconds represents 105,120 detailed positions per
-source. Long reports no longer need to transfer all of these points just to
-calculate a handful of report statistics.
+Provider-rollup sample density is retained for high-rate power sources.
 
-The report preview shows:
-- planned mode (`Détaillé` or `Optimisé`);
-- estimated detailed points avoided when optimized.
+For event-driven Home Assistant sources such as temperature, cumulative energy,
+runtime and cycles, fixed 5-minute density is not meaningful and now displays:
 
-## Quality on optimized reports
+`densité n/a`
 
-Long-period rollups retain:
-- first/last timestamps;
-- period coverage;
-- provider-side presence-based sample density;
-- raw sample count.
+Period coverage and raw sample count remain available.
 
-Exact gap count/largest gap are intentionally unavailable in rollup mode and are
-displayed as unknown rather than fabricated.
+## Beta-candidate direction
 
-## Counters
-
-When no reset is detected, direct first-to-last delta remains preferred.
-
-When VictoriaMetrics detects resets on a long period, alpha.20 can use a
-provider-side reconstructed increase. The result is explicitly marked
-`provider_reconstructed` and carries a warning so it is not confused with a
-direct counter delta.
-
-## Comparison semantics
-
-Relative percentages are no longer calculated for temperature.
-
-For Celsius/Fahrenheit-style temperature comparisons HA Reporting now reports:
-- N;
-- reference;
-- absolute delta in °C/°F.
-
-A relative percentage is intentionally omitted because the zero point of these
-scales is arbitrary.
-
-## Architecture
-
-The DataProvider interface now advertises `report_rollup`.
-
-This keeps the optimization modular: future providers can implement their own
-server-side report statistics without changing the report/comparison engines.
+If annual N and N-1 values validate with alpha.21, the core data/statistics/
+report/comparison engine is ready for beta-candidate consolidation.

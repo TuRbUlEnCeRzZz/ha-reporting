@@ -919,6 +919,7 @@ def _execute_report_period(
     sources_unsupported = 0
     sources_error = 0
     sources_invalid = 0
+    sources_fallback = 0
 
     for catalog_id in report.get("catalogs") or []:
         catalog = load_catalog(catalog_id)
@@ -950,6 +951,7 @@ def _execute_report_period(
             sources_invalid += result["summary"].get("sources_invalid", 0)
             sources_unsupported += result["summary"]["sources_unsupported"]
             sources_error += result["summary"]["sources_error"]
+            sources_fallback += result["summary"].get("sources_fallback", 0)
             devices_out.append(result)
 
         catalog_results.append(
@@ -986,6 +988,7 @@ def _execute_report_period(
             "sources_unsupported": sources_unsupported,
             "sources_error": sources_error,
             "sources_invalid": sources_invalid,
+            "sources_fallback": sources_fallback,
         },
         "catalogs": catalog_results,
     }

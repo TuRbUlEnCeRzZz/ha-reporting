@@ -666,3 +666,20 @@ th{font-size:12px;color:var(--hr-secondary)}
 .comparisonQuality{margin-top:8px;color:var(--hr-secondary);font-size:10px}
 @media(max-width:1050px){.comparisonSourceGrid{grid-template-columns:1fr}.comparisonSummary{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:650px){.comparisonSummary{grid-template-columns:1fr}.comparisonValueRow{grid-template-columns:1fr 1fr}.comparisonMetricName{grid-column:1/-1}.comparisonPlanRow{flex-direction:column}}
+
+.optimizationNote{
+  margin:10px 0 16px;
+  padding:10px 12px;
+  border-left:3px solid var(--hr-primary);
+  border-radius:0 8px 8px 0;
+  background:color-mix(in srgb,var(--hr-primary) 6%,transparent);
+  color:var(--hr-secondary);
+  font-size:12px;
+}
+.comparisonValueRow.noRelative{
+  grid-template-columns:1.2fr repeat(3,1fr);
+}
+@media(max-width:650px){
+  .comparisonValueRow.noRelative{grid-template-columns:1fr 1fr}
+  .comparisonValueRow.noRelative .comparisonMetricName{grid-column:1/-1}
+}

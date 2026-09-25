@@ -90,6 +90,10 @@ class MetricStatisticsEngine:
                 warnings.append(
                     f"{statistics.get('anomalies_ignored', 0)} anomalie(s) de compteur runtime ignorée(s)."
                 )
+            if statistics.get("mode") == "provider_reconstructed":
+                warnings.append(
+                    "Runtime reconstruit côté provider après détection de reset."
+                )
 
         if metric in {"energy_total", "cycles"}:
             if statistics.get("reconstruction_required"):
@@ -111,6 +115,187 @@ class MetricStatisticsEngine:
             "issues": issues,
             "warnings": warnings,
         }
+
+    def analyze_rollup(
+        self,
+        metric,
+        rollup,
+        start,
+        end,
+        step,
+        unit=None,
+    ):
+        values = dict((rollup or {}).get("values") or {})
+        quality = self._quality_from_rollup(values, start, end, step)
+
+        result = {
+            "metric": metric,
+            "unit": unit,
+            "quality": quality,
+            "statistics": {},
+            "status": "no_numeric_data",
+            "retrieval_mode": "provider_rollup",
+        }
+
+        if not values or values.get("count", 0) <= 0:
+            return result
+
+        if metric in {"energy_total", "runtime", "cycles"}:
+            statistics = self._counter_stats_from_rollup(
+                metric,
+                values,
+                start,
+                end,
+            )
+        else:
+            statistics = self._gauge_stats_from_rollup(metric, values)
+
+        result["statistics"] = statistics
+        result["validation"] = self._validate(
+            metric=metric,
+            statistics=statistics,
+            start=start,
+            end=end,
+        )
+        result["status"] = (
+            "ok" if result["validation"].get("valid", True) else "invalid"
+        )
+        return result
+
+    @staticmethod
+    def _quality_from_rollup(values, start, end, step):
+        duration = max(0.0, float(end) - float(start))
+        expected = (
+            int(math.ceil(duration / step))
+            if step > 0 and duration > 0
+            else 0
+        )
+
+        received = max(0, int(round(values.get("count", 0) or 0)))
+        first_ts = values.get("first_ts")
+        last_ts = values.get("last_ts")
+
+        coverage = 0.0 if duration > 0 else None
+        density = None
+        observed_expected = 0
+
+        if (
+            first_ts is not None
+            and last_ts is not None
+            and duration > 0
+            and step > 0
+        ):
+            observed_start = max(float(start), float(first_ts))
+            observed_end = min(float(end), float(last_ts) + step)
+            observed_span = max(0.0, observed_end - observed_start)
+            coverage = min(100.0, observed_span / duration * 100.0)
+            observed_expected = (
+                int(math.ceil(observed_span / step))
+                if observed_span > 0
+                else 0
+            )
+
+            present_duration = values.get("present_duration")
+            if present_duration is not None and observed_span > 0:
+                density = min(
+                    100.0,
+                    max(0.0, float(present_duration)) / observed_span * 100.0,
+                )
+
+        return {
+            "expected_points": expected,
+            "observed_expected_points": observed_expected,
+            "received_points": received,
+            "period_coverage_percent": coverage,
+            "sample_density_percent": density,
+            "first_timestamp": first_ts,
+            "last_timestamp": last_ts,
+            "gap_count": None,
+            "largest_gap_seconds": None,
+            "quality_method": "provider_rollup_presence",
+        }
+
+    @staticmethod
+    def _gauge_stats_from_rollup(metric, values):
+        statistics = {
+            "first": {
+                "timestamp": values.get("first_ts"),
+                "value": values.get("first"),
+            },
+            "last": {
+                "timestamp": values.get("last_ts"),
+                "value": values.get("last"),
+            },
+            "min": {
+                "timestamp": values.get("min_ts"),
+                "value": values.get("min"),
+            },
+            "max": {
+                "timestamp": values.get("max_ts"),
+                "value": values.get("max"),
+            },
+            "mean": values.get("mean"),
+        }
+        if metric == "power":
+            statistics["p95"] = values.get("p95")
+        return statistics
+
+    @staticmethod
+    def _counter_stats_from_rollup(metric, values, start, end):
+        first = values.get("first")
+        last = values.get("last")
+        first_ts = values.get("first_ts")
+        last_ts = values.get("last_ts")
+        resets = max(0, int(round(values.get("resets", 0) or 0)))
+        decreases = max(0, int(round(values.get("decreases", 0) or 0)))
+        provider_increase = values.get("increase")
+
+        direct_delta = None
+        if first is not None and last is not None:
+            direct_delta = float(last) - float(first)
+
+        if resets > 0 or (direct_delta is not None and direct_delta < 0):
+            delta = (
+                float(provider_increase)
+                if provider_increase is not None
+                else None
+            )
+            mode = "provider_reconstructed"
+        elif direct_delta is not None:
+            delta = direct_delta
+            mode = "direct"
+        else:
+            delta = None
+            mode = "undetermined"
+
+        statistics = {
+            "first": {"timestamp": first_ts, "value": first},
+            "last": {"timestamp": last_ts, "value": last},
+            "delta": delta,
+            "direct_delta": direct_delta,
+            "reconstructed_delta": (
+                float(provider_increase)
+                if provider_increase is not None
+                else None
+            ),
+            "mode": mode,
+            "reconstruction_required": mode == "provider_reconstructed",
+            "resets_detected": resets,
+            "negative_transitions": decreases,
+            "anomalies_ignored": max(0, decreases - resets),
+            "aggregation_source": "provider_rollup",
+        }
+
+        if metric == "runtime":
+            physical_limit = max(0.0, (float(end) - float(start)) / 3600.0)
+            plausible = (
+                delta is not None
+                and delta <= physical_limit * 1.05 + 0.02
+            )
+            statistics["physical_limit_hours"] = physical_limit
+            statistics["plausible"] = plausible
+
+        return statistics
 
     @staticmethod
     def _numeric_points(points, start, end):

@@ -22,6 +22,7 @@ class VictoriaMetricsProvider(DataProvider):
         max_timestamp=True,
         state_duration=False,
         state_changes=False,
+        report_rollup=True,
     )
 
     def __init__(self, base_url: str, timeout: int = 10):
@@ -42,7 +43,7 @@ class VictoriaMetricsProvider(DataProvider):
             url,
             headers={
                 "Accept": "application/json",
-                "User-Agent": "HA-Reporting/0.1.0-alpha.19",
+                "User-Agent": "HA-Reporting/0.1.0-alpha.20",
             },
         )
 
@@ -66,8 +67,15 @@ class VictoriaMetricsProvider(DataProvider):
 
         return payload
 
-    def instant_query(self, expression: str) -> dict[str, Any]:
-        return self._request_json("/api/v1/query", {"query": expression})
+    def instant_query(
+        self,
+        expression: str,
+        evaluation_time: float | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"query": expression}
+        if evaluation_time is not None:
+            params["time"] = evaluation_time
+        return self._request_json("/api/v1/query", params)
 
     def range_query(
         self,
@@ -230,6 +238,150 @@ class VictoriaMetricsProvider(DataProvider):
             "Plusieurs séries numériques VictoriaMetrics correspondent à "
             f"{source.get('entity_id')}: {', '.join(names)}"
         )
+
+    @staticmethod
+    def _escape_label_value(value: Any) -> str:
+        return str(value).replace("\\", "\\\\").replace('"', '\\"')
+
+    @classmethod
+    def numeric_selector_for_source(cls, source: dict[str, Any]) -> str:
+        """Return a selector that resolves to the numeric value series only."""
+        entity_id = cls._escaped_entity_label(source)
+        metric_name = cls._metric_name_for_source(source)
+
+        if metric_name:
+            return (
+                f'{metric_name}{{db="homeassistant",domain="sensor",'
+                f'entity_id="{entity_id}"}}'
+            )
+
+        unit = str(source.get("unit") or "").strip()
+        if unit:
+            numeric_name = cls._escape_label_value(f"{unit}_value")
+            return (
+                f'{{__name__="{numeric_name}",db="homeassistant",domain="sensor",'
+                f'entity_id="{entity_id}"}}'
+            )
+
+        raise ProviderError(
+            "Statistiques optimisées impossibles: unité absente et nom de métrique "
+            f"VictoriaMetrics inconnu pour {source.get('entity_id')}"
+        )
+
+    @staticmethod
+    def _rollup_union(parts: list[tuple[str, str]]) -> str:
+        return " or ".join(
+            f'label_set({expression},"hr_stat","{name}")'
+            for name, expression in parts
+        )
+
+    @classmethod
+    def report_rollup_expression(
+        cls,
+        source: dict[str, Any],
+        start: float,
+        end: float,
+        quality_step: int = 300,
+    ) -> str:
+        selector = cls.numeric_selector_for_source(source)
+        duration = max(1, int(math.ceil(float(end) - float(start))))
+        window = f"{duration}s"
+        metric = str(source.get("metric") or "")
+        max_interval = max(1, int(round(quality_step * 1.5)))
+
+        common = [
+            ("first", f"first_over_time({selector}[{window}])"),
+            ("first_ts", f"tfirst_over_time({selector}[{window}])"),
+            ("last", f"last_over_time({selector}[{window}])"),
+            ("last_ts", f"tlast_over_time({selector}[{window}])"),
+            ("count", f"count_over_time({selector}[{window}])"),
+            (
+                "present_duration",
+                f"duration_over_time({selector}[{window}],{max_interval})",
+            ),
+        ]
+
+        if metric in {"energy_total", "runtime", "cycles"}:
+            common.extend(
+                [
+                    ("resets", f"resets({selector}[{window}])"),
+                    ("decreases", f"decreases_over_time({selector}[{window}])"),
+                    ("increase", f"increase_prometheus({selector}[{window}])"),
+                ]
+            )
+        else:
+            common.extend(
+                [
+                    ("min", f"min_over_time({selector}[{window}])"),
+                    ("min_ts", f"tmin_over_time({selector}[{window}])"),
+                    ("max", f"max_over_time({selector}[{window}])"),
+                    ("max_ts", f"tmax_over_time({selector}[{window}])"),
+                    ("mean", f"avg_over_time({selector}[{window}])"),
+                ]
+            )
+            if metric == "power":
+                common.append(
+                    ("p95", f"quantile_over_time(0.95,{selector}[{window}])")
+                )
+
+        return cls._rollup_union(common)
+
+    @staticmethod
+    def _parse_rollup_result(payload: dict[str, Any]) -> dict[str, float]:
+        result = ((payload.get("data") or {}).get("result") or [])
+        output: dict[str, float] = {}
+
+        for series in result:
+            labels = series.get("metric") or {}
+            stat = labels.get("hr_stat")
+            raw_value = (series.get("value") or [None, None])[1]
+            if not stat or raw_value is None:
+                continue
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                continue
+
+            if stat in output:
+                raise ProviderError(
+                    f"Plusieurs séries numériques correspondent au rollup '{stat}'"
+                )
+            output[str(stat)] = value
+
+        return output
+
+    def get_report_statistics(
+        self,
+        source: dict[str, Any],
+        start: float,
+        end: float,
+        quality_step: int = 300,
+    ) -> dict[str, Any]:
+        expression = self.report_rollup_expression(
+            source,
+            start,
+            end,
+            quality_step,
+        )
+
+        # Evaluate just before the exclusive period end. MetricsQL's lookbehind
+        # window then covers the report interval without intentionally sampling
+        # the first point of the following period.
+        evaluation_time = math.nextafter(float(end), -math.inf)
+        payload = self.instant_query(expression, evaluation_time=evaluation_time)
+        statistics = self._parse_rollup_result(payload)
+
+        return {
+            "provider": self.provider_id,
+            "retrieval_mode": "provider_rollup",
+            "query_time": evaluation_time,
+            "period": {
+                "start": float(start),
+                "end": float(end),
+                "quality_step": int(quality_step),
+            },
+            "values": statistics,
+        }
 
     def get_series(
         self,

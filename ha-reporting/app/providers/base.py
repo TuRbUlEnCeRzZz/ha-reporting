@@ -19,6 +19,7 @@ class ProviderCapabilities:
     max_timestamp: bool = False
     state_duration: bool = False
     state_changes: bool = False
+    report_rollup: bool = False
 
     def as_dict(self) -> dict[str, bool]:
         return {
@@ -32,6 +33,7 @@ class ProviderCapabilities:
             "max_timestamp": self.max_timestamp,
             "state_duration": self.state_duration,
             "state_changes": self.state_changes,
+            "report_rollup": self.report_rollup,
         }
 
 
@@ -77,6 +79,24 @@ class DataProvider(ABC):
         step: int | None = None,
     ) -> list[tuple[float, Any]]:
         raise NotImplementedError
+
+    def get_report_statistics(
+        self,
+        source: dict[str, Any],
+        start: float,
+        end: float,
+        quality_step: int = 300,
+    ) -> dict[str, Any]:
+        """Return provider-side rollups for long report periods.
+
+        Providers which advertise `report_rollup=True` should override this.
+        The returned primitive statistics are normalized by the reporting
+        statistics engine, so provider-specific query syntax never leaks into
+        report/comparison code.
+        """
+        raise ProviderError(
+            f"Le provider '{self.provider_id}' ne supporte pas les statistiques de rapport optimisées"
+        )
 
     def get_first(self, source: dict[str, Any], start: float, end: float) -> Any:
         series = self.get_series(source, start, end)

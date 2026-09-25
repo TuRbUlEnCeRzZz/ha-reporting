@@ -1,74 +1,79 @@
-# HA Reporting — 0.1.0-alpha.19
+# HA Reporting — 0.1.0-alpha.20
 
-Quality-aware N / N-x comparison engine.
+Long-period scalability + comparison semantics.
 
-## Report comparison configuration
+## Automatic execution strategy
 
-Reports can now request two explicit comparison families:
+HA Reporting now chooses between two retrieval modes:
 
-- **Previous periods**: N-1, N-2, N-3… periods of the report type.
-- **Previous years**: the same date window one, two, three… years earlier.
+### Detailed series
+Used for periods up to 45 days.
 
-The units are intentionally explicit. `N-1 period` is never silently treated as
-`N-1 year`.
+The existing 300-second series workflow remains unchanged and is still used for
+interactive/device analysis and short reports.
 
-For a complete August 2026 monthly report:
+### Provider rollup
+Used automatically for periods longer than 45 days.
 
-- N-1 period = July 2026
-- N-2 periods = June 2026
-- N-1 year = August 2025
+Instead of transferring every 5-minute result to the add-on, HA Reporting asks
+the DataProvider to calculate report primitives on the provider side.
 
-For a partial current period, both start and end are shifted so that elapsed
-positions remain comparable (e.g. 1–25 September -> 1–25 August).
+VictoriaMetrics alpha.20 rollups use server-side MetricsQL functions for:
+- first / last + timestamps;
+- minimum / maximum + timestamps;
+- mean;
+- P95 for power;
+- sample count;
+- presence duration for data-quality estimation;
+- resets / decreases / increase for cumulative counters.
 
-Custom periods use their exact duration for previous-period comparisons.
+The normalized report/statistics/comparison layers do not depend on MetricsQL.
 
-## Comparison statistics
+## Why this matters
 
-Metric-aware comparison fields:
+A 365-day period at 300 seconds represents 105,120 detailed positions per
+source. Long reports no longer need to transfer all of these points just to
+calculate a handful of report statistics.
 
-- power: peak, P95, mean
-- temperature/humidity/voltage/current: min, mean, max
-- energy: period delta
-- runtime: period runtime
-- cycles: period cycles
+The report preview shows:
+- planned mode (`Détaillé` or `Optimisé`);
+- estimated detailed points avoided when optimized.
 
-Each comparable field contains:
+## Quality on optimized reports
 
-- N value
-- reference value
-- absolute difference
-- relative difference (%) when reference != 0
+Long-period rollups retain:
+- first/last timestamps;
+- period coverage;
+- provider-side presence-based sample density;
+- raw sample count.
 
-## Quality-aware comparison status
+Exact gap count/largest gap are intentionally unavailable in rollup mode and are
+displayed as unknown rather than fabricated.
 
-Every source comparison is classified descriptively as:
+## Counters
 
-- `comparable`
-- `partial`
-- `reconstructed`
-- `unavailable`
+When no reset is detected, direct first-to-last delta remains preferred.
 
-Rules currently used:
+When VictoriaMetrics detects resets on a long period, alpha.20 can use a
+provider-side reconstructed increase. The result is explicitly marked
+`provider_reconstructed` and carries a warning so it is not confused with a
+direct counter delta.
 
-- missing/no-data/invalid source -> unavailable
-- reconstructed cumulative counter -> reconstructed
-- period coverage below 95% -> partial
-- for gauge metrics, sample density below 80% -> partial
+## Comparison semantics
 
-Counter density is not used as an automatic partial criterion when direct
-first-to-last delta is available; period coverage remains relevant.
+Relative percentages are no longer calculated for temperature.
 
-The reasons and the N/reference quality metadata stay in normalized JSON.
+For Celsius/Fahrenheit-style temperature comparisons HA Reporting now reports:
+- N;
+- reference;
+- absolute delta in °C/°F.
 
-## Execution
+A relative percentage is intentionally omitted because the zero point of these
+scales is arbitrary.
 
-One report execution now runs N plus every configured comparison period and then
-passes normalized results to the provider-independent ComparisonEngine.
+## Architecture
 
-The preview estimates the number of source queries before execution.
+The DataProvider interface now advertises `report_rollup`.
 
-## Next milestone
-
-Alpha.20 can consolidate the comparison UX/semantics and begin the reusable HTML
-report-rendering layer once real N/N-x data has been validated.
+This keeps the optimization modular: future providers can implement their own
+server-side report statistics without changing the report/comparison engines.

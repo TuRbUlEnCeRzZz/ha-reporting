@@ -115,7 +115,8 @@ function renderCapabilities(capabilities){
     sum:"sum",
     max_timestamp:"max + timestamp",
     state_duration:"state duration",
-    state_changes:"state changes"
+    state_changes:"state changes",
+    report_rollup:"report stats"
   };
   $("vmCapabilities").innerHTML = Object.entries(names).map(([key,label]) =>
     `<span class="capability ${capabilities && capabilities[key] ? "" : "off"}">${esc(label)}</span>`
@@ -565,6 +566,7 @@ async function previewReport(reportId, push=true){
 function renderReportPlan(plan){
   const period = plan.resolved_period || {};
   const scope = plan.scope || {};
+  const strategy = (plan.execution || {}).strategy || {};
   const catalogsHtml = (plan.catalogs || []).map(c => `
     <div class="planCatalog">
       <div class="planCatalogHeader">
@@ -595,7 +597,14 @@ function renderReportPlan(plan){
       <div class="seriesStat"><div class="label">Sources</div><div class="value">${esc(scope.source_count)}</div></div>
       <div class="seriesStat"><div class="label">Comparaisons</div><div class="value">${esc(scope.comparison_period_count || 0)}</div></div>
       <div class="seriesStat"><div class="label">Requêtes estimées</div><div class="value">${esc(scope.estimated_source_queries || scope.source_count)}</div></div>
+      <div class="seriesStat"><div class="label">Mode prévu</div><div class="value">${strategy.base_mode === "provider_rollup" ? "Optimisé" : "Détaillé"}</div></div>
     </div>
+
+    ${strategy.base_mode === "provider_rollup" ? `
+      <div class="optimizationNote">
+        Longue période : statistiques calculées côté DataProvider/VictoriaMetrics.
+        Environ ${Number(strategy.estimated_detailed_points || 0).toLocaleString()} points détaillés n'ont pas besoin d'être transférés au moteur de rapport.
+      </div>` : ""}
 
     ${(plan.comparison_targets || []).length ? `
       <div class="comparisonPlanBox">
@@ -685,7 +694,7 @@ function renderExecutedSource(source, period){
       <div class="sourceFooter">
         ${qualityBadge(quality)}
         <span>${esc(source.points ?? 0)} point(s)</span>
-        <span>${esc(quality.gap_count ?? 0)} trou(s)</span>
+        <span>${quality.gap_count == null ? "trous —" : `${esc(quality.gap_count)} trou(s)`}</span>
       </div>
     </div>`;
 }
@@ -709,13 +718,18 @@ function comparisonStatusLabel(status){
 function comparisonSourceCard(source){
   const status = source.comparison_status || "unavailable";
   const unit = source.unit || "";
-  const rows = (source.values || []).map(value => `
-    <div class="comparisonValueRow">
+  const values = source.values || [];
+  const showRelative = values.some(
+    value => value.relative_change_applicable !== false
+  );
+
+  const rows = values.map(value => `
+    <div class="comparisonValueRow ${showRelative ? "" : "noRelative"}">
       <div class="comparisonMetricName">${esc(value.label)}</div>
       <div><span class="comparisonMiniLabel">N</span>${formatSeriesNumber(value.base,unit)}</div>
       <div><span class="comparisonMiniLabel">Réf.</span>${formatSeriesNumber(value.reference,unit)}</div>
       <div><span class="comparisonMiniLabel">Écart</span>${signedValue(value.absolute_change,unit)}</div>
-      <div><span class="comparisonMiniLabel">%</span>${value.relative_change_percent == null ? "—" : signedValue(value.relative_change_percent,"%")}</div>
+      ${showRelative ? `<div><span class="comparisonMiniLabel">%</span>${value.relative_change_percent == null ? "—" : signedValue(value.relative_change_percent,"%")}</div>` : ""}
     </div>`).join("");
 
   const bq = source.base_quality || {};
@@ -806,7 +820,10 @@ function renderExecutedReport(result){
         Fuseau ${esc(period.timezone)} · ${esc(period.start)} → ${esc(period.end)}
       </div>
       <div class="executionMeta">
-        Exécution réelle · pas ${esc(exec.sampling_step_seconds)} s ·
+        Exécution réelle ·
+        ${exec.analysis_mode === "provider_rollup"
+          ? `mode optimisé DataProvider · qualité nominale ${esc(exec.quality_nominal_step_seconds)} s`
+          : `série détaillée · pas ${esc(exec.sampling_step_seconds)} s`} ·
         ${Number(exec.duration_seconds || 0).toFixed(2)} s
       </div>
     </div>
@@ -1439,7 +1456,7 @@ function metricCardData(source, period){
         value:formatSeriesNumber((stats.last||{}).value,unit)
       }
     ];
-    const mode = stats.mode === "reconstructed" ? "reconstruite" : "directe";
+    const mode = String(stats.mode || "").includes("reconstructed") ? "reconstruite" : "directe";
     item.note = `${mode} · ${stats.resets_detected ?? 0} reset(s) · ${stats.anomalies_ignored ?? 0} baisse(s) ignorée(s)`;
     return item;
   }
@@ -1486,7 +1503,7 @@ function metricCardData(source, period){
         value:formatSeriesNumber((stats.last||{}).value,unit)
       }
     ];
-    const mode = stats.mode === "reconstructed" ? "reconstruit" : "direct";
+    const mode = String(stats.mode || "").includes("reconstructed") ? "reconstruit" : "direct";
     item.note = `${mode} · ${stats.resets_detected ?? 0} reset(s) · ${stats.anomalies_ignored ?? 0} baisse(s) ignorée(s)`;
     return item;
   }
@@ -1588,7 +1605,7 @@ function renderDeviceAnalysis(result){
         <div class="sourceFooter">
           ${qualityBadge(quality)}
           <span>${esc(source.points ?? 0)} point(s)</span>
-          <span>${esc(quality.gap_count ?? 0)} trou(s)</span>
+          <span>${quality.gap_count == null ? "trous —" : `${esc(quality.gap_count)} trou(s)`}</span>
         </div>
       </div>`;
   }).join("");

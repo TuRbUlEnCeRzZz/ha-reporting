@@ -131,8 +131,9 @@ class ComparisonEngine:
             if base_value is None or reference_value is None:
                 continue
             absolute = base_value - reference_value
+            relative_applicable = metric != "temperature"
             relative = None
-            if reference_value != 0:
+            if relative_applicable and reference_value != 0:
                 relative = absolute / abs(reference_value) * 100.0
             values.append(
                 {
@@ -142,6 +143,7 @@ class ComparisonEngine:
                     "reference": reference_value,
                     "absolute_change": absolute,
                     "relative_change_percent": relative,
+                    "relative_change_applicable": relative_applicable,
                 }
             )
 
@@ -258,7 +260,10 @@ class ComparisonEngine:
             density = profile.get("sample_density_percent")
             mode = profile.get("counter_mode")
 
-            if metric in {"energy_total", "runtime", "cycles"} and mode == "reconstructed":
+            if metric in {"energy_total", "runtime", "cycles"} and mode in {
+                "reconstructed",
+                "provider_reconstructed",
+            }:
                 reconstructed = True
                 reasons.append(f"{label}: compteur reconstruit après reset.")
 

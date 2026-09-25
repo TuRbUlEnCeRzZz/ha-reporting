@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -25,6 +26,8 @@ CATALOG_DIR = Path("/config/catalogs")
 CATEGORY_FILE = Path("/config/categories.yaml")
 PROVIDER_FILE = Path("/config/providers.yaml")
 REPORT_DIR = Path("/config/reports")
+REPORT_ROLLUP_THRESHOLD_SECONDS = 45 * 24 * 3600
+REPORT_QUALITY_STEP_SECONDS = 300
 CATALOG_DIR.mkdir(parents=True, exist_ok=True)
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -770,6 +773,50 @@ def delete_report(report_id):
     return {"ok": True, "report_id": report_id}
 
 
+
+def report_retrieval_mode(resolved):
+    duration = max(
+        0.0,
+        resolved.end.timestamp() - resolved.start.timestamp(),
+    )
+    if duration > REPORT_ROLLUP_THRESHOLD_SECONDS:
+        return "provider_rollup"
+    return "series"
+
+
+def report_strategy_summary(resolved, source_count=0, comparison_targets=None):
+    targets = list(comparison_targets or [])
+    periods = [resolved] + [target["resolved_period"] for target in targets]
+    modes = [report_retrieval_mode(period) for period in periods]
+
+    detailed_points = 0
+    for period in periods:
+        duration = max(
+            0.0,
+            period.end.timestamp() - period.start.timestamp(),
+        )
+        detailed_points += int(
+            math.ceil(duration / REPORT_QUALITY_STEP_SECONDS)
+        ) * int(source_count or 0)
+
+    unique_modes = set(modes)
+    mode = modes[0] if len(unique_modes) == 1 else "mixed"
+
+    return {
+        "mode": mode,
+        "base_mode": modes[0],
+        "comparison_modes": modes[1:],
+        "rollup_threshold_days": (
+            REPORT_ROLLUP_THRESHOLD_SECONDS / 86400
+        ),
+        "quality_nominal_step_seconds": REPORT_QUALITY_STEP_SECONDS,
+        "estimated_detailed_points": detailed_points,
+        "raw_series_transfer_expected": all(
+            item == "series" for item in modes
+        ),
+    }
+
+
 def build_report_plan(report_id):
     report = load_report(report_id)
     timezone_name = home_assistant_timezone()
@@ -814,6 +861,12 @@ def build_report_plan(report_id):
         report.get("comparisons") or {},
     )
 
+    strategy = report_strategy_summary(
+        resolved,
+        source_count=source_count,
+        comparison_targets=comparison_targets,
+    )
+
     return {
         "report_version": 1,
         "report": report_summary(report),
@@ -839,15 +892,22 @@ def build_report_plan(report_id):
         "execution": {
             "status": "planned",
             "data_queries_executed": False,
+            "strategy": strategy,
             "next_stage": "report_execution_engine",
         },
     }
 
 
 
-def _execute_report_period(report, resolved, step=300):
+def _execute_report_period(
+    report,
+    resolved,
+    step=REPORT_QUALITY_STEP_SECONDS,
+    retrieval_mode=None,
+):
     start_epoch = resolved.start.timestamp()
     end_epoch = resolved.end.timestamp()
+    retrieval_mode = retrieval_mode or report_retrieval_mode(resolved)
     started = time.time()
     device_engine = DeviceAnalysisEngine(resolve_provider)
 
@@ -880,6 +940,7 @@ def _execute_report_period(report, resolved, step=300):
                 start=start_epoch,
                 end=end_epoch,
                 step=step,
+                retrieval_mode=retrieval_mode,
             )
 
             total_devices += 1
@@ -906,7 +967,12 @@ def _execute_report_period(report, resolved, step=300):
         "execution": {
             "status": "completed",
             "data_queries_executed": True,
-            "sampling_step_seconds": step,
+            "analysis_mode": retrieval_mode,
+            "sampling_step_seconds": (
+                step if retrieval_mode == "series" else None
+            ),
+            "quality_nominal_step_seconds": step,
+            "raw_series_transferred": retrieval_mode == "series",
             "started_at_epoch": started,
             "finished_at_epoch": finished,
             "duration_seconds": finished - started,
@@ -930,10 +996,16 @@ def execute_report(report_id):
     timezone_name = home_assistant_timezone()
     period_engine = PeriodEngine(timezone_name)
     resolved = period_engine.resolve(report.get("period") or {})
-    step = 300
+    step = REPORT_QUALITY_STEP_SECONDS
 
     full_started = time.time()
-    base = _execute_report_period(report, resolved, step=step)
+    base_mode = report_retrieval_mode(resolved)
+    base = _execute_report_period(
+        report,
+        resolved,
+        step=step,
+        retrieval_mode=base_mode,
+    )
     target_specs = period_engine.comparison_targets(
         resolved,
         report.get("comparisons") or {},
@@ -943,10 +1015,12 @@ def execute_report(report_id):
     comparison_targets = []
 
     for target in target_specs:
+        reference_period = target["resolved_period"]
         reference = _execute_report_period(
             report,
-            target["resolved_period"],
+            reference_period,
             step=step,
+            retrieval_mode=report_retrieval_mode(reference_period),
         )
         comparison_targets.append(
             comparison_engine.compare_target(base, reference, target)
@@ -960,6 +1034,11 @@ def execute_report(report_id):
         "execution": {
             **base["execution"],
             "comparison_periods_executed": len(comparison_targets),
+            "strategy": report_strategy_summary(
+                resolved,
+                source_count=base["summary"]["sources_total"],
+                comparison_targets=target_specs,
+            ),
             "total_duration_seconds": finished - full_started,
         },
         "comparisons": {

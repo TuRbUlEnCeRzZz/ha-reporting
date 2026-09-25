@@ -30,6 +30,7 @@ class DeviceAnalysisEngine:
         start: float,
         end: float,
         step: int,
+        retrieval_mode: str = "series",
     ) -> dict[str, Any]:
         sensors = device.get("sensors") or {}
         results = []
@@ -69,15 +70,48 @@ class DeviceAnalysisEngine:
                 if not status.available:
                     raise RuntimeError(status.message)
 
-                points = provider.get_series(source, start, end, step)
-                analysis = self.statistics.analyze(
-                    metric=metric,
-                    points=points,
-                    start=start,
-                    end=end,
-                    step=step,
-                    unit=source.get("unit"),
-                )
+                if (
+                    retrieval_mode == "provider_rollup"
+                    and getattr(provider.capabilities, "report_rollup", False)
+                ):
+                    rollup = provider.get_report_statistics(
+                        source,
+                        start,
+                        end,
+                        quality_step=step,
+                    )
+                    analysis = self.statistics.analyze_rollup(
+                        metric=metric,
+                        rollup=rollup,
+                        start=start,
+                        end=end,
+                        step=step,
+                        unit=source.get("unit"),
+                    )
+                    points = []
+                    points_count = int(
+                        (analysis.get("quality") or {}).get(
+                            "received_points", 0
+                        ) or 0
+                    )
+                    source_retrieval_mode = "provider_rollup"
+                elif retrieval_mode == "provider_rollup":
+                    raise RuntimeError(
+                        f"Le provider '{provider_id}' ne supporte pas "
+                        "l'analyse optimisée des longues périodes"
+                    )
+                else:
+                    points = provider.get_series(source, start, end, step)
+                    analysis = self.statistics.analyze(
+                        metric=metric,
+                        points=points,
+                        start=start,
+                        end=end,
+                        step=step,
+                        unit=source.get("unit"),
+                    )
+                    points_count = len(points)
+                    source_retrieval_mode = "series"
 
                 analysis_status = analysis.get("status")
                 if analysis_status == "ok":
@@ -93,7 +127,8 @@ class DeviceAnalysisEngine:
                 item.update(
                     {
                         "status": source_status,
-                        "points": len(points),
+                        "points": points_count,
+                        "retrieval_mode": source_retrieval_mode,
                         "analysis": analysis,
                         "preview": [
                             {"timestamp": ts, "value": value}
@@ -130,6 +165,7 @@ class DeviceAnalysisEngine:
                 "end": end,
                 "step": step,
                 "duration_seconds": max(0.0, end - start),
+                "retrieval_mode": retrieval_mode,
             },
             "summary": summary,
             "sources": results,

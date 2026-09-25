@@ -1,3 +1,3 @@
 # HA Reporting
 
-Version **0.1.0-alpha.19** — quality-aware N / N-x report comparisons.
+Version **0.1.0-alpha.20** — scalable long-period provider rollups and comparison semantics.

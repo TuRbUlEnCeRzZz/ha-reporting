@@ -954,38 +954,67 @@ function renderExecutedReport(result){
 }
 
 async function runAiAnalysis(reportId, result){
-  const controller = new AbortController();
   const configuredTimeout = Number((((result.report || {}).ai_analysis || {}).timeout_seconds) || ((result.ai_analysis || {}).timeout_seconds) || 600);
-  const clientTimeoutMs = (configuredTimeout + 15) * 1000;
-  const timer = setTimeout(() => controller.abort(), clientTimeoutMs);
+  const deadline = Date.now() + (configuredTimeout + 30) * 1000;
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
   try{
-    const response = await fetch(`api/report/${encodeURIComponent(reportId)}/ai-analysis`, {
+    const startResponse = await fetch(`api/report/${encodeURIComponent(reportId)}/ai-analysis`, {
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:"{}",
-      signal:controller.signal
+      body:"{}"
     });
-    const data = await response.json();
-    if(!response.ok) throw new Error(data.error || "AI Task indisponible");
-    result.ai_analysis = data.ai_analysis || {enabled:true,status:"error",error:"Réponse IA absente"};
+    const startData = await startResponse.json();
+    if(!startResponse.ok) throw new Error(startData.error || "Impossible de démarrer l'analyse IA");
+    result.ai_analysis = startData.ai_analysis || {enabled:true,status:"running",timeout_seconds:configuredTimeout};
     renderExecutedReport(result);
-    const ai = result.ai_analysis;
-    if(ai.status === "completed"){
+
+    let consecutiveNetworkErrors = 0;
+    while(Date.now() < deadline){
+      const ai = result.ai_analysis || {};
+      if(ai.status === "completed" || ai.status === "error" || ai.status === "disabled") break;
+
+      await sleep(2000);
+      try{
+        const statusResponse = await fetch(`api/report/${encodeURIComponent(reportId)}/ai-analysis`, {cache:"no-store"});
+        const statusData = await statusResponse.json();
+        if(!statusResponse.ok) throw new Error(statusData.error || "État AI Task indisponible");
+        consecutiveNetworkErrors = 0;
+        result.ai_analysis = statusData.ai_analysis || {enabled:true,status:"error",error:"État IA absent"};
+        renderExecutedReport(result);
+      }catch(error){
+        consecutiveNetworkErrors += 1;
+        // A transient Ingress/browser fetch failure must not fail the AI job itself.
+        if(consecutiveNetworkErrors >= 5){
+          $("reportPreviewStatus").textContent =
+            `✓ Rapport exécuté · analyse IA toujours en cours (suivi réseau temporairement indisponible)`;
+        }
+      }
+    }
+
+    const finalAi = result.ai_analysis || {};
+    if(finalAi.status === "completed"){
       $("reportPreviewStatus").textContent += " · analyse IA OK";
-    }else{
+    }else if(finalAi.status === "error"){
       $("reportPreviewStatus").textContent += " · analyse IA en erreur";
+    }else{
+      result.ai_analysis = {
+        ...finalAi,
+        enabled:true,
+        status:"error",
+        error:`Le suivi de l'analyse IA a dépassé ${configuredTimeout + 30} s. Le job serveur peut être consulté en relançant l'aperçu.`
+      };
+      renderExecutedReport(result);
+      $("reportPreviewStatus").textContent += " · suivi IA expiré";
     }
   }catch(error){
-    const message = error && error.name === "AbortError"
-      ? `Analyse IA interrompue côté interface après ${configuredTimeout} s (délai maximal configuré).`
-      : String(error && error.message ? error.message : error);
+    const message = String(error && error.message ? error.message : error);
     result.ai_analysis = {enabled:true,status:"error",error:message};
     renderExecutedReport(result);
     $("reportPreviewStatus").textContent += " · analyse IA en erreur";
-  }finally{
-    clearTimeout(timer);
   }
 }
+
 
 async function executeReport(reportId){
   $("reportPreviewStatus").textContent = "Exécution du rapport…";

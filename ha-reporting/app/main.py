@@ -7,6 +7,7 @@ import time
 import unicodedata
 import threading
 import copy
+import uuid
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -35,10 +36,12 @@ REPORT_QUALITY_STEP_SECONDS = 300
 AI_DEFAULT_TIMEOUT_SECONDS = 600
 AI_MIN_TIMEOUT_SECONDS = 60
 AI_MAX_TIMEOUT_SECONDS = 1800
-AI_HARD_TIMEOUT_GRACE_SECONDS = 5
+AI_POLL_STATUS_GRACE_SECONDS = 30
 
 LAST_REPORT_RESULTS = {}
 LAST_REPORT_RESULTS_LOCK = threading.Lock()
+AI_ANALYSIS_JOBS = {}
+AI_ANALYSIS_JOBS_LOCK = threading.Lock()
 
 DEFAULT_CATEGORIES = [
     {"id": "refrigeration", "name": "Réfrigération"},
@@ -1141,12 +1144,25 @@ def execute_report(report_id):
     return result
 
 
-def execute_ai_analysis(report_id):
-    """Run AI interpretation separately with a hard wall-clock deadline.
+def _ai_analysis_status(report_id):
+    result = _cached_report_result(report_id)
+    if result is None:
+        report = load_report(report_id)
+        ai_config = report.get("ai_analysis") or {}
+        if not bool(ai_config.get("enabled")):
+            return {"enabled": False, "status": "disabled"}
+        return {
+            "enabled": True,
+            "status": "idle",
+            "entity_id": str(ai_config.get("entity_id") or "").strip() or None,
+            "timeout_seconds": _ai_timeout_seconds(ai_config),
+            "transport": "home_assistant_websocket",
+        }
+    return copy.deepcopy(result.get("ai_analysis") or {"enabled": False, "status": "disabled"})
 
-    The underlying Home Assistant request can theoretically continue in its daemon
-    worker after the deadline, but the report server and UI are released reliably.
-    """
+
+def start_ai_analysis(report_id):
+    """Start AI interpretation in a server-side background job and return immediately."""
     report = load_report(report_id)
     ai_config = report.get("ai_analysis") or {}
     result = _cached_report_result(report_id)
@@ -1159,62 +1175,71 @@ def execute_ai_analysis(report_id):
         _cache_report_result(report_id, result)
         return analysis
 
-    timeout_seconds = _ai_timeout_seconds(ai_config)
-    running = {
-        "enabled": True,
-        "status": "running",
-        "entity_id": str(ai_config.get("entity_id") or "").strip() or None,
-        "mode": "no_thinking_expected",
-        "mode_control": "ai_task_entity_configuration",
-        "timeout_seconds": timeout_seconds,
-        "started_at_epoch": time.time(),
-    }
-    result["ai_analysis"] = running
-    _cache_report_result(report_id, result)
+    with AI_ANALYSIS_JOBS_LOCK:
+        existing = AI_ANALYSIS_JOBS.get(report_id)
+        current = result.get("ai_analysis") or {}
+        if existing and existing.get("thread") and existing["thread"].is_alive():
+            # Reuse only when the running job belongs to this exact cached report.
+            # If the user re-executed the report meanwhile, the old job is detached
+            # and must never keep the new report stuck in pending state.
+            if current.get("job_id") == existing.get("job_id"):
+                return _ai_analysis_status(report_id)
 
-    box = {}
-    done = threading.Event()
+        # If the most recent report already has a completed analysis, don't duplicate it.
+        if current.get("status") == "completed":
+            return copy.deepcopy(current)
 
-    def worker():
-        try:
-            box["analysis"] = analyze_report_with_ai(
-                result,
-                ai_config,
-                token=TOKEN,
-            )
-        except Exception as exc:
-            box["analysis"] = {
-                **running,
-                "status": "error",
-                "finished_at_epoch": time.time(),
-                "error": str(exc),
-            }
-        finally:
-            done.set()
-
-    started = time.time()
-    threading.Thread(target=worker, daemon=True, name=f"ha-report-ai-{report_id}").start()
-    if not done.wait(timeout_seconds + AI_HARD_TIMEOUT_GRACE_SECONDS):
-        analysis = {
-            **running,
-            "status": "error",
-            "finished_at_epoch": time.time(),
-            "duration_seconds": time.time() - started,
-            "error": f"Analyse IA interrompue après {timeout_seconds} s (délai maximal configuré).",
+        timeout_seconds = _ai_timeout_seconds(ai_config)
+        job_id = uuid.uuid4().hex
+        running = {
+            "enabled": True,
+            "status": "running",
+            "job_id": job_id,
+            "entity_id": str(ai_config.get("entity_id") or "").strip() or None,
+            "mode": "no_thinking_expected",
+            "mode_control": "ai_task_entity_configuration",
+            "timeout_seconds": timeout_seconds,
+            "transport": "home_assistant_websocket",
+            "started_at_epoch": time.time(),
         }
-    else:
-        analysis = box.get("analysis") or {
-            **running,
-            "status": "error",
-            "finished_at_epoch": time.time(),
-            "error": "Analyse IA terminée sans résultat.",
-        }
+        result["ai_analysis"] = running
+        _cache_report_result(report_id, result)
 
-    result["ai_analysis"] = analysis
-    result["execution"]["ai_analysis_duration_seconds"] = float(analysis.get("duration_seconds") or 0.0)
-    result["execution"]["ai_analysis_finished_at_epoch"] = time.time()
-    _cache_report_result(report_id, result)
-    return analysis
+        def worker():
+            analysis = None
+            try:
+                snapshot = _cached_report_result(report_id) or result
+                analysis = analyze_report_with_ai(snapshot, ai_config, token=TOKEN)
+            except Exception as exc:
+                analysis = {
+                    **running,
+                    "status": "error",
+                    "finished_at_epoch": time.time(),
+                    "error": str(exc),
+                }
+
+            analysis = dict(analysis or {})
+            analysis["job_id"] = job_id
+
+            with AI_ANALYSIS_JOBS_LOCK:
+                job = AI_ANALYSIS_JOBS.get(report_id)
+                if not job or job.get("job_id") != job_id:
+                    return
+
+                latest = _cached_report_result(report_id)
+                latest_ai = (latest or {}).get("ai_analysis") or {}
+                if latest is not None and latest_ai.get("job_id") == job_id:
+                    latest["ai_analysis"] = analysis
+                    latest.setdefault("execution", {})["ai_analysis_duration_seconds"] = float(analysis.get("duration_seconds") or 0.0)
+                    latest["execution"]["ai_analysis_finished_at_epoch"] = time.time()
+                    _cache_report_result(report_id, latest)
+
+                AI_ANALYSIS_JOBS.pop(report_id, None)
+
+        thread = threading.Thread(target=worker, daemon=True, name=f"ha-report-ai-{report_id}")
+        AI_ANALYSIS_JOBS[report_id] = {"job_id": job_id, "thread": thread}
+        thread.start()
+        return copy.deepcopy(running)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1255,6 +1280,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_payload(200, {"reports": list_reports()})
             if path.endswith("/api/timezone"):
                 return self.send_payload(200, {"timezone": home_assistant_timezone()})
+            if "/api/report/" in path and path.endswith("/ai-analysis"):
+                parts = self.path_parts_after_report(path)
+                if len(parts) == 2 and parts[1] == "ai-analysis":
+                    return self.send_payload(200, {"ai_analysis": _ai_analysis_status(parts[0])})
             if "/api/report/" in path and path.endswith("/html"):
                 parts = self.path_parts_after_report(path)
                 if len(parts) == 2 and parts[1] == "html":
@@ -1295,7 +1324,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_payload(200, {"plan": build_report_plan(parts[0])})
             if "/api/report/" in path and path.endswith("/ai-analysis"):
                 parts = self.path_parts_after_report(path)
-                return self.send_payload(200, {"ai_analysis": execute_ai_analysis(parts[0])})
+                return self.send_payload(202, {"ai_analysis": start_ai_analysis(parts[0])})
             if "/api/report/" in path and path.endswith("/execute"):
                 parts = self.path_parts_after_report(path)
                 return self.send_payload(200, {"result": execute_report(parts[0])})

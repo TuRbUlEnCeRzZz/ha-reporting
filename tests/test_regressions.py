@@ -1,12 +1,15 @@
 import copy
 import io
 import json
+import threading
+import time
 import math
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 import sys
 import unittest
+import websocket
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
@@ -20,7 +23,7 @@ from providers.victoriametrics import VictoriaMetricsProvider as VM
 from periods.engine import PeriodEngine
 from comparisons.engine import ComparisonEngine
 from rendering.html_report import render_report_html
-from analysis.ai_report import compact_report_context, _extract_service_response, analyze_report_with_ai
+from analysis.ai_report import compact_report_context, _extract_service_response, _extract_ai_task_payload, analyze_report_with_ai
 import main
 
 SOURCE = {'entity_id': 'sensor.runtime', 'metric': 'runtime', 'unit': 'h'}
@@ -393,41 +396,85 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertEqual(result['status'],'disabled')
         self.assertFalse(result['enabled'])
 
-    def test_ai_task_call_uses_return_response_and_entity(self):
-        class Response:
-            def __enter__(self): return self
-            def __exit__(self,*_): return False
-            def read(self):
-                return json.dumps({'service_response':{'data':'SYNTHÈSE\nTout va bien.','conversation_id':'abc'}}).encode()
+    def test_extract_websocket_ai_task_payload(self):
+        self.assertEqual(_extract_ai_task_payload({'data':'ok','conversation_id':'c3'}),('ok','c3'))
+
+    def test_ai_task_call_uses_websocket_return_response_and_entity(self):
+        class FakeWS:
+            def __init__(self):
+                self.sent=[]
+                self.messages=[
+                    {'type':'auth_required','ha_version':'2026.9.0'},
+                    {'type':'auth_ok','ha_version':'2026.9.0'},
+                    {'id':1,'type':'result','success':True,'result':{'context':{},'response':{'data':'SYNTHÈSE\nTout va bien.','conversation_id':'abc'}}},
+                ]
+                self.timeouts=[]
+            def recv(self): return json.dumps(self.messages.pop(0))
+            def send(self,raw): self.sent.append(json.loads(raw))
+            def settimeout(self,value): self.timeouts.append(value)
+            def close(self): pass
+        fake=FakeWS()
         captured={}
-        def fake_urlopen(request,timeout=None):
-            captured['url']=request.full_url
-            captured['body']=json.loads(request.data)
-            captured['timeout']=timeout
-            return Response()
-        with patch('analysis.ai_report.urllib.request.urlopen',side_effect=fake_urlopen):
+        def fake_create(url,timeout=None,**kwargs):
+            captured['url']=url; captured['timeout']=timeout; captured['kwargs']=kwargs
+            return fake
+        with patch('analysis.ai_report.websocket.create_connection',side_effect=fake_create):
             result=analyze_report_with_ai(self.sample(),{'enabled':True,'entity_id':'ai_task.local'},token='token')
         self.assertEqual(result['status'],'completed')
         self.assertEqual(result['conversation_id'],'abc')
-        self.assertIn('?return_response',captured['url'])
-        self.assertEqual(captured['body']['entity_id'],'ai_task.local')
-        self.assertEqual(captured['timeout'],600)
-        self.assertIn('sans afficher de raisonnement interne',captured['body']['instructions'])
+        self.assertEqual(result['transport'],'home_assistant_websocket')
+        self.assertEqual(captured['url'],'ws://supervisor/core/websocket')
+        self.assertEqual(fake.sent[0],{'type':'auth','access_token':'token'})
+        call=fake.sent[1]
+        self.assertEqual(call['type'],'call_service')
+        self.assertEqual(call['domain'],'ai_task')
+        self.assertEqual(call['service'],'generate_data')
+        self.assertTrue(call['return_response'])
+        self.assertEqual(call['service_data']['entity_id'],'ai_task.local')
+        self.assertIn('sans afficher de raisonnement interne',call['service_data']['instructions'])
 
     def test_ai_task_call_uses_configured_timeout(self):
-        class Response:
-            def __enter__(self): return self
-            def __exit__(self,*_): return False
-            def read(self): return json.dumps({'service_response':{'data':'ok'}}).encode()
-        captured={}
-        def fake_urlopen(request,timeout=None):
-            captured['timeout']=timeout
-            return Response()
-        with patch('analysis.ai_report.urllib.request.urlopen',side_effect=fake_urlopen):
+        class FakeWS:
+            def __init__(self):
+                self.messages=[
+                    {'type':'auth_required'}, {'type':'auth_ok'},
+                    {'id':1,'type':'result','success':True,'result':{'response':{'data':'ok'}}},
+                ]
+                self.timeouts=[]
+            def recv(self): return json.dumps(self.messages.pop(0))
+            def send(self,_raw): pass
+            def settimeout(self,value): self.timeouts.append(value)
+            def close(self): pass
+        fake=FakeWS()
+        with patch('analysis.ai_report.websocket.create_connection',return_value=fake):
             result=analyze_report_with_ai(self.sample(),{'enabled':True,'timeout_seconds':900},token='token')
         self.assertEqual(result['status'],'completed')
-        self.assertEqual(captured['timeout'],900)
         self.assertEqual(result['timeout_seconds'],900)
+        self.assertTrue(fake.timeouts)
+        self.assertLessEqual(max(fake.timeouts),20)
+
+    def test_ai_task_websocket_sends_heartbeat_during_long_generation(self):
+        class FakeWS:
+            def __init__(self):
+                self.phase=0
+                self.sent=[]
+            def recv(self):
+                self.phase += 1
+                if self.phase == 1: return json.dumps({'type':'auth_required'})
+                if self.phase == 2: return json.dumps({'type':'auth_ok'})
+                if self.phase == 3: raise websocket.WebSocketTimeoutException('idle')
+                if self.phase == 4: return json.dumps({'id':2,'type':'pong'})
+                return json.dumps({'id':1,'type':'result','success':True,'result':{'response':{'data':'OK','conversation_id':'hb'}}})
+            def send(self,raw): self.sent.append(json.loads(raw))
+            def settimeout(self,_value): pass
+            def close(self): pass
+        fake=FakeWS()
+        with patch('analysis.ai_report.websocket.create_connection',return_value=fake):
+            result=analyze_report_with_ai(self.sample(),{'enabled':True,'timeout_seconds':600},token='token')
+        self.assertEqual(result['status'],'completed')
+        self.assertEqual(result['conversation_id'],'hb')
+        self.assertEqual(result['heartbeat_count'],1)
+        self.assertIn({'id':2,'type':'ping'},fake.sent)
 
     def test_report_ai_timeout_validation_and_default(self):
         default=main._validated_ai_analysis({'ai_analysis':{'enabled':True}})
@@ -489,9 +536,10 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.5')
+        self.assertEqual(config['version'],'0.1.0-beta.6')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
+        self.assertIn('py3-websocket-client',(addon/'Dockerfile').read_text())
         for name in ['Dockerfile','run.sh','app/main.py','app/app.js','app/index.html','app/rendering/html_report.py','app/analysis/ai_report.py']:
             self.assertTrue((addon/name).is_file(),name)
         index=(addon/'app/index.html').read_text()
@@ -505,5 +553,52 @@ class PackageTests(unittest.TestCase):
         with patch.object(main,'resolve_provider',return_value=p),patch.object(main,'load_catalog',return_value={'devices':{'d':{'sensors':{'x':SOURCE}}}}):
             r=main._execute_report_period({'catalogs':['c']},resolved)
         self.assertFalse(r['execution']['raw_series_transferred'])
+
+
+
+class Beta6TransportTests(unittest.TestCase):
+    def test_main_has_async_ai_job_and_status_polling_routes(self):
+        main_text=(ROOT/'ha-reporting/app/main.py').read_text()
+        js=(ROOT/'ha-reporting/app/app.js').read_text()
+        self.assertIn('def start_ai_analysis(report_id):',main_text)
+        self.assertIn('def _ai_analysis_status(report_id):',main_text)
+        self.assertIn('home_assistant_websocket',main_text)
+        self.assertIn('return self.send_payload(202, {"ai_analysis": start_ai_analysis(parts[0])})',main_text)
+        self.assertIn('await sleep(2000)',js)
+        self.assertIn('suivi réseau temporairement indisponible',js)
+        self.assertIn('cache:"no-store"',js)
+
+    def test_ai_background_job_returns_immediately_and_updates_cache(self):
+        report={'ai_analysis':{'enabled':True,'entity_id':'ai_task.local','timeout_seconds':600}}
+        base={
+            'report':{'id':'r','name':'R','ai_analysis':report['ai_analysis']},
+            'execution':{},
+            'summary':{'sources_total':0},
+            'comparisons':{'target_count':0},
+            'ai_analysis':{'enabled':True,'status':'pending','timeout_seconds':600},
+        }
+        with main.LAST_REPORT_RESULTS_LOCK:
+            main.LAST_REPORT_RESULTS['r']=copy.deepcopy(base)
+        main.AI_ANALYSIS_JOBS.clear()
+
+        gate=threading.Event()
+        def fake_ai(_result,_config,token=None):
+            gate.wait(1)
+            return {'enabled':True,'status':'completed','duration_seconds':0.1,'text':'OK','conversation_id':'cid','transport':'home_assistant_websocket'}
+
+        with patch.object(main,'load_report',return_value=report), patch.object(main,'analyze_report_with_ai',side_effect=fake_ai):
+            started=time.monotonic()
+            state=main.start_ai_analysis('r')
+            elapsed=time.monotonic()-started
+            self.assertEqual(state['status'],'running')
+            self.assertLess(elapsed,0.2)
+            self.assertEqual(main._ai_analysis_status('r')['status'],'running')
+            gate.set()
+            deadline=time.monotonic()+2
+            while time.monotonic()<deadline and main._ai_analysis_status('r').get('status')!='completed':
+                time.sleep(0.01)
+            final=main._ai_analysis_status('r')
+            self.assertEqual(final['status'],'completed')
+            self.assertEqual(final['conversation_id'],'cid')
 
 if __name__ == '__main__': unittest.main()

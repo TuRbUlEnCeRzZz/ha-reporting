@@ -1,9 +1,15 @@
 # HA Reporting
 
-Add-on Home Assistant OS — version **0.1.0-beta.5**.
+Add-on Home Assistant OS — version **0.1.0-beta.6**.
 
-Cette bêta conserve le moteur statistique et le rendu HTML/PDF validés, ainsi que l’analyse IA asynchrone, et rend son délai maximal configurable par rapport (600 s par défaut). Le modèle reçoit uniquement un contexte statistique compact déjà calculé par HA Reporting ; aucun point brut VictoriaMetrics n’est transmis.
+Beta.6 conserve le moteur statistique, les comparaisons, le rendu HTML/PDF et le timeout IA configurable, mais remplace l'appel AI Task REST longue durée par le WebSocket interne Home Assistant. L'analyse IA s'exécute désormais dans un job serveur réellement indépendant de l'Ingress ; le navigateur ne fait que suivre son état par requêtes courtes.
 
-Pour Ollama, le mode **no-thinking** se configure sur l’entité AI Task en désactivant `Think before responding`. HA Reporting sélectionne l’entité AI Task choisie dans le rapport, ou utilise l’entité préférée de Home Assistant lorsqu’aucune n’est imposée.
+- Transport AI Task : `ws://supervisor/core/websocket`
+- Authentification : `SUPERVISOR_TOKEN`
+- Action : `ai_task.generate_data` avec `return_response: true`
+- Heartbeat WebSocket : 20 s
+- Polling UI : 2 s
+- Timeout IA : configurable, 600 s par défaut, 60–1800 s acceptés
+- Les statistiques compactes uniquement sont transmises au modèle ; aucune série brute VictoriaMetrics.
 
-Voir [VALIDATION-beta5.md](VALIDATION-beta5.md).
+Voir [VALIDATION-beta6.md](VALIDATION-beta6.md).

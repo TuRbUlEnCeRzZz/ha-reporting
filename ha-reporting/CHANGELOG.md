@@ -1,3 +1,11 @@
+## 0.1.0-beta.6
+
+- AI Task transport moved from a long REST call to the Home Assistant WebSocket API via `ws://supervisor/core/websocket`.
+- AI analysis now runs as a server-side background job; browser requests return immediately and poll short status endpoints.
+- Application-level WebSocket heartbeats keep long local-model generations observable.
+- Transient Ingress/browser polling errors no longer mark the AI task itself as failed.
+- Conversation ID and transport diagnostics are preserved in the report JSON.
+
 # Changelog
 
 ## 0.1.0-beta.5

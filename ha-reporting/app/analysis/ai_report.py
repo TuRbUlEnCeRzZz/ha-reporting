@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import os
 import time
-import urllib.error
-import urllib.request
 from typing import Any
 
+import websocket
 
-HA_AI_TASK_URL = "http://supervisor/core/api/services/ai_task/generate_data?return_response"
+
+HA_AI_TASK_WS_URL = "ws://supervisor/core/websocket"
+AI_WS_HEARTBEAT_SECONDS = 20
 AI_DEFAULT_TIMEOUT_SECONDS = 600
 AI_MIN_TIMEOUT_SECONDS = 60
 AI_MAX_TIMEOUT_SECONDS = 1800
@@ -131,25 +132,47 @@ def compact_report_context(result: dict[str, Any]) -> dict[str, Any]:
     return output
 
 
-def _extract_service_response(payload: Any) -> tuple[Any, str | None]:
-    """Extract ai_task.generate_data response across REST response shapes."""
+def _extract_ai_task_payload(payload: Any) -> tuple[Any, str | None]:
+    """Extract ai_task.generate_data data from direct or entity-namespaced payloads."""
     if not isinstance(payload, dict):
-        raise RuntimeError("Réponse Home Assistant AI Task invalide")
-
-    response = payload.get("service_response", payload)
-    if not isinstance(response, dict):
         raise RuntimeError("Réponse AI Task absente")
 
-    if "data" in response:
-        return response.get("data"), response.get("conversation_id")
+    if "data" in payload:
+        return payload.get("data"), payload.get("conversation_id")
 
-    # Some response-producing services namespace their response under an entity key.
-    for value in response.values():
+    for value in payload.values():
         if isinstance(value, dict) and "data" in value:
             return value.get("data"), value.get("conversation_id")
 
     raise RuntimeError("AI Task n'a retourné aucune donnée")
 
+
+def _extract_service_response(payload: Any) -> tuple[Any, str | None]:
+    """Backward-compatible extractor for REST response shapes."""
+    if not isinstance(payload, dict):
+        raise RuntimeError("Réponse Home Assistant AI Task invalide")
+    return _extract_ai_task_payload(payload.get("service_response", payload))
+
+
+def _recv_json(ws) -> dict[str, Any]:
+    raw = ws.recv()
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", "replace")
+    message = json.loads(raw)
+    if not isinstance(message, dict):
+        raise RuntimeError("Message WebSocket Home Assistant invalide")
+    return message
+
+
+def _websocket_error_message(message: dict[str, Any]) -> str:
+    error = message.get("error") or {}
+    if isinstance(error, dict):
+        code = error.get("code")
+        text = error.get("message")
+        if code and text:
+            return f"{code}: {text}"
+        return str(text or code or error)
+    return str(error or "Erreur WebSocket Home Assistant")
 
 def _instructions(context_json: str) -> str:
     return f"""Tu analyses un rapport domotique calculé par HA Reporting.
@@ -198,6 +221,9 @@ def analyze_report_with_ai(
         "mode": "no_thinking_expected",
         "mode_control": "ai_task_entity_configuration",
         "timeout_seconds": timeout_seconds,
+        "transport": "home_assistant_websocket",
+        "websocket_url": HA_AI_TASK_WS_URL,
+        "heartbeat_interval_seconds": AI_WS_HEARTBEAT_SECONDS,
         "started_at_epoch": started,
     }
 
@@ -208,6 +234,7 @@ def analyze_report_with_ai(
             "error": "SUPERVISOR_TOKEN indisponible pour appeler AI Task",
         }
 
+    ws = None
     try:
         context = compact_report_context(result)
         context_json = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
@@ -223,20 +250,75 @@ def analyze_report_with_ai(
         if entity_id:
             service_data["entity_id"] = entity_id
 
-        body = json.dumps(service_data, ensure_ascii=False).encode("utf-8")
-        request = urllib.request.Request(
-            HA_AI_TASK_URL,
-            data=body,
-            method="POST",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
+        # The Supervisor exposes Home Assistant's WebSocket API at this internal URL.
+        # Keep the connect timeout short; the configured AI timeout applies to the service call itself.
+        connect_timeout = min(30, max(5, timeout_seconds))
+        ws = websocket.create_connection(
+            HA_AI_TASK_WS_URL,
+            timeout=connect_timeout,
+            http_proxy_host=None,
+            http_proxy_port=None,
         )
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            response_payload = json.loads(response.read() or b"{}")
 
-        data, conversation_id = _extract_service_response(response_payload)
+        auth_required = _recv_json(ws)
+        if auth_required.get("type") != "auth_required":
+            raise RuntimeError(f"Handshake WebSocket inattendu: {auth_required.get('type')}")
+
+        ws.send(json.dumps({"type": "auth", "access_token": token}))
+        auth_result = _recv_json(ws)
+        if auth_result.get("type") != "auth_ok":
+            if auth_result.get("type") == "auth_invalid":
+                raise RuntimeError(f"Authentification WebSocket refusée: {auth_result.get('message') or 'token invalide'}")
+            raise RuntimeError(f"Authentification WebSocket inattendue: {auth_result.get('type')}")
+
+        command_id = 1
+        next_id = 2
+        ws.send(
+            json.dumps(
+                {
+                    "id": command_id,
+                    "type": "call_service",
+                    "domain": "ai_task",
+                    "service": "generate_data",
+                    "service_data": service_data,
+                    "return_response": True,
+                },
+                ensure_ascii=False,
+            )
+        )
+
+        deadline = time.monotonic() + timeout_seconds
+        heartbeat_count = 0
+        response_payload = None
+
+        while response_payload is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"Analyse IA interrompue après {timeout_seconds} s (délai maximal configuré).")
+
+            ws.settimeout(min(AI_WS_HEARTBEAT_SECONDS, max(1, remaining)))
+            try:
+                message = _recv_json(ws)
+            except websocket.WebSocketTimeoutException:
+                ping_id = next_id
+                next_id += 1
+                heartbeat_count += 1
+                ws.send(json.dumps({"id": ping_id, "type": "ping"}))
+                continue
+
+            # Ignore unrelated results such as our heartbeat pongs.
+            if message.get("type") != "result" or message.get("id") != command_id:
+                continue
+
+            if not message.get("success"):
+                raise RuntimeError(f"AI Task WebSocket: {_websocket_error_message(message)}")
+
+            result_payload = message.get("result") or {}
+            if not isinstance(result_payload, dict):
+                raise RuntimeError("Réponse WebSocket AI Task invalide")
+            response_payload = result_payload.get("response")
+
+        data, conversation_id = _extract_ai_task_payload(response_payload)
         if isinstance(data, (dict, list)):
             text = json.dumps(data, ensure_ascii=False, indent=2)
         else:
@@ -251,6 +333,7 @@ def analyze_report_with_ai(
             "finished_at_epoch": finished,
             "duration_seconds": finished - started,
             "conversation_id": conversation_id,
+            "heartbeat_count": heartbeat_count,
             "text": text,
             "input": {
                 "context_characters": len(context_json),
@@ -258,17 +341,21 @@ def analyze_report_with_ai(
                 "comparison_targets": (result.get("comparisons") or {}).get("target_count", 0),
             },
         }
-    except urllib.error.HTTPError as exc:
-        try:
-            details = exc.read().decode("utf-8", "replace")
-        except Exception:
-            details = ""
+    except TimeoutError as exc:
         finished = time.time()
         return {
             **base,
             "finished_at_epoch": finished,
             "duration_seconds": finished - started,
-            "error": f"AI Task HTTP {exc.code}: {details[:500] or exc.reason}",
+            "error": str(exc),
+        }
+    except websocket.WebSocketException as exc:
+        finished = time.time()
+        return {
+            **base,
+            "finished_at_epoch": finished,
+            "duration_seconds": finished - started,
+            "error": f"WebSocket Home Assistant: {exc}",
         }
     except Exception as exc:
         finished = time.time()
@@ -278,3 +365,10 @@ def analyze_report_with_ai(
             "duration_seconds": finished - started,
             "error": str(exc),
         }
+    finally:
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:
+                pass
+

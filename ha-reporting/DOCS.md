@@ -1,4 +1,4 @@
-# HA Reporting — 0.1.0-beta.5
+# HA Reporting — 0.1.0-beta.6
 
 Deuxième bêta pour Home Assistant OS, notamment sur Raspberry Pi 4 (aarch64).
 Les calculs, contrôles de qualité, rollups, comparaisons et vérifications runtime
@@ -107,7 +107,7 @@ restent disponibles. Les règles de comparaison sont conservées.
    `Dockerfile`) vers `/addons/ha-reporting` sur Home Assistant OS.
 3. Actualiser le magasin des add-ons, puis installer ou reconstruire l'add-on
    local HA Reporting selon le mode d'installation existant.
-4. Vérifier la version 0.1.0-beta.5 dans les journaux et relancer les rapports.
+4. Vérifier la version 0.1.0-beta.6 dans les journaux et relancer les rapports.
 
 Ne pas copier le dossier de dépôt complet à la place du dossier de l'add-on.
 Pour une installation issue d'un dépôt Git, mettre à jour les fichiers du même
@@ -121,7 +121,7 @@ L'archive contient les sources à construire par Supervisor, pas une image OCI.
 
 Voir `VALIDATION-beta5.md` à la racine du dépôt pour les tests et résultats.
 
-## Analyse IA optionnelle (beta.5)
+## Analyse IA optionnelle (beta.6)
 
 Dans la définition d’un rapport, activer **Inclure une analyse IA dans le rapport** puis choisir une
 entité AI Task. Laisser la sélection vide utilise l’entité AI Task préférée configurée dans Home Assistant.
@@ -138,3 +138,13 @@ L’action Home Assistant `ai_task.generate_data` ne permet pas de changer ce pa
 ### Délai IA configurable
 
 Chaque rapport peut définir `ai_analysis.timeout_seconds`. La valeur par défaut est **600 s**. L’interface propose 300, 600, 900 et 1200 s ; le backend valide toute valeur comprise entre 60 et 1800 s. Ce délai est appliqué à l’appel `ai_task.generate_data`, au garde-fou serveur et au garde-fou navigateur avec une petite marge technique. Le calcul statistique du rapport reste indépendant et disponible immédiatement.
+
+
+### beta.6 — AI Task WebSocket
+
+Long AI analyses use Home Assistant's internal WebSocket API through the Supervisor proxy. The report calculation completes independently, the AI job continues server-side, and the Ingress UI polls only short status requests. The AI timeout remains configurable (default 600 s).
+
+
+## Transport IA beta.6
+
+L'analyse IA n'utilise plus une requête REST longue. HA Reporting ouvre le WebSocket interne Home Assistant via `ws://supervisor/core/websocket`, authentifié avec `SUPERVISOR_TOKEN`, puis appelle `ai_task.generate_data` avec `return_response: true`. Le job IA reste côté serveur ; l'interface Ingress ne fait que des requêtes courtes de suivi d'état toutes les 2 secondes. Des heartbeats applicatifs maintiennent le canal observable pendant les générations longues.

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.0-beta.3
+
+- Add optional report-level AI analysis through Home Assistant `ai_task.generate_data`.
+- Let each report use the preferred AI Task entity or an explicitly selected `ai_task.*` entity.
+- Keep no-thinking control on the AI provider entity; the report UI documents the Ollama `Think before responding` requirement.
+- Send only compact validated report statistics, quality metadata and N/N-x comparison values to the model; never send raw VictoriaMetrics samples or previews.
+- Ask the model for a concise French synthesis, points of attention and recommendations without exposing reasoning.
+- Embed the generated AI analysis in the interactive report preview and standalone HTML/PDF report.
+- Fail open: an AI Task error is displayed in the report but does not invalidate the statistical report.
+- Record AI duration, selected entity, conversation ID and compact-context size in report JSON diagnostics.
+- Add AI Task response-shape, context-minimization, escaping and UI regressions.
+
 ## 0.1.0-beta.2
 
 - Preserve the dark standalone HTML visual language when printing or saving as PDF.

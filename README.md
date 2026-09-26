@@ -1,20 +1,9 @@
 # HA Reporting
 
-Add-on Home Assistant OS — version **0.1.0-beta.2**.
+Add-on Home Assistant OS — version **0.1.0-beta.3**.
 
-Le dossier `ha-reporting/` contient l’add-on à installer/construire.
-Voir [la documentation](ha-reporting/DOCS.md), le
-[changelog](ha-reporting/CHANGELOG.md) et le
-[rapport de validation](VALIDATION-beta2.md).
+Cette bêta conserve le moteur statistique et le rendu HTML/PDF validés en beta.2 et ajoute une analyse IA optionnelle via l’action Home Assistant `ai_task.generate_data`. Le modèle reçoit uniquement un contexte statistique compact déjà calculé par HA Reporting ; aucun point brut VictoriaMetrics n’est transmis.
 
-Tests locaux depuis ce dossier (Python 3.11+ avec PyYAML, Node.js) :
+Pour Ollama, le mode **no-thinking** se configure sur l’entité AI Task en désactivant `Think before responding`. HA Reporting sélectionne l’entité AI Task choisie dans le rapport, ou utilise l’entité préférée de Home Assistant lorsqu’aucune n’est imposée.
 
-```sh
-python3 -m unittest discover -s tests -v
-node --check ha-reporting/app/app.js
-node tests/test_ui.cjs
-bash -n ha-reporting/run.sh
-```
-
-Les fixtures runtime sont des captures anonymisées en lecture seule ; les tests
-ne contactent aucun serveur et ne modifient aucun historique Home Assistant.
+Voir [VALIDATION-beta3.md](VALIDATION-beta3.md).

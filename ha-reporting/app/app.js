@@ -409,6 +409,7 @@ function renderReports(){
             <div class="reportMeta">${esc(report.id)} · ${esc((report.catalog_names || []).join(", "))}</div>
             <span class="reportPeriodPill">${custom}</span>
             ${comparisonLabels.length ? `<span class="reportPeriodPill">${esc(comparisonLabels.join(" · "))}</span>` : ""}
+            ${(report.ai_analysis || {}).enabled ? `<span class="reportPeriodPill">Analyse IA · no-thinking</span>` : ""}
           </div>
           <div class="reportActions">
             <button class="primary" onclick="previewReport('${esc(report.id)}')">Aperçu</button>
@@ -435,6 +436,37 @@ function renderReportCatalogChoices(selectedIds=[]){
           <span>${esc(c.name)} <span class="muted">(${c.device_count} appareil(s))</span></span>
         </label>`).join("")
     : '<div class="muted">Aucun catalogue disponible.</div>';
+}
+
+async function ensureEntityInventory(){
+  if(entities.length) return;
+  const data = await (await fetch("api/entities")).json();
+  entities = data.entities || [];
+}
+
+function updateReportAiFields(){
+  const enabled = $("reportAiEnabled").checked;
+  $("reportAiEntity").disabled = !enabled;
+}
+
+async function populateReportAiEntities(selectedId=""){
+  await ensureEntityInventory();
+  const aiTasks = entities
+    .filter(entity => entity.domain === "ai_task")
+    .sort((a,b) => String(a.friendly_name || a.entity_id).localeCompare(String(b.friendly_name || b.entity_id)));
+
+  const options = [
+    '<option value="">Entité AI Task préférée de Home Assistant</option>',
+    ...aiTasks.map(entity => `<option value="${esc(entity.entity_id)}">${esc(entity.friendly_name || entity.entity_id)} · ${esc(entity.entity_id)}</option>`)
+  ];
+
+  if(selectedId && !aiTasks.some(entity => entity.entity_id === selectedId)){
+    options.push(`<option value="${esc(selectedId)}">${esc(selectedId)} · indisponible actuellement</option>`);
+  }
+
+  $("reportAiEntity").innerHTML = options.join("");
+  $("reportAiEntity").value = selectedId || "";
+  updateReportAiFields();
 }
 
 async function showReportForm(reportId=null, push=true){
@@ -466,6 +498,10 @@ async function showReportForm(reportId=null, push=true){
   $("reportPreviousPeriods").value = String(comparisons.previous_periods || 0);
   $("reportPreviousYears").value = String(comparisons.previous_years || 0);
 
+  const aiAnalysis = report ? (report.ai_analysis || {}) : {};
+  $("reportAiEnabled").checked = Boolean(aiAnalysis.enabled);
+  await populateReportAiEntities(aiAnalysis.entity_id || "");
+
   renderReportCatalogChoices(report ? report.catalogs : []);
   updateReportPeriodFields();
 
@@ -495,6 +531,11 @@ function reportPayloadFromForm(){
     comparisons:{
       previous_periods:Number($("reportPreviousPeriods").value || 0),
       previous_years:Number($("reportPreviousYears").value || 0)
+    },
+    ai_analysis:{
+      enabled:$("reportAiEnabled").checked,
+      entity_id:$("reportAiEntity").value || "",
+      mode:"no_thinking_expected"
     }
   };
 }
@@ -796,6 +837,37 @@ function renderComparisonTarget(target){
     </section>`;
 }
 
+function renderAiAnalysis(result){
+  const ai = result.ai_analysis || {};
+  if(!ai.enabled) return "";
+
+  if(ai.status === "completed"){
+    const entity = ai.entity_id || "entité AI Task préférée";
+    const duration = Number(ai.duration_seconds || 0).toFixed(2);
+    return `
+      <section class="aiAnalysisCard">
+        <div class="aiAnalysisHeader">
+          <div>
+            <h3>Analyse IA</h3>
+            <div class="muted">Interprétation des statistiques calculées par HA Reporting</div>
+          </div>
+          <span class="badge">AI Task · no-thinking</span>
+        </div>
+        <div class="aiAnalysisText">${esc(ai.text || "")}</div>
+        <div class="muted">${esc(entity)} · ${duration} s · aucune série brute transmise au modèle</div>
+      </section>`;
+  }
+
+  return `
+    <section class="aiAnalysisCard aiAnalysisError">
+      <div class="aiAnalysisHeader">
+        <div><h3>Analyse IA</h3><div class="muted">Analyse indisponible</div></div>
+        <span class="badge">erreur</span>
+      </div>
+      <div class="aiAnalysisText">${esc(ai.error || "AI Task indisponible")}</div>
+    </section>`;
+}
+
 function renderExecutedReport(result){
   const summary = result.summary || {};
   const period = result.resolved_period || {};
@@ -858,6 +930,8 @@ function renderExecutedReport(result){
         ${((result.comparisons || {}).targets || []).map(renderComparisonTarget).join("")}
       </section>` : ""}
 
+    ${renderAiAnalysis(result)}
+
     <details class="jsonDetails">
       <summary>Voir le JSON complet du rapport exécuté</summary>
       <div class="seriesPreview">${esc(JSON.stringify(result, null, 2))}</div>
@@ -885,9 +959,13 @@ async function executeReport(reportId){
     }
 
     const comparisonCount = (data.result.comparisons || {}).target_count || 0;
+    const ai = data.result.ai_analysis || {};
+    const aiStatus = ai.enabled
+      ? (ai.status === "completed" ? " · analyse IA OK" : " · analyse IA en erreur")
+      : "";
     $("reportPreviewStatus").textContent =
       `✓ Rapport exécuté · ${data.result.summary.sources_ok}/${data.result.summary.sources_total} source(s) OK` +
-      (comparisonCount ? ` · ${comparisonCount} comparaison(s)` : "");
+      (comparisonCount ? ` · ${comparisonCount} comparaison(s)` : "") + aiStatus;
 
     renderExecutedReport(data.result);
     $("reportHtmlButton").classList.remove("hidden");
@@ -942,6 +1020,7 @@ $("reportsButton").addEventListener("click", () => showReports());
 $("newReportButton").addEventListener("click", () => showReportForm());
 $("saveReportButton").addEventListener("click", saveReportDefinition);
 $("reportPeriodType").addEventListener("change", updateReportPeriodFields);
+$("reportAiEnabled").addEventListener("change", updateReportAiFields);
 $("reportName").addEventListener("input", () => {
   if(!editingReportId) $("reportId").value = slug($("reportName").value);
 });

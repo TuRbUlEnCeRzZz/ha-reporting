@@ -18,6 +18,7 @@ from analysis.device import DeviceAnalysisEngine
 from periods.engine import PeriodEngine
 from comparisons.engine import ComparisonEngine
 from rendering.html_report import render_report_html
+from analysis.ai_report import analyze_report_with_ai
 
 PORT = 8099
 TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
@@ -673,6 +674,19 @@ def _validated_comparisons(payload):
     }
 
 
+def _validated_ai_analysis(payload):
+    raw = payload.get("ai_analysis") or {}
+    enabled = bool(raw.get("enabled", False))
+    entity_id = str(raw.get("entity_id") or "").strip()
+    if entity_id and not entity_id.startswith("ai_task."):
+        raise ValueError("L'entité d'analyse IA doit appartenir au domaine ai_task")
+    return {
+        "enabled": enabled,
+        "entity_id": entity_id,
+        "mode": "no_thinking_expected",
+    }
+
+
 def report_summary(data):
     catalog_ids = data.get("catalogs") or []
     catalog_names = []
@@ -691,6 +705,11 @@ def report_summary(data):
         "comparisons": data.get("comparisons") or {
             "previous_periods": 0,
             "previous_years": 0,
+        },
+        "ai_analysis": data.get("ai_analysis") or {
+            "enabled": False,
+            "entity_id": "",
+            "mode": "no_thinking_expected",
         },
     }
 
@@ -734,6 +753,7 @@ def create_report(payload):
         "catalogs": _validate_report_catalogs(payload.get("catalogs")),
         "period": _validated_period_spec(payload),
         "comparisons": _validated_comparisons(payload),
+        "ai_analysis": _validated_ai_analysis(payload),
     }
     save_report(data)
     log.info("Report created: %s", report_id)
@@ -757,6 +777,9 @@ def update_report(report_id, payload):
 
     if "comparisons" in payload:
         data["comparisons"] = _validated_comparisons(payload)
+
+    if "ai_analysis" in payload:
+        data["ai_analysis"] = _validated_ai_analysis(payload)
 
     save_report(data)
     log.info("Report updated: %s", report_id)
@@ -1035,7 +1058,7 @@ def execute_report(report_id):
             comparison_engine.compare_target(base, reference, target)
         )
 
-    finished = time.time()
+    data_finished = time.time()
     result = {
         "report_version": 1,
         "report": report_summary(report),
@@ -1048,7 +1071,7 @@ def execute_report(report_id):
                 source_count=base["summary"]["sources_total"],
                 comparison_targets=target_specs,
             ),
-            "total_duration_seconds": finished - full_started,
+            "data_total_duration_seconds": data_finished - full_started,
         },
         "comparisons": {
             "enabled": bool(comparison_targets),
@@ -1056,6 +1079,20 @@ def execute_report(report_id):
             "targets": comparison_targets,
         },
     }
+
+    ai_started = time.time()
+    result["ai_analysis"] = analyze_report_with_ai(
+        result,
+        report.get("ai_analysis") or {},
+        token=TOKEN,
+    )
+    finished = time.time()
+    result["execution"]["ai_analysis_duration_seconds"] = (
+        finished - ai_started if result["ai_analysis"].get("enabled") else 0.0
+    )
+    result["execution"]["data_finished_at_epoch"] = data_finished
+    result["execution"]["finished_at_epoch"] = finished
+    result["execution"]["total_duration_seconds"] = finished - full_started
     return result
 
 

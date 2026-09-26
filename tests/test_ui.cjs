@@ -5,7 +5,7 @@ const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../ha-reporting/app/app.js'), 'utf8');
 const sandbox = {};
 vm.createContext(sandbox);
-for (const name of ['signedValue','esc','formatSeriesNumber','localDateTime','qualityBadge','metricCardData','reportSourceCardData','renderExecutedSource','comparisonStatusLabel','comparisonSourceCard']) {
+for (const name of ['signedValue','esc','formatSeriesNumber','localDateTime','qualityBadge','metricCardData','reportSourceCardData','renderExecutedSource','comparisonStatusLabel','comparisonSourceCard','renderAiAnalysis']) {
   const match = source.match(new RegExp(`^function ${name}\\([^]*?^}`, 'm'));
   assert.ok(match, name);
   vm.runInContext(match[0], sandbox);
@@ -27,4 +27,8 @@ check(() => assert.match(sandbox.qualityBadge({density_applicable:true,sample_de
 check(() => assert.match(sandbox.renderExecutedSource({...raw,sensor_key:'<script>x</script>'},{}), /&lt;script&gt;/));
 check(() => assert.equal(sandbox.metricCardData({...raw,analysis:{statistics:{plausible:false,delta:null},validation:{valid:false}}},{}).cells[0].value,'Incohérent'));
 check(() => assert.doesNotMatch(sandbox.comparisonSourceCard({metric:'temperature',comparison_status:'comparable',values:[{label:'Moyenne',base:25,reference:20,absolute_change:5,relative_change_percent:null,relative_change_applicable:false}]}), /comparisonMiniLabel">%/));
+
+check(() => assert.match(sandbox.renderAiAnalysis({ai_analysis:{enabled:true,status:'completed',entity_id:'ai_task.local',duration_seconds:1.23,text:'SYNTHÈSE\nOK'}}), /Analyse IA/));
+check(() => assert.match(sandbox.renderAiAnalysis({ai_analysis:{enabled:true,status:'completed',entity_id:'ai_task.local',duration_seconds:1.23,text:'<script>x<\/script>'}}), /&lt;script&gt;/));
+check(() => assert.match(sandbox.renderAiAnalysis({ai_analysis:{enabled:true,status:'error',error:'boom'}}), /boom/));
 console.log(`${checks} JavaScript UI checks passed`);

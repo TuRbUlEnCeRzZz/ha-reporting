@@ -20,6 +20,7 @@ from providers.victoriametrics import VictoriaMetricsProvider as VM
 from periods.engine import PeriodEngine
 from comparisons.engine import ComparisonEngine
 from rendering.html_report import render_report_html
+from analysis.ai_report import compact_report_context, _extract_service_response, analyze_report_with_ai
 import main
 
 SOURCE = {'entity_id': 'sensor.runtime', 'metric': 'runtime', 'unit': 'h'}
@@ -354,6 +355,65 @@ class ReportTests(unittest.TestCase):
                     self.assertNotIn('verification',r)
 
 
+
+class AiAnalysisTests(unittest.TestCase):
+    def sample(self):
+        return {
+            'report': {'name':'Rapport test'},
+            'resolved_period': {'label':'Septembre','timezone':'Europe/Zurich'},
+            'summary': {'sources_total':1,'sources_ok':1},
+            'catalogs': [{'name':'Maison','devices':[{'device':{'name':'Frigo','category':'refrigeration'},'sources':[{
+                'sensor_key':'frigo_power','entity_id':'sensor.frigo_power','metric':'power','unit':'W','status':'ok',
+                'preview':[{'timestamp':1,'value':999}],
+                'analysis': {'quality': {'period_coverage_percent':100,'sample_density_percent':95,'density_applicable':True},
+                             'statistics': {'max':{'value':120},'p95':80,'mean':50},
+                             'validation': {'warnings': []}}
+            }]}]}],
+            'comparisons': {'enabled':False,'target_count':0,'targets':[]},
+        }
+
+    def test_compact_context_excludes_raw_preview(self):
+        context=compact_report_context(self.sample())
+        encoded=json.dumps(context)
+        self.assertNotIn('preview',encoded)
+        self.assertNotIn('999',encoded)
+        self.assertEqual(context['catalogs'][0]['devices'][0]['sources'][0]['values']['mean'],50)
+
+    def test_extract_service_response_direct(self):
+        data,cid=_extract_service_response({'service_response':{'data':'ok','conversation_id':'c1'}})
+        self.assertEqual(data,'ok')
+        self.assertEqual(cid,'c1')
+
+    def test_extract_service_response_namespaced(self):
+        data,cid=_extract_service_response({'service_response':{'ai_task.local':{'data':'ok2','conversation_id':'c2'}}})
+        self.assertEqual((data,cid),('ok2','c2'))
+
+    def test_disabled_ai_does_not_need_token(self):
+        result=analyze_report_with_ai(self.sample(),{'enabled':False},token='')
+        self.assertEqual(result['status'],'disabled')
+        self.assertFalse(result['enabled'])
+
+    def test_ai_task_call_uses_return_response_and_entity(self):
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self,*_): return False
+            def read(self):
+                return json.dumps({'service_response':{'data':'SYNTHÈSE\nTout va bien.','conversation_id':'abc'}}).encode()
+        captured={}
+        def fake_urlopen(request,timeout=None):
+            captured['url']=request.full_url
+            captured['body']=json.loads(request.data)
+            captured['timeout']=timeout
+            return Response()
+        with patch('analysis.ai_report.urllib.request.urlopen',side_effect=fake_urlopen):
+            result=analyze_report_with_ai(self.sample(),{'enabled':True,'entity_id':'ai_task.local'},token='token')
+        self.assertEqual(result['status'],'completed')
+        self.assertEqual(result['conversation_id'],'abc')
+        self.assertIn('?return_response',captured['url'])
+        self.assertEqual(captured['body']['entity_id'],'ai_task.local')
+        self.assertIn('sans afficher de raisonnement interne',captured['body']['instructions'])
+
+
 class HtmlRendererTests(unittest.TestCase):
     def sample_result(self):
         return {
@@ -365,7 +425,8 @@ class HtmlRendererTests(unittest.TestCase):
                 {'sensor_key':'power<script>','entity_id':'sensor.power','metric':'power','unit':'W','status':'ok','analysis':{'quality':{'period_coverage_percent':100,'density_applicable':True,'sample_density_percent':95},'statistics':{'max':{'value':100},'p95':70,'mean':40}}},
                 {'sensor_key':'runtime','entity_id':'sensor.runtime','metric':'runtime','unit':'h','status':'ok','verification':{'classification':'minor_corrections'},'analysis':{'quality':{'period_coverage_percent':10,'density_applicable':False,'sample_density_percent':None},'statistics':{'delta':20.2,'last':{'value':20.2},'resets_detected':0}}}
             ]}]}],
-            'comparisons': {'enabled':True,'targets':[{'label':'N-1 an','resolved_period':{'label':'2025'},'summary':{'sources_comparable':1,'sources_partial':0,'sources_reconstructed':0,'sources_unavailable':0},'catalogs':[{'name':'Électroménager','devices':[{'name':'Vinothèque','sources':[{'sensor_key':'power','metric':'power','unit':'W','comparison_status':'comparable','reasons':[],'values':[{'label':'Moyenne','base':40,'reference':50,'absolute_change':-10,'relative_change_percent':-20,'relative_change_applicable':True}]}]}]}]}]}
+            'comparisons': {'enabled':True,'targets':[{'label':'N-1 an','resolved_period':{'label':'2025'},'summary':{'sources_comparable':1,'sources_partial':0,'sources_reconstructed':0,'sources_unavailable':0},'catalogs':[{'name':'Électroménager','devices':[{'name':'Vinothèque','sources':[{'sensor_key':'power','metric':'power','unit':'W','comparison_status':'comparable','reasons':[],'values':[{'label':'Moyenne','base':40,'reference':50,'absolute_change':-10,'relative_change_percent':-20,'relative_change_applicable':True}]}]}]}]}]},
+            'ai_analysis': {'enabled':True,'status':'completed','entity_id':'ai_task.local','duration_seconds':1.2,'text':'SYNTHÈSE\nTout va bien <script>.'}
         }
     def test_html_report_is_self_contained_printable_and_escaped(self):
         html=render_report_html(self.sample_result())
@@ -387,6 +448,14 @@ class HtmlRendererTests(unittest.TestCase):
         self.assertIn('runtime vérifié',html)
         self.assertIn('20.2 h',html)
 
+    def test_html_report_contains_escaped_ai_analysis(self):
+        html=render_report_html(self.sample_result())
+        self.assertIn('Analyse IA',html)
+        self.assertIn('AI Task · no-thinking',html)
+        self.assertIn('SYNTHÈSE<br>Tout va bien &lt;script&gt;.',html)
+        self.assertNotIn('Tout va bien <script>.',html)
+
+
 class PackageTests(unittest.TestCase):
     def test_yaml_and_installation_layout(self):
         import yaml
@@ -394,14 +463,16 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.2')
+        self.assertEqual(config['version'],'0.1.0-beta.3')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
-        for name in ['Dockerfile','run.sh','app/main.py','app/app.js','app/index.html','app/rendering/html_report.py']:
+        for name in ['Dockerfile','run.sh','app/main.py','app/app.js','app/index.html','app/rendering/html_report.py','app/analysis/ai_report.py']:
             self.assertTrue((addon/name).is_file(),name)
         index=(addon/'app/index.html').read_text()
         self.assertIn('reportHtmlButton', index)
         self.assertIn('Rapport HTML / PDF', index)
+        self.assertIn('reportAiEnabled', index)
+        self.assertIn('Think before responding', index)
     def test_healthy_report_no_raw_transfer(self):
         p=FakeProvider(rollup())
         resolved=PeriodEngine('UTC').resolve({'type':'custom','start':'1970-01-01','end':'1971-01-01'})

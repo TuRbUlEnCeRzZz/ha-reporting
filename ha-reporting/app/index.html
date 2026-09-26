@@ -15,7 +15,7 @@
   </button>
   <div>
     <h1>HA Reporting</h1>
-    <div class="subtitle">0.1.0-beta.2 · Catalogues & rapports</div>
+    <div class="subtitle">0.1.0-beta.3 · Catalogues, rapports & analyse IA</div>
   </div>
 </header>
 
@@ -112,6 +112,24 @@
             <option value="3">N-1 à N-3 ans</option>
           </select>
         </label>
+      </div>
+
+      <h3>Analyse IA</h3>
+      <p class="muted">L'IA reçoit uniquement les statistiques déjà calculées par HA Reporting. Pour un fonctionnement no-thinking avec Ollama, sélectionne une entité AI Task dont l'option « Think before responding » est désactivée.</p>
+      <label class="choiceItem aiChoice">
+        <input id="reportAiEnabled" type="checkbox">
+        <span>Inclure une analyse IA dans le rapport</span>
+      </label>
+      <div class="grid two">
+        <label>Entité AI Task
+          <select id="reportAiEntity">
+            <option value="">Entité AI Task préférée de Home Assistant</option>
+          </select>
+        </label>
+        <div class="aiModeInfo">
+          <span class="badge">no-thinking</span>
+          <span class="muted">Le mode de raisonnement est configuré sur l'entité AI Task ; HA Reporting ne le modifie pas à chaque appel.</span>
+        </div>
       </div>
 
       <div class="actions">

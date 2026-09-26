@@ -1,16 +1,17 @@
 # HA Reporting
 
-Add-on Home Assistant OS — version **0.1.0-beta.8**.
+Add-on Home Assistant OS — version **0.1.0-beta.9**.
 
-Beta.8 finalise l’analyse IA sans modifier le moteur statistique validé, le transport AI Task WebSocket ni le timeout configurable :
+Beta.9 introduit le socle documentaire local, sans plateforme tierce :
 
-- les comparaisons `partial`, `reconstructed` ou à couverture insuffisante sont explicitement marquées `descriptive_gap_only` dans le contexte IA ;
-- le prompt interdit désormais de présenter ces écarts comme une hausse/baisse annuelle réelle ;
-- reconstruction du compteur courant et couverture partielle de la référence sont distinguées explicitement ;
-- recommandations prudentes et longueur d’analyse inchangées ;
-- les métadonnées asynchrones de durée sont resynchronisées dans l’UI après la fin de l’AI Task ;
-- l’analyse IA reste placée après la synthèse générale et avant les données justificatives/comparaisons.
+- génération PDF native côté add-on avec WeasyPrint ;
+- thème clair/sombre du PDF aligné sur le thème actuellement visible dans HA Reporting ;
+- conservation persistante locale dans `/config/documents` ;
+- nom de fichier configurable par rapport avec variables dynamiques ;
+- politiques de doublons `version`, `overwrite` et `fail` ;
+- page **Documents** avec historique, téléchargement et suppression ;
+- aperçu du nom de sortie dans le plan de rapport ;
+- le PDF natif exige que l'analyse IA soit terminée lorsqu'elle est activée, afin de figer un document complet ;
+- aucune intégration Paperless ni `ExportProvider` dans cette version : ce sera le chantier beta.10.
 
-Le transport AI Task reste `ws://supervisor/core/websocket`, avec heartbeat 20 s, polling UI 2 s et timeout configurable (600 s par défaut). Aucune série brute VictoriaMetrics n’est transmise au modèle.
-
-Voir [VALIDATION-beta8.md](VALIDATION-beta8.md).
+Le moteur statistique, les comparaisons, les garde-fous runtime et le transport AI Task WebSocket restent inchangés.

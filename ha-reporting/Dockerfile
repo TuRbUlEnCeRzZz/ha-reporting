@@ -7,7 +7,7 @@ LABEL io.hass.version="${BUILD_VERSION}" \
       io.hass.type="app" \
       io.hass.arch="${BUILD_ARCH}"
 
-RUN apk add --no-cache python3 py3-yaml py3-websocket-client
+RUN apk add --no-cache python3 py3-yaml py3-websocket-client weasyprint font-dejavu
 
 WORKDIR /app
 COPY app/ /app/

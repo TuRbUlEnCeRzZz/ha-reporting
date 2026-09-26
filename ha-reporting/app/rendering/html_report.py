@@ -212,7 +212,7 @@ def _ai_analysis(result: dict[str, Any]) -> str:
         <div class="ai-text">{_e(error)}</div>
       </section>"""
 
-def render_report_html(result: dict[str, Any]) -> str:
+def render_report_html(result: dict[str, Any], theme: str = "dark") -> str:
     report = result.get("report") or {}
     period = result.get("resolved_period") or {}
     execution = result.get("execution") or {}
@@ -232,13 +232,24 @@ def render_report_html(result: dict[str, Any]) -> str:
 
     generated = _timestamp(execution.get("finished_at_epoch"), period.get("timezone"))
     title = report.get("name") or "Rapport Home Assistant"
+    theme = "light" if str(theme).lower() == "light" else "dark"
+    if theme == "light":
+        palette = "--ink:#212529;--muted:#667085;--line:#cfd6df;--paper:#ffffff;--canvas:#f3f5f7;--soft:#f7f9fb;--accent:#2563eb;--ref:#7c3aed;--good:#15803d;--warn:#b45309"
+        color_scheme = "light"
+        source_bg = "#ffffff"
+        device_bg = "#f7f9fb"
+    else:
+        palette = "--ink:#f2f4f7;--muted:#aeb7c2;--line:#39414b;--paper:#14191f;--canvas:#0c1015;--soft:#1a2028;--accent:#2563eb;--ref:#7c3aed;--good:#34d399;--warn:#f59e0b"
+        color_scheme = "dark"
+        source_bg = "#171d24"
+        device_bg = "#151b22"
     html = f"""<!doctype html>
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{_e(title)}</title>
 <style>
-:root{{--ink:#f2f4f7;--muted:#aeb7c2;--line:#39414b;--paper:#14191f;--canvas:#0c1015;--soft:#1a2028;--accent:#2563eb;--ref:#7c3aed;--good:#34d399;--warn:#f59e0b}}
+:root{{{palette}}}
 *{{box-sizing:border-box}}
-html{{color-scheme:dark;background:var(--canvas)}}
+html{{color-scheme:{color_scheme};background:var(--canvas)}}
 body{{margin:0;background:var(--canvas);color:var(--ink);font:14px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
 .page{{max-width:1180px;margin:28px auto;background:var(--paper);padding:38px 42px;box-shadow:0 12px 40px #0008;border:1px solid #252c35}}
 h1,h2,h3,h4,p{{margin-top:0}} h1{{font-size:28px;margin-bottom:6px}} h2{{font-size:20px;margin:28px 0 12px}} h3{{font-size:16px;margin:0}} h4{{font-size:12px;margin:0 0 3px;overflow-wrap:anywhere}}
@@ -253,11 +264,11 @@ button{{border:0;border-radius:8px;background:var(--accent);color:#fff;padding:9
 .summary span{{display:block;color:var(--muted);font-size:11px}} .summary strong{{font-size:19px}}
 .catalog{{break-inside:auto}}
 .catalog>h2,.device-title,.section-title,.comparisons>h1{{break-after:avoid-page;page-break-after:avoid}}
-.device{{background:#151b22;border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0 20px;break-inside:auto}}
+.device{{background:{device_bg};border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0 20px;break-inside:auto}}
 .device-title,.section-title{{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;margin-bottom:12px}}
 .device-title p,.section-title p{{color:var(--muted);margin:2px 0 0}} .device-title>span{{color:var(--muted);font-size:11px}}
 .source-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;break-inside:auto}}
-.source,.compare-source{{background:#171d24;border:1px solid var(--line);border-radius:10px;padding:12px;break-inside:avoid;page-break-inside:avoid}}
+.source,.compare-source{{background:{source_bg};border:1px solid var(--line);border-radius:10px;padding:12px;break-inside:avoid;page-break-inside:avoid}}
 .source-head{{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}}
 .pill{{font-size:9px;border:1px solid #4a5562;border-radius:999px;padding:3px 7px;color:var(--muted);background:#11161c}}
 .metrics{{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0 8px}}
@@ -293,10 +304,10 @@ footer{{border-top:1px solid var(--line);margin-top:28px;padding-top:12px;color:
   .catalog,.device,.comparison-block{{break-inside:auto;page-break-inside:auto}}
   .catalog>h2,.device-title,.section-title,.comparisons>h1{{break-after:avoid-page;page-break-after:avoid}}
   .source-grid{{gap:6px;break-inside:auto;page-break-inside:auto}}
-  .source,.compare-source{{padding:8px;background:#171d24!important;break-inside:avoid;page-break-inside:avoid}}
+  .source,.compare-source{{padding:8px;background:{source_bg}!important;break-inside:avoid;page-break-inside:avoid}}
   .device{{padding:10px;margin:8px 0 12px;background:#151b22!important}}
   .comparison-block{{margin-top:16px;padding-top:12px}}
-  .ai-analysis{{margin:8px 0 14px;padding:10px;background:#151b22!important;break-inside:auto;page-break-inside:auto}}
+  .ai-analysis{{margin:8px 0 14px;padding:10px;background:{device_bg}!important;break-inside:auto;page-break-inside:auto}}
   .ai-text{{padding:9px;background:var(--soft)!important;break-inside:auto;page-break-inside:auto}}
   .compare-bars i{{background:var(--accent)!important;box-shadow:inset 0 0 0 99px var(--accent)!important}}
   .compare-bars i.ref{{background:var(--ref)!important;box-shadow:inset 0 0 0 99px var(--ref)!important}}

@@ -1,6 +1,7 @@
 let entities = [];
 let catalogs = [];
 let reports = [];
+let documents = [];
 let editingReportId = null;
 let previewReportId = null;
 let categories = [];
@@ -410,6 +411,7 @@ function renderReports(){
             <span class="reportPeriodPill">${custom}</span>
             ${comparisonLabels.length ? `<span class="reportPeriodPill">${esc(comparisonLabels.join(" · "))}</span>` : ""}
             ${(report.ai_analysis || {}).enabled ? `<span class="reportPeriodPill">Analyse IA · no-thinking</span>` : ""}
+            <span class="reportPeriodPill">PDF natif local</span>
           </div>
           <div class="reportActions">
             <button class="primary" onclick="previewReport('${esc(report.id)}')">Aperçu</button>
@@ -470,6 +472,28 @@ async function populateReportAiEntities(selectedId=""){
   updateReportAiFields();
 }
 
+function localFilenamePreview(){
+  const template = ($("reportFilenameTemplate")?.value || "{report_id}_{period_start}_{period_end}").trim();
+  const now = new Date();
+  const yyyy = String(now.getFullYear()).padStart(4,"0");
+  const mm = String(now.getMonth()+1).padStart(2,"0");
+  const dd = String(now.getDate()).padStart(2,"0");
+  const reportName = $("reportName")?.value || "rapport";
+  const reportId = editingReportId || slug(reportName) || "rapport";
+  const replacements = {
+    report_id:reportId, report_name:reportName, year:yyyy, month:mm, day:dd,
+    period_start:`${yyyy}-${mm}-${dd}`, period_end:`${yyyy}-${mm}-${dd}`,
+    period_type:$("reportPeriodType")?.value || "month",
+    generated_date:`${yyyy}-${mm}-${dd}`,
+    generated_datetime:`${yyyy}-${mm}-${dd}_${String(now.getHours()).padStart(2,"0")}-${String(now.getMinutes()).padStart(2,"0")}-${String(now.getSeconds()).padStart(2,"0")}`,
+    comparison:"none"
+  };
+  let name = template.replace(/\{([a-zA-Z0-9_]+)\}/g, (_m,key) => Object.prototype.hasOwnProperty.call(replacements,key) ? replacements[key] : `{${key}}`);
+  name = name.replace(/[<>:"/\\|?*\x00-\x1f]/g,"_").replace(/\s+/g,"_").replace(/_+/g,"_").replace(/^[ ._]+|[ ._]+$/g,"") || "rapport";
+  if(!name.toLowerCase().endsWith(".pdf")) name += ".pdf";
+  if($("reportFilenamePreview")) $("reportFilenamePreview").textContent = name;
+}
+
 async function showReportForm(reportId=null, push=true){
   await loadCatalogs();
   editingReportId = reportId;
@@ -504,8 +528,13 @@ async function showReportForm(reportId=null, push=true){
   $("reportAiTimeout").value = String(aiAnalysis.timeout_seconds || 600);
   await populateReportAiEntities(aiAnalysis.entity_id || "");
 
+  const output = report ? (report.output || {}) : {};
+  $("reportFilenameTemplate").value = output.filename_template || "{report_id}_{period_start}_{period_end}";
+  $("reportDuplicatePolicy").value = output.duplicate_policy || "version";
+
   renderReportCatalogChoices(report ? report.catalogs : []);
   updateReportPeriodFields();
+  localFilenamePreview();
 
   setPage("reportFormPage", {reportId}, push);
 }
@@ -539,6 +568,10 @@ function reportPayloadFromForm(){
       entity_id:$("reportAiEntity").value || "",
       mode:"no_thinking_expected",
       timeout_seconds:Number($("reportAiTimeout").value || 600)
+    },
+    output:{
+      filename_template:$("reportFilenameTemplate").value || "{report_id}_{period_start}_{period_end}",
+      duplicate_policy:$("reportDuplicatePolicy").value || "version"
     }
   };
 }
@@ -587,6 +620,7 @@ async function previewReport(reportId, push=true){
   $("reportPreviewStatus").textContent = "Résolution en cours…";
   $("reportPreviewResult").classList.add("hidden");
   $("reportHtmlButton").classList.add("hidden");
+  $("reportPdfButton").classList.add("hidden");
 
   setPage("reportPreviewPage", {reportId}, push);
 
@@ -644,6 +678,13 @@ function renderReportPlan(plan){
       <div class="seriesStat"><div class="label">Requêtes estimées</div><div class="value">${esc(scope.estimated_source_queries || scope.source_count)}</div></div>
       <div class="seriesStat"><div class="label">Mode prévu</div><div class="value">${strategy.base_mode === "provider_rollup" ? "Optimisé" : "Détaillé"}</div></div>
     </div>
+
+    ${(plan.output || {}).filename_preview ? `
+      <div class="outputPreviewBox">
+        <b>Sortie PDF native</b>
+        <span>${esc(plan.output.filename_preview)}</span>
+        <small>Stockage local persistant · doublons : ${esc(plan.output.duplicate_policy || "version")}</small>
+      </div>` : ""}
 
     ${strategy.base_mode === "provider_rollup" ? `
       <div class="optimizationNote">
@@ -1047,6 +1088,7 @@ async function executeReport(reportId){
 
     renderExecutedReport(data.result);
     $("reportHtmlButton").classList.remove("hidden");
+    $("reportPdfButton").classList.remove("hidden");
 
     if(ai.enabled && (ai.status === "pending" || ai.status === "running")){
       runAiAnalysis(reportId, data.result);
@@ -1056,8 +1098,99 @@ async function executeReport(reportId){
   }
 }
 
+function currentUiTheme(){
+  try{
+    const probe=document.createElement("span");
+    probe.style.color="var(--hr-bg)";
+    probe.style.position="absolute";
+    probe.style.opacity="0";
+    document.body.appendChild(probe);
+    const color=getComputedStyle(probe).color;
+    probe.remove();
+    const values=(color.match(/[\d.]+/g)||[]).slice(0,3).map(Number);
+    if(values.length===3){
+      const luminance=(0.2126*values[0])+(0.7152*values[1])+(0.0722*values[2]);
+      return luminance < 145 ? "dark" : "light";
+    }
+  }catch(_){ }
+  return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+async function generateNativePdf(){
+  if(!previewReportId) return;
+  const button=$("reportPdfButton");
+  const old=button.textContent;
+  button.disabled=true;
+  button.textContent="Génération PDF…";
+  try{
+    const response=await fetch(`api/report/${encodeURIComponent(previewReportId)}/pdf`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({theme:currentUiTheme()})});
+    const data=await response.json();
+    if(!response.ok) throw new Error(data.error || "Génération PDF impossible");
+    const doc=data.document || {};
+    $("reportPreviewStatus").textContent += ` · PDF local : ${doc.filename || "généré"}`;
+    button.textContent="PDF généré ✓";
+  }catch(error){
+    $("reportPreviewStatus").textContent += ` · PDF : ${String(error.message || error)}`;
+    $("reportPreviewStatus").classList.add("error");
+  }finally{
+    button.disabled=false;
+    setTimeout(()=>{button.textContent=old;},1800);
+  }
+}
+
+function formatBytes(bytes){
+  const n=Number(bytes||0);
+  if(n<1024) return `${n} o`;
+  if(n<1024*1024) return `${(n/1024).toFixed(1)} Ko`;
+  return `${(n/1024/1024).toFixed(1)} Mo`;
+}
+
+async function showDocuments(push=true){
+  setPage("documentsPage",{},push);
+  await loadDocuments();
+}
+
+async function loadDocuments(){
+  const response=await fetch("api/documents",{cache:"no-store"});
+  const data=await response.json();
+  documents=data.documents||[];
+  renderDocuments();
+}
+
+function renderDocuments(){
+  if(!documents.length){
+    $("documentList").innerHTML='<div class="card empty">Aucun PDF natif généré.</div>';
+    return;
+  }
+  $("documentList").innerHTML=documents.map(doc=>`
+    <div class="documentCard">
+      <div class="documentInfo">
+        <div class="reportTitle">${esc(doc.filename)}</div>
+        <div class="reportMeta">${esc(doc.report_name || doc.report_id)} · ${esc(doc.generated_at || "")} · ${esc(formatBytes(doc.size_bytes))}</div>
+        <span class="reportPeriodPill">${esc((doc.period||{}).label || "")}</span>
+        <span class="reportPeriodPill">PDF local</span>
+      </div>
+      <div class="reportActions">
+        <button onclick="downloadDocument('${esc(doc.id)}')">Télécharger</button>
+        <button class="danger" onclick="deleteDocument('${esc(doc.id)}','${esc(doc.filename)}')">Supprimer</button>
+      </div>
+    </div>`).join("");
+}
+
+function downloadDocument(id){
+  window.open(`api/document/${encodeURIComponent(id)}/download`,"_blank","noopener");
+}
+
+async function deleteDocument(id,filename){
+  if(!confirm(`Supprimer le document local « ${filename} » ?`)) return;
+  const response=await fetch(`api/document/${encodeURIComponent(id)}`,{method:"DELETE"});
+  const data=await response.json();
+  if(!response.ok){alert(data.error||"Suppression impossible");return;}
+  await loadDocuments();
+}
+
 function setPage(page, state={}, push=true){
-  ["homePage","reportsPage","reportFormPage","reportPreviewPage","deviceAnalysisPage","providersPage","catalogPage","devicePage"].forEach(id => $(id).classList.add("hidden"));
+  ["homePage","reportsPage","documentsPage","reportFormPage","reportPreviewPage","deviceAnalysisPage","providersPage","catalogPage","devicePage"].forEach(id => $(id).classList.add("hidden"));
   $(page).classList.remove("hidden");
   $("backButton").classList.toggle("hidden", page === "homePage");
   if(push) history.pushState({page, ...state}, "", "");
@@ -1099,12 +1232,16 @@ async function addDeviceTo(id, name, push=true){
 $("backButton").addEventListener("click", () => history.back());
 $("newCatalogButton").addEventListener("click", () => showNewCatalog());
 $("reportsButton").addEventListener("click", () => showReports());
+$("documentsButton").addEventListener("click", () => showDocuments());
+$("refreshDocumentsButton").addEventListener("click", () => loadDocuments());
 $("newReportButton").addEventListener("click", () => showReportForm());
 $("saveReportButton").addEventListener("click", saveReportDefinition);
-$("reportPeriodType").addEventListener("change", updateReportPeriodFields);
+$("reportPeriodType").addEventListener("change", () => { updateReportPeriodFields(); localFilenamePreview(); });
+$("reportFilenameTemplate").addEventListener("input", localFilenamePreview);
 $("reportAiEnabled").addEventListener("change", updateReportAiFields);
 $("reportName").addEventListener("input", () => {
   if(!editingReportId) $("reportId").value = slug($("reportName").value);
+  localFilenamePreview();
 });
 $("refreshReportPreviewButton").addEventListener("click", () => {
   if(previewReportId) previewReport(previewReportId, false);
@@ -1116,6 +1253,7 @@ $("reportHtmlButton").addEventListener("click", () => {
   if(!previewReportId) return;
   window.open(`api/report/${encodeURIComponent(previewReportId)}/html`, "_blank", "noopener");
 });
+$("reportPdfButton").addEventListener("click", generateNativePdf);
 $("providersButton").addEventListener("click", () => showProviders());
 $("seriesCatalog").addEventListener("change", populateSeriesDevices);
 $("seriesDevice").addEventListener("change", populateSeriesSensors);
@@ -1171,6 +1309,7 @@ window.addEventListener("popstate", async event => {
   if(state.page === "reportPreviewPage") await previewReport(state.reportId, false);
   else if(state.page === "reportFormPage") await showReportForm(state.reportId || null, false);
   else if(state.page === "reportsPage") await showReports(false);
+  else if(state.page === "documentsPage") await showDocuments(false);
   else if(state.page === "deviceAnalysisPage") await showDeviceAnalysis(state.catalogId, state.deviceId, false);
   else if(state.page === "providersPage") await showProviders(false);
   else if(state.page === "catalogPage") showNewCatalog(false);

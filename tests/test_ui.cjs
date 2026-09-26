@@ -35,4 +35,11 @@ check(() => assert.match(sandbox.renderAiAnalysis({ai_analysis:{enabled:true,sta
 check(() => assert.match(sandbox.renderAiAnalysis({ai_analysis:{enabled:true,status:'pending'}}), /rapport est terminé/));
 check(() => assert.match(source, /statusData\.execution/));
 check(() => assert.match(source, /result\.execution = \{\.\.\.\(result\.execution \|\| \{\}\), \.\.\.statusData\.execution\}/));
+
+check(() => assert.match(source, /function generateNativePdf\(/));
+check(() => assert.match(source, /function currentUiTheme\(/));
+check(() => assert.match(source, /JSON\.stringify\(\{theme:currentUiTheme\(\)\}\)/));
+check(() => assert.match(source, /function showDocuments\(/));
+check(() => assert.match(source, /reportFilenameTemplate/));
+check(() => assert.match(source, /api\/document\/\$\{encodeURIComponent\(id\)\}\/download/));
 console.log(`${checks} JavaScript UI checks passed`);

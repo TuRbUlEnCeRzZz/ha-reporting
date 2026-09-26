@@ -1,3 +1,12 @@
+## 0.1.0-beta.9
+
+- PDF natif local via WeasyPrint.
+- Stockage persistant des documents sous `/config/documents`.
+- Modèles de nom de fichier configurables avec variables dynamiques.
+- Gestion des doublons : version, remplacement ou refus.
+- Nouvelle page Documents : historique, téléchargement et suppression.
+- Aucun export tiers dans cette version.
+
 ## 0.1.0-beta.8
 
 - Add explicit AI comparison wording policies: `full_period_change_allowed`, `descriptive_gap_only` and `no_change_claim`.

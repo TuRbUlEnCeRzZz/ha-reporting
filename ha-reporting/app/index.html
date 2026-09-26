@@ -15,7 +15,7 @@
   </button>
   <div>
     <h1>HA Reporting</h1>
-    <div class="subtitle">0.1.0-beta.8 · Catalogues, rapports & analyse IA</div>
+    <div class="subtitle">0.1.0-beta.9 · Rapports, PDF natifs & documents</div>
   </div>
 </header>
 
@@ -41,9 +41,23 @@
         <h2>Rapports</h2>
         <p class="muted">Les rapports associent un ou plusieurs catalogues à une définition de période.</p>
       </div>
-      <button class="primary" id="newReportButton">+ Nouveau rapport</button>
+      <div class="toolbarButtons">
+        <button id="documentsButton">Documents</button>
+        <button class="primary" id="newReportButton">+ Nouveau rapport</button>
+      </div>
     </div>
     <div id="reportList"></div>
+  </section>
+
+  <section id="documentsPage" class="hidden">
+    <div class="toolbar">
+      <div>
+        <h2>Documents</h2>
+        <p class="muted">PDF natifs générés et conservés localement par HA Reporting.</p>
+      </div>
+      <button id="refreshDocumentsButton">Actualiser</button>
+    </div>
+    <div id="documentList"></div>
   </section>
 
   <section id="reportFormPage" class="hidden">
@@ -140,6 +154,25 @@
         </div>
       </div>
 
+      <h3>Sortie du rapport</h3>
+      <p class="muted">Le PDF natif est toujours généré et conservé localement. Le nom peut utiliser des variables pour préparer de futurs workflows d'export.</p>
+      <div class="grid two">
+        <label>Modèle de nom de fichier
+          <input id="reportFilenameTemplate" placeholder="{report_id}_{period_start}_{period_end}">
+        </label>
+        <label>Si le nom existe déjà
+          <select id="reportDuplicatePolicy">
+            <option value="version" selected>Créer une nouvelle version (_2, _3…)</option>
+            <option value="overwrite">Remplacer le document local</option>
+            <option value="fail">Refuser la génération</option>
+          </select>
+        </label>
+      </div>
+      <div class="outputHelp">
+        Variables : <code>{report_id}</code> <code>{report_name}</code> <code>{year}</code> <code>{month}</code> <code>{day}</code> <code>{period_start}</code> <code>{period_end}</code> <code>{period_type}</code> <code>{generated_date}</code> <code>{generated_datetime}</code> <code>{comparison}</code>
+      </div>
+      <div class="filenamePreview">Aperçu : <strong id="reportFilenamePreview">—</strong></div>
+
       <div class="actions">
         <button class="primary" id="saveReportButton">Enregistrer le rapport</button>
         <span id="reportFormMessage" class="statusText"></span>
@@ -156,7 +189,8 @@
         </div>
         <div class="toolbarButtons">
           <button id="refreshReportPreviewButton">Actualiser la période</button>
-          <button id="reportHtmlButton" class="hidden">Rapport HTML / PDF</button>
+          <button id="reportHtmlButton" class="hidden">Rapport HTML</button>
+          <button id="reportPdfButton" class="hidden">Générer PDF natif</button>
           <button class="primary" id="executeReportButton">Exécuter le rapport</button>
         </div>
       </div>

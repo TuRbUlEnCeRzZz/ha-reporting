@@ -24,6 +24,9 @@ from periods.engine import PeriodEngine
 from comparisons.engine import ComparisonEngine
 from rendering.html_report import render_report_html
 from analysis.ai_report import compact_report_context, _extract_service_response, _extract_ai_task_payload, _instructions, _sanitize_ai_text, analyze_report_with_ai
+from document_store import validate_output_config, render_filename
+import document_store
+from rendering.pdf_report import render_pdf_native
 import main
 
 SOURCE = {'entity_id': 'sensor.runtime', 'metric': 'runtime', 'unit': 'h'}
@@ -564,6 +567,12 @@ class HtmlRendererTests(unittest.TestCase):
         self.assertIn('runtime vérifié',html)
         self.assertIn('20.2 h',html)
 
+    def test_html_report_light_theme_palette(self):
+        html=render_report_html(self.sample_result(), theme='light')
+        self.assertIn('--paper:#ffffff',html)
+        self.assertIn('color-scheme:light',html)
+        self.assertNotIn('--paper:#14191f',html)
+
     def test_html_report_contains_escaped_ai_analysis(self):
         html=render_report_html(self.sample_result())
         self.assertIn('Analyse IA',html)
@@ -575,6 +584,57 @@ class HtmlRendererTests(unittest.TestCase):
         self.assertIn('permettent de vérifier, nuancer ou contester cette analyse', html)
 
 
+class Beta9DocumentTests(unittest.TestCase):
+    def test_output_defaults_and_template_variables(self):
+        cfg=validate_output_config({})
+        self.assertEqual(cfg['duplicate_policy'],'version')
+        report={'id':'rapport_test','name':'Rapport test','period':{'type':'month'},'comparisons':{'previous_years':1}}
+        period={'start':'2026-09-01T00:00:00+02:00','end':'2026-10-01T00:00:00+02:00','timezone':'Europe/Zurich'}
+        name=render_filename(report,period,{'filename_template':'{report_id}_{year}-{month}_{comparison}','duplicate_policy':'version'})
+        self.assertEqual(name,'rapport_test_2026-09_N-1a.pdf')
+
+    def test_unknown_filename_variable_rejected(self):
+        with self.assertRaises(ValueError):
+            validate_output_config({'filename_template':'{unknown}'})
+
+    def test_report_summary_exposes_output_defaults(self):
+        report={'id':'r','name':'R','catalogs':[],'period':{'type':'month','mode':'current'},'comparisons':{},'ai_analysis':{}}
+        with patch.object(main,'load_catalog',side_effect=FileNotFoundError):
+            summary=main.report_summary(report)
+        self.assertEqual(summary['output']['filename_template'],'{report_id}_{period_start}_{period_end}')
+        self.assertTrue(summary['output']['local_storage'])
+
+    def test_native_pdf_renderer_produces_pdf(self):
+        html='<!doctype html><html><body><h1>HA Reporting beta.9</h1></body></html>'
+        pdf=render_pdf_native(html,timeout_seconds=30)
+        try:
+            self.assertTrue(pdf.is_file())
+            self.assertGreater(pdf.stat().st_size,1000)
+            self.assertTrue(pdf.read_bytes().startswith(b'%PDF'))
+        finally:
+            import shutil
+            shutil.rmtree(pdf.parent,ignore_errors=True)
+
+    def test_document_store_versions_duplicates_and_deletes(self):
+        import tempfile
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td)
+            with patch.object(document_store,'DOCUMENT_DIR',root):
+                period={'label':'Septembre','start':'2026-09-01T00:00:00+02:00','end':'2026-10-01T00:00:00+02:00','timezone':'Europe/Zurich'}
+                generated=datetime(2026,9,30,12,0,tzinfo=ZoneInfo('Europe/Zurich'))
+                for expected in ('rapport.pdf','rapport_2.pdf'):
+                    temp=root/f'temp-{expected}'
+                    temp.write_bytes(b'%PDF-1.4\n'+b'x'*1200)
+                    manifest=document_store.register_pdf(temp,filename='rapport.pdf',report_id='r',report_name='R',resolved_period=period,output_config={'filename_template':'rapport','duplicate_policy':'version'},generated_at=generated)
+                    self.assertEqual(manifest['filename'],expected)
+                docs=document_store.list_documents()
+                self.assertEqual(len(docs),2)
+                deleted=document_store.delete_document(docs[0]['id'])
+                self.assertTrue(deleted['ok'])
+                self.assertEqual(len(document_store.list_documents()),1)
+
 class PackageTests(unittest.TestCase):
     def test_yaml_and_installation_layout(self):
         import yaml
@@ -582,15 +642,19 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.8')
+        self.assertEqual(config['version'],'0.1.0-beta.9')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertIn('py3-websocket-client',(addon/'Dockerfile').read_text())
+        self.assertIn('weasyprint',(addon/'Dockerfile').read_text())
         for name in ['Dockerfile','run.sh','app/main.py','app/app.js','app/index.html','app/rendering/html_report.py','app/analysis/ai_report.py']:
             self.assertTrue((addon/name).is_file(),name)
         index=(addon/'app/index.html').read_text()
         self.assertIn('reportHtmlButton', index)
-        self.assertIn('Rapport HTML / PDF', index)
+        self.assertIn('Rapport HTML', index)
+        self.assertIn('reportPdfButton', index)
+        self.assertIn('documentsPage', index)
+        self.assertIn('reportFilenameTemplate', index)
         self.assertIn('reportAiEnabled', index)
         self.assertIn('Think before responding', index)
     def test_healthy_report_no_raw_transfer(self):

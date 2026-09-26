@@ -9,9 +9,11 @@ import threading
 import copy
 import uuid
 import urllib.request
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, unquote
+from zoneinfo import ZoneInfo
 
 import yaml
 
@@ -21,6 +23,16 @@ from analysis.device import DeviceAnalysisEngine
 from periods.engine import PeriodEngine
 from comparisons.engine import ComparisonEngine
 from rendering.html_report import render_report_html
+from rendering.pdf_report import render_pdf_native
+from document_store import (
+    DOCUMENT_DIR,
+    delete_document,
+    get_document,
+    list_documents,
+    register_pdf,
+    render_filename,
+    validate_output_config,
+)
 from analysis.ai_report import analyze_report_with_ai
 
 PORT = 8099
@@ -714,6 +726,10 @@ def _validated_ai_analysis(payload):
     }
 
 
+def _validated_output(payload):
+    return validate_output_config(payload.get("output") or {})
+
+
 def report_summary(data):
     catalog_ids = data.get("catalogs") or []
     catalog_names = []
@@ -739,6 +755,7 @@ def report_summary(data):
             "mode": "no_thinking_expected",
             "timeout_seconds": _ai_timeout_seconds(data.get("ai_analysis") or {}),
         },
+        "output": validate_output_config(data.get("output") or {}),
     }
 
 
@@ -782,6 +799,7 @@ def create_report(payload):
         "period": _validated_period_spec(payload),
         "comparisons": _validated_comparisons(payload),
         "ai_analysis": _validated_ai_analysis(payload),
+        "output": _validated_output(payload),
     }
     save_report(data)
     log.info("Report created: %s", report_id)
@@ -808,6 +826,9 @@ def update_report(report_id, payload):
 
     if "ai_analysis" in payload:
         data["ai_analysis"] = _validated_ai_analysis(payload)
+
+    if "output" in payload:
+        data["output"] = _validated_output(payload)
 
     save_report(data)
     log.info("Report updated: %s", report_id)
@@ -916,11 +937,18 @@ def build_report_plan(report_id):
         source_count=source_count,
         comparison_targets=comparison_targets,
     )
+    output_config = validate_output_config(report.get("output") or {})
+    output_filename_preview = render_filename(
+        report_summary(report),
+        resolved.as_dict(),
+        output_config,
+    )
 
     return {
         "report_version": 1,
         "report": report_summary(report),
         "resolved_period": resolved.as_dict(),
+        "output": {**output_config, "filename_preview": output_filename_preview},
         "scope": {
             "catalog_count": len(catalog_plans),
             "device_count": device_count,
@@ -1264,6 +1292,49 @@ def start_ai_analysis(report_id):
         return copy.deepcopy(running)
 
 
+def generate_report_pdf(report_id, theme="dark"):
+    report = load_report(report_id)
+    result = _cached_report_result(report_id)
+    if result is None:
+        raise RuntimeError("Exécutez d'abord le rapport avant de générer le PDF")
+
+    ai_config = report.get("ai_analysis") or {}
+    ai = result.get("ai_analysis") or {}
+    if bool(ai_config.get("enabled")) and ai.get("status") in {"pending", "running"}:
+        raise RuntimeError("L'analyse IA est encore en cours. Attendez sa fin avant de générer le PDF natif.")
+
+    output_config = validate_output_config(report.get("output") or {})
+    generated_at = datetime.now(ZoneInfo((result.get("resolved_period") or {}).get("timezone") or "UTC"))
+    filename = render_filename(
+        report_summary(report),
+        result.get("resolved_period") or {},
+        output_config,
+        generated_at,
+    )
+    theme = "light" if str(theme).lower() == "light" else "dark"
+    html = render_report_html(result, theme=theme)
+    temp_pdf = render_pdf_native(html)
+    try:
+        manifest = register_pdf(
+            temp_pdf,
+            filename=filename,
+            report_id=report_id,
+            report_name=str(report.get("name") or report_id),
+            resolved_period=result.get("resolved_period") or {},
+            output_config=output_config,
+            generated_at=generated_at,
+            pdf_theme=theme,
+        )
+    finally:
+        # register_pdf moves the file on success; cleanup the temporary directory either way.
+        temp_parent = temp_pdf.parent
+        if temp_parent.exists():
+            import shutil
+            shutil.rmtree(temp_parent, ignore_errors=True)
+    log.info("Native PDF generated: %s", manifest.get("filename"))
+    return manifest
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         pass
@@ -1289,6 +1360,20 @@ class Handler(BaseHTTPRequestHandler):
         tail = path.split("/api/report/", 1)[1]
         return [unquote(part) for part in tail.strip("/").split("/") if part]
 
+    def path_parts_after_document(self, path):
+        tail = path.split("/api/document/", 1)[1]
+        return [unquote(part) for part in tail.strip("/").split("/") if part]
+
+    def send_file(self, path, filename, content_type="application/pdf"):
+        body = Path(path).read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Disposition", f'attachment; filename="{str(filename).replace(chr(34), "_")}"')
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         path = urlparse(self.path).path
         try:
@@ -1300,6 +1385,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_payload(200, {"catalogs": list_catalogs()})
             if path.endswith("/api/reports"):
                 return self.send_payload(200, {"reports": list_reports()})
+            if path.endswith("/api/documents"):
+                return self.send_payload(200, {"documents": list_documents()})
+            if "/api/document/" in path and path.endswith("/download"):
+                parts = self.path_parts_after_document(path)
+                if len(parts) == 2 and parts[1] == "download":
+                    document = get_document(parts[0])
+                    return self.send_file(document["path"], document["filename"])
             if path.endswith("/api/timezone"):
                 return self.send_payload(200, {"timezone": home_assistant_timezone()})
             if "/api/report/" in path and path.endswith("/ai-analysis"):
@@ -1347,6 +1439,9 @@ class Handler(BaseHTTPRequestHandler):
             if "/api/report/" in path and path.endswith("/ai-analysis"):
                 parts = self.path_parts_after_report(path)
                 return self.send_payload(202, {"ai_analysis": start_ai_analysis(parts[0])})
+            if "/api/report/" in path and path.endswith("/pdf"):
+                parts = self.path_parts_after_report(path)
+                return self.send_payload(200, {"document": generate_report_pdf(parts[0], payload.get("theme"))})
             if "/api/report/" in path and path.endswith("/execute"):
                 parts = self.path_parts_after_report(path)
                 return self.send_payload(200, {"result": execute_report(parts[0])})
@@ -1386,6 +1481,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         path = urlparse(self.path).path
         try:
+            if "/api/document/" in path:
+                parts = self.path_parts_after_document(path)
+                if len(parts) == 1:
+                    return self.send_payload(200, delete_document(parts[0]))
             if "/api/report/" in path:
                 parts = self.path_parts_after_report(path)
                 if len(parts) == 1:
@@ -1405,6 +1504,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     CATALOG_DIR.mkdir(parents=True, exist_ok=True)
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    DOCUMENT_DIR.mkdir(parents=True, exist_ok=True)
     log.info("Starting HA Reporting catalog manager on port %d", PORT)
     try:
         log.info("Home Assistant API connection successful: %d entities", len(home_assistant_states()))

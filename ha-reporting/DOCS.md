@@ -1,32 +1,20 @@
-# HA Reporting — 0.1.0-beta.8
+# HA Reporting — 0.1.0-beta.9
 
-Bêta 0.1.0-beta.8 pour Home Assistant OS, notamment sur Raspberry Pi 4 (aarch64).
-Les calculs, contrôles de qualité, rollups, comparaisons et vérifications runtime
-de l’alpha.23 restent gelés. beta.2 consolide la sortie imprimable : le document
-HTML et la sortie PDF navigateur partagent désormais le même thème sombre et
-conservent les graphiques de comparaison.
+Bêta 0.1.0-beta.9 pour Home Assistant OS, notamment sur Raspberry Pi 4 (aarch64).
+Le moteur statistique, les comparaisons N/N-x, la vérification runtime et l'analyse IA restent inchangés. Beta.9 ajoute la couche documentaire locale.
 
-## Rapport HTML et sortie PDF
+## Rapport HTML et PDF natif
 
-Après une exécution réussie, le bouton **Rapport HTML / PDF** ouvre un document
-autonome généré à partir des mêmes résultats structurés. Le rendu comprend :
+Après une exécution réussie, HA Reporting propose deux sorties complémentaires :
 
-- l’en-tête, la période, le fuseau et les métadonnées d’exécution ;
-- une synthèse de qualité (sources OK, erreurs, runtimes vérifiés, fallbacks) ;
-- des cartes adaptées aux métriques puissance, énergie, temps, cycles et température ;
-- les indicateurs de couverture/densité et les vérifications runtime ;
-- les comparaisons N/N-x avec mini-graphiques N / référence ;
-- une feuille de style A4 sombre dédiée à l’impression, avec couleurs et graphiques préservés ;
-- des règles de pagination qui laissent les catalogues/appareils se fragmenter entre pages tout en gardant chaque carte source intacte.
+- **Rapport HTML** : document autonome consultable dans le navigateur ;
+- **Générer PDF natif** : PDF créé directement par l'add-on avec WeasyPrint, sans utiliser la boîte d'impression du navigateur ni une plateforme externe.
 
-Le document n’utilise aucune ressource web externe. Le bouton **Imprimer /
-enregistrer en PDF** s’appuie pour l’instant sur la fonction d’impression du
-navigateur. beta.2 demande explicitement la fidélité des couleurs d’impression
-(`print-color-adjust: exact`) et ne force plus un fond blanc en mode print.
-La génération PDF serveur et l’envoi Paperless restent des étapes suivantes.
+Le PDF reprend le même contenu structuré : synthèse générale, analyse IA lorsqu'elle est activée, données justificatives, comparaisons N/N-x et graphiques. Le thème clair/sombre est aligné sur le thème visible dans HA Reporting au moment de la génération.
 
-L’URL technique est `GET /api/report/{id}/html`. Elle réexécute le rapport au
-moment de l’ouverture afin que le document reflète les données courantes.
+Le PDF est conservé dans le stockage persistant de l'add-on sous `/config/documents` et apparaît dans la page **Documents**, depuis laquelle il peut être téléchargé ou supprimé.
+
+Si l'analyse IA est activée et encore en cours, la génération PDF native est refusée temporairement afin d'éviter de figer un rapport incomplet.
 
 ## Runtimes, vérification brute et fallback ciblé
 
@@ -107,7 +95,7 @@ restent disponibles. Les règles de comparaison sont conservées.
    `Dockerfile`) vers `/addons/ha-reporting` sur Home Assistant OS.
 3. Actualiser le magasin des add-ons, puis installer ou reconstruire l'add-on
    local HA Reporting selon le mode d'installation existant.
-4. Vérifier la version 0.1.0-beta.8 dans les journaux et relancer les rapports.
+4. Vérifier la version 0.1.0-beta.9 dans les journaux et relancer les rapports.
 
 Ne pas copier le dossier de dépôt complet à la place du dossier de l'add-on.
 Pour une installation issue d'un dépôt Git, mettre à jour les fichiers du même
@@ -119,7 +107,7 @@ L'archive contient les sources à construire par Supervisor, pas une image OCI.
 - [Rollups MetricsQL](https://docs.victoriametrics.com/victoriametrics/metricsql/)
 - [Export JSONL VictoriaMetrics](https://docs.victoriametrics.com/victoriametrics/single-server-victoriametrics/#how-to-export-data-in-json-line-format)
 
-Voir `VALIDATION-beta7.md` à la racine du dépôt pour les tests et résultats.
+Voir `VALIDATION-beta9.md` à la racine du dépôt pour les tests et résultats.
 
 ## Analyse IA optionnelle (beta.6)
 
@@ -164,3 +152,19 @@ Les temps restent séparés entre moteur statistique et IA. Après achèvement d
 
 En impression, l’analyse IA reste placée juste après la synthèse générale, avant les données détaillées et les comparaisons qui servent de référence pour vérifier ou contester l’interprétation.
 
+
+## PDF natif et documents (beta.9)
+
+Chaque définition de rapport peut configurer un modèle de nom de fichier et une politique de doublons. Le PDF natif est généré localement par l'add-on avec WeasyPrint puis conservé dans le stockage persistant de l'add-on sous `/config/documents`.
+
+Variables disponibles pour le nom : `{report_id}`, `{report_name}`, `{year}`, `{month}`, `{day}`, `{period_start}`, `{period_end}`, `{period_type}`, `{generated_date}`, `{generated_datetime}`, `{comparison}`.
+
+Politiques de doublons :
+
+- `version` : crée automatiquement `_2`, `_3`, etc. ;
+- `overwrite` : remplace le document local portant le même nom ;
+- `fail` : refuse la génération si le nom existe déjà.
+
+La page **Documents** permet de consulter l'historique local, télécharger un PDF ou le supprimer. Lorsque l'analyse IA est activée, la génération PDF attend que son état ne soit plus `pending`/`running`, afin de figer un document complet.
+
+Beta.9 n'effectue aucun export vers une plateforme tierce. L'abstraction `ExportProvider` et Paperless-ngx sont réservés à beta.10.

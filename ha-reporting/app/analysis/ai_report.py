@@ -9,7 +9,9 @@ from typing import Any
 
 
 HA_AI_TASK_URL = "http://supervisor/core/api/services/ai_task/generate_data?return_response"
-AI_TIMEOUT_SECONDS = 180
+AI_DEFAULT_TIMEOUT_SECONDS = 600
+AI_MIN_TIMEOUT_SECONDS = 60
+AI_MAX_TIMEOUT_SECONDS = 1800
 AI_MAX_CONTEXT_CHARS = 60000
 
 
@@ -182,6 +184,11 @@ def analyze_report_with_ai(
 
     token = token if token is not None else os.environ.get("SUPERVISOR_TOKEN", "")
     entity_id = str(config.get("entity_id") or "").strip()
+    try:
+        timeout_seconds = int(config.get("timeout_seconds", AI_DEFAULT_TIMEOUT_SECONDS) or AI_DEFAULT_TIMEOUT_SECONDS)
+    except (TypeError, ValueError):
+        timeout_seconds = AI_DEFAULT_TIMEOUT_SECONDS
+    timeout_seconds = max(AI_MIN_TIMEOUT_SECONDS, min(AI_MAX_TIMEOUT_SECONDS, timeout_seconds))
     started = time.time()
 
     base = {
@@ -190,6 +197,7 @@ def analyze_report_with_ai(
         "entity_id": entity_id or None,
         "mode": "no_thinking_expected",
         "mode_control": "ai_task_entity_configuration",
+        "timeout_seconds": timeout_seconds,
         "started_at_epoch": started,
     }
 
@@ -225,7 +233,7 @@ def analyze_report_with_ai(
                 "Content-Type": "application/json",
             },
         )
-        with urllib.request.urlopen(request, timeout=AI_TIMEOUT_SECONDS) as response:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             response_payload = json.loads(response.read() or b"{}")
 
         data, conversation_id = _extract_service_response(response_payload)

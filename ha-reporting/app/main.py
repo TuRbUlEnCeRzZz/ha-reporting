@@ -5,6 +5,8 @@ import os
 import re
 import time
 import unicodedata
+import threading
+import copy
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -30,6 +32,13 @@ PROVIDER_FILE = Path("/config/providers.yaml")
 REPORT_DIR = Path("/config/reports")
 REPORT_ROLLUP_THRESHOLD_SECONDS = 45 * 24 * 3600
 REPORT_QUALITY_STEP_SECONDS = 300
+AI_DEFAULT_TIMEOUT_SECONDS = 600
+AI_MIN_TIMEOUT_SECONDS = 60
+AI_MAX_TIMEOUT_SECONDS = 1800
+AI_HARD_TIMEOUT_GRACE_SECONDS = 5
+
+LAST_REPORT_RESULTS = {}
+LAST_REPORT_RESULTS_LOCK = threading.Lock()
 
 DEFAULT_CATEGORIES = [
     {"id": "refrigeration", "name": "Réfrigération"},
@@ -674,6 +683,20 @@ def _validated_comparisons(payload):
     }
 
 
+def _ai_timeout_seconds(raw):
+    raw = raw or {}
+    try:
+        value = int(raw.get("timeout_seconds", AI_DEFAULT_TIMEOUT_SECONDS) or AI_DEFAULT_TIMEOUT_SECONDS)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Le délai maximal de l'analyse IA doit être un entier") from exc
+    if value < AI_MIN_TIMEOUT_SECONDS or value > AI_MAX_TIMEOUT_SECONDS:
+        raise ValueError(
+            f"Le délai maximal de l'analyse IA doit être compris entre "
+            f"{AI_MIN_TIMEOUT_SECONDS} et {AI_MAX_TIMEOUT_SECONDS} secondes"
+        )
+    return value
+
+
 def _validated_ai_analysis(payload):
     raw = payload.get("ai_analysis") or {}
     enabled = bool(raw.get("enabled", False))
@@ -684,6 +707,7 @@ def _validated_ai_analysis(payload):
         "enabled": enabled,
         "entity_id": entity_id,
         "mode": "no_thinking_expected",
+        "timeout_seconds": _ai_timeout_seconds(raw),
     }
 
 
@@ -706,10 +730,11 @@ def report_summary(data):
             "previous_periods": 0,
             "previous_years": 0,
         },
-        "ai_analysis": data.get("ai_analysis") or {
-            "enabled": False,
-            "entity_id": "",
+        "ai_analysis": {
+            "enabled": bool((data.get("ai_analysis") or {}).get("enabled", False)),
+            "entity_id": str((data.get("ai_analysis") or {}).get("entity_id") or "").strip(),
             "mode": "no_thinking_expected",
+            "timeout_seconds": _ai_timeout_seconds(data.get("ai_analysis") or {}),
         },
     }
 
@@ -1023,7 +1048,23 @@ def _execute_report_period(
     }
 
 
+def _cache_report_result(report_id, result):
+    with LAST_REPORT_RESULTS_LOCK:
+        LAST_REPORT_RESULTS[report_id] = copy.deepcopy(result)
+
+
+def _cached_report_result(report_id):
+    with LAST_REPORT_RESULTS_LOCK:
+        result = LAST_REPORT_RESULTS.get(report_id)
+        return copy.deepcopy(result) if result is not None else None
+
+
 def execute_report(report_id):
+    """Execute deterministic report calculations only.
+
+    AI interpretation is deliberately decoupled from this request so a slow or
+    stuck local model can never keep the report UI in "Exécution en cours".
+    """
     report = load_report(report_id)
     timezone_name = home_assistant_timezone()
     period_engine = PeriodEngine(timezone_name)
@@ -1059,6 +1100,8 @@ def execute_report(report_id):
         )
 
     data_finished = time.time()
+    ai_config = report.get("ai_analysis") or {}
+    ai_enabled = bool(ai_config.get("enabled"))
     result = {
         "report_version": 1,
         "report": report_summary(report),
@@ -1072,28 +1115,106 @@ def execute_report(report_id):
                 comparison_targets=target_specs,
             ),
             "data_total_duration_seconds": data_finished - full_started,
+            "data_finished_at_epoch": data_finished,
+            "ai_analysis_duration_seconds": 0.0,
+            "finished_at_epoch": data_finished,
+            "total_duration_seconds": data_finished - full_started,
         },
         "comparisons": {
             "enabled": bool(comparison_targets),
             "target_count": len(comparison_targets),
             "targets": comparison_targets,
         },
+        "ai_analysis": ({
+            "enabled": True,
+            "status": "pending",
+            "entity_id": str(ai_config.get("entity_id") or "").strip() or None,
+            "mode": "no_thinking_expected",
+            "mode_control": "ai_task_entity_configuration",
+            "timeout_seconds": _ai_timeout_seconds(ai_config),
+        } if ai_enabled else {
+            "enabled": False,
+            "status": "disabled",
+        }),
     }
-
-    ai_started = time.time()
-    result["ai_analysis"] = analyze_report_with_ai(
-        result,
-        report.get("ai_analysis") or {},
-        token=TOKEN,
-    )
-    finished = time.time()
-    result["execution"]["ai_analysis_duration_seconds"] = (
-        finished - ai_started if result["ai_analysis"].get("enabled") else 0.0
-    )
-    result["execution"]["data_finished_at_epoch"] = data_finished
-    result["execution"]["finished_at_epoch"] = finished
-    result["execution"]["total_duration_seconds"] = finished - full_started
+    _cache_report_result(report_id, result)
     return result
+
+
+def execute_ai_analysis(report_id):
+    """Run AI interpretation separately with a hard wall-clock deadline.
+
+    The underlying Home Assistant request can theoretically continue in its daemon
+    worker after the deadline, but the report server and UI are released reliably.
+    """
+    report = load_report(report_id)
+    ai_config = report.get("ai_analysis") or {}
+    result = _cached_report_result(report_id)
+    if result is None:
+        result = execute_report(report_id)
+
+    if not bool(ai_config.get("enabled")):
+        analysis = {"enabled": False, "status": "disabled"}
+        result["ai_analysis"] = analysis
+        _cache_report_result(report_id, result)
+        return analysis
+
+    timeout_seconds = _ai_timeout_seconds(ai_config)
+    running = {
+        "enabled": True,
+        "status": "running",
+        "entity_id": str(ai_config.get("entity_id") or "").strip() or None,
+        "mode": "no_thinking_expected",
+        "mode_control": "ai_task_entity_configuration",
+        "timeout_seconds": timeout_seconds,
+        "started_at_epoch": time.time(),
+    }
+    result["ai_analysis"] = running
+    _cache_report_result(report_id, result)
+
+    box = {}
+    done = threading.Event()
+
+    def worker():
+        try:
+            box["analysis"] = analyze_report_with_ai(
+                result,
+                ai_config,
+                token=TOKEN,
+            )
+        except Exception as exc:
+            box["analysis"] = {
+                **running,
+                "status": "error",
+                "finished_at_epoch": time.time(),
+                "error": str(exc),
+            }
+        finally:
+            done.set()
+
+    started = time.time()
+    threading.Thread(target=worker, daemon=True, name=f"ha-report-ai-{report_id}").start()
+    if not done.wait(timeout_seconds + AI_HARD_TIMEOUT_GRACE_SECONDS):
+        analysis = {
+            **running,
+            "status": "error",
+            "finished_at_epoch": time.time(),
+            "duration_seconds": time.time() - started,
+            "error": f"Analyse IA interrompue après {timeout_seconds} s (délai maximal configuré).",
+        }
+    else:
+        analysis = box.get("analysis") or {
+            **running,
+            "status": "error",
+            "finished_at_epoch": time.time(),
+            "error": "Analyse IA terminée sans résultat.",
+        }
+
+    result["ai_analysis"] = analysis
+    result["execution"]["ai_analysis_duration_seconds"] = float(analysis.get("duration_seconds") or 0.0)
+    result["execution"]["ai_analysis_finished_at_epoch"] = time.time()
+    _cache_report_result(report_id, result)
+    return analysis
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1137,7 +1258,8 @@ class Handler(BaseHTTPRequestHandler):
             if "/api/report/" in path and path.endswith("/html"):
                 parts = self.path_parts_after_report(path)
                 if len(parts) == 2 and parts[1] == "html":
-                    rendered = render_report_html(execute_report(parts[0])).encode("utf-8")
+                    rendered_result = _cached_report_result(parts[0]) or execute_report(parts[0])
+                    rendered = render_report_html(rendered_result).encode("utf-8")
                     return self.send_payload(200, rendered, "text/html; charset=utf-8")
             if "/api/report/" in path:
                 parts = self.path_parts_after_report(path)
@@ -1171,6 +1293,9 @@ class Handler(BaseHTTPRequestHandler):
             if "/api/report/" in path and path.endswith("/preview"):
                 parts = self.path_parts_after_report(path)
                 return self.send_payload(200, {"plan": build_report_plan(parts[0])})
+            if "/api/report/" in path and path.endswith("/ai-analysis"):
+                parts = self.path_parts_after_report(path)
+                return self.send_payload(200, {"ai_analysis": execute_ai_analysis(parts[0])})
             if "/api/report/" in path and path.endswith("/execute"):
                 parts = self.path_parts_after_report(path)
                 return self.send_payload(200, {"result": execute_report(parts[0])})

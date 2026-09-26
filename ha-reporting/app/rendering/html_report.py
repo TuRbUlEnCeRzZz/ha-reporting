@@ -198,6 +198,13 @@ def _ai_analysis(result: dict[str, Any]) -> str:
             <div class="ai-text">{text}</div>
             <div class="quality">Source : {_e(entity)} · durée {duration} · les séries brutes ne sont pas transmises au modèle.</div>
           </section>"""
+    if status in {"pending", "running"}:
+        label = "en cours" if status == "running" else "en attente"
+        return f"""
+          <section class="ai-analysis">
+            <div class="section-title"><div><h1>Analyse IA</h1><p>Le rapport statistique est disponible ; l’interprétation IA est traitée séparément.</p></div><span class="pill">{label}</span></div>
+            <div class="ai-text">Analyse locale en cours…</div>
+          </section>"""
     error = ai.get("error") or "Analyse IA indisponible"
     return f"""
       <section class="ai-analysis ai-error">

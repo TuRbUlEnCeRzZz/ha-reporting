@@ -447,6 +447,7 @@ async function ensureEntityInventory(){
 function updateReportAiFields(){
   const enabled = $("reportAiEnabled").checked;
   $("reportAiEntity").disabled = !enabled;
+  $("reportAiTimeout").disabled = !enabled;
 }
 
 async function populateReportAiEntities(selectedId=""){
@@ -500,6 +501,7 @@ async function showReportForm(reportId=null, push=true){
 
   const aiAnalysis = report ? (report.ai_analysis || {}) : {};
   $("reportAiEnabled").checked = Boolean(aiAnalysis.enabled);
+  $("reportAiTimeout").value = String(aiAnalysis.timeout_seconds || 600);
   await populateReportAiEntities(aiAnalysis.entity_id || "");
 
   renderReportCatalogChoices(report ? report.catalogs : []);
@@ -535,7 +537,8 @@ function reportPayloadFromForm(){
     ai_analysis:{
       enabled:$("reportAiEnabled").checked,
       entity_id:$("reportAiEntity").value || "",
-      mode:"no_thinking_expected"
+      mode:"no_thinking_expected",
+      timeout_seconds:Number($("reportAiTimeout").value || 600)
     }
   };
 }
@@ -858,6 +861,17 @@ function renderAiAnalysis(result){
       </section>`;
   }
 
+  if(ai.status === "pending" || ai.status === "running"){
+    return `
+      <section class="aiAnalysisCard">
+        <div class="aiAnalysisHeader">
+          <div><h3>Analyse IA</h3><div class="muted">Le rapport est terminé ; l’interprétation IA continue séparément.</div></div>
+          <span class="badge">${ai.status === "running" ? "en cours" : "en attente"}</span>
+        </div>
+        <div class="aiAnalysisText">Analyse locale en cours… Vous pouvez continuer à utiliser HA Reporting.${ai.timeout_seconds ? ` Délai maximal configuré : ${esc(ai.timeout_seconds)} s.` : ""}</div>
+      </section>`;
+  }
+
   return `
     <section class="aiAnalysisCard aiAnalysisError">
       <div class="aiAnalysisHeader">
@@ -939,6 +953,40 @@ function renderExecutedReport(result){
   `;
 }
 
+async function runAiAnalysis(reportId, result){
+  const controller = new AbortController();
+  const configuredTimeout = Number((((result.report || {}).ai_analysis || {}).timeout_seconds) || ((result.ai_analysis || {}).timeout_seconds) || 600);
+  const clientTimeoutMs = (configuredTimeout + 15) * 1000;
+  const timer = setTimeout(() => controller.abort(), clientTimeoutMs);
+  try{
+    const response = await fetch(`api/report/${encodeURIComponent(reportId)}/ai-analysis`, {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:"{}",
+      signal:controller.signal
+    });
+    const data = await response.json();
+    if(!response.ok) throw new Error(data.error || "AI Task indisponible");
+    result.ai_analysis = data.ai_analysis || {enabled:true,status:"error",error:"Réponse IA absente"};
+    renderExecutedReport(result);
+    const ai = result.ai_analysis;
+    if(ai.status === "completed"){
+      $("reportPreviewStatus").textContent += " · analyse IA OK";
+    }else{
+      $("reportPreviewStatus").textContent += " · analyse IA en erreur";
+    }
+  }catch(error){
+    const message = error && error.name === "AbortError"
+      ? `Analyse IA interrompue côté interface après ${configuredTimeout} s (délai maximal configuré).`
+      : String(error && error.message ? error.message : error);
+    result.ai_analysis = {enabled:true,status:"error",error:message};
+    renderExecutedReport(result);
+    $("reportPreviewStatus").textContent += " · analyse IA en erreur";
+  }finally{
+    clearTimeout(timer);
+  }
+}
+
 async function executeReport(reportId){
   $("reportPreviewStatus").textContent = "Exécution du rapport…";
   $("reportPreviewStatus").classList.remove("error");
@@ -960,15 +1008,17 @@ async function executeReport(reportId){
 
     const comparisonCount = (data.result.comparisons || {}).target_count || 0;
     const ai = data.result.ai_analysis || {};
-    const aiStatus = ai.enabled
-      ? (ai.status === "completed" ? " · analyse IA OK" : " · analyse IA en erreur")
-      : "";
     $("reportPreviewStatus").textContent =
       `✓ Rapport exécuté · ${data.result.summary.sources_ok}/${data.result.summary.sources_total} source(s) OK` +
-      (comparisonCount ? ` · ${comparisonCount} comparaison(s)` : "") + aiStatus;
+      (comparisonCount ? ` · ${comparisonCount} comparaison(s)` : "") +
+      (ai.enabled ? " · analyse IA en cours" : "");
 
     renderExecutedReport(data.result);
     $("reportHtmlButton").classList.remove("hidden");
+
+    if(ai.enabled && (ai.status === "pending" || ai.status === "running")){
+      runAiAnalysis(reportId, data.result);
+    }
   }finally{
     $("executeReportButton").disabled = false;
   }

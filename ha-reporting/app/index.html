@@ -15,7 +15,7 @@
   </button>
   <div>
     <h1>HA Reporting</h1>
-    <div class="subtitle">0.1.0-beta.3 · Catalogues, rapports & analyse IA</div>
+    <div class="subtitle">0.1.0-beta.5 · Catalogues, rapports & analyse IA</div>
   </div>
 </header>
 
@@ -120,10 +120,18 @@
         <input id="reportAiEnabled" type="checkbox">
         <span>Inclure une analyse IA dans le rapport</span>
       </label>
-      <div class="grid two">
+      <div class="grid three">
         <label>Entité AI Task
           <select id="reportAiEntity">
             <option value="">Entité AI Task préférée de Home Assistant</option>
+          </select>
+        </label>
+        <label>Délai maximal de l'analyse IA
+          <select id="reportAiTimeout">
+            <option value="300">300 s · 5 min</option>
+            <option value="600" selected>600 s · 10 min</option>
+            <option value="900">900 s · 15 min</option>
+            <option value="1200">1200 s · 20 min</option>
           </select>
         </label>
         <div class="aiModeInfo">

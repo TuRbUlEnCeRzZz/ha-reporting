@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.0-beta.5
+
+- Make the AI analysis timeout configurable per report instead of a fixed 180 s limit.
+- Default local AI timeout to 600 s (10 minutes), better suited to CPU/RAM constrained Ollama workloads.
+- Offer 300, 600, 900 and 1200 s choices in the report editor.
+- Validate persisted/API timeout values between 60 and 1800 s for forward compatibility.
+- Apply the configured timeout consistently to the Home Assistant AI Task HTTP request, server wall-clock guard and browser request guard.
+- Preserve the non-blocking beta.4 execution model: report statistics complete immediately while AI runs separately.
+- Expose the configured timeout in report/AI diagnostics and the pending UI state.
+- Keep backward compatibility: beta.3/beta.4 reports without `timeout_seconds` transparently use 600 s.
+
+## 0.1.0-beta.4
+
+- Decouple AI Task execution from the deterministic report request so a slow local model can never keep the report stuck on `Exécution en cours`.
+- Return and render the statistical report immediately, then launch AI interpretation through a separate endpoint.
+- Show a neutral `analyse IA en cours` state while local inference continues.
+- Cache the latest executed report in memory so the standalone HTML/PDF view can include the AI result once it completes without re-running the full report.
+- Add a 180 s HA Reporting wall-clock guard for AI analysis; timeout or AI failure does not invalidate the statistical report.
+- Keep AI work isolated in a daemon worker so the HTTP request serving the report UI is always released.
+- Add UI regression coverage for the pending AI state; preserve all beta.3 AI context-minimization and escaping tests.
+
 ## 0.1.0-beta.3
 
 - Add optional report-level AI analysis through Home Assistant `ai_task.generate_data`.

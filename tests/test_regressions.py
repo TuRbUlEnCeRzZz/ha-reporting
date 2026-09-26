@@ -411,7 +411,33 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertEqual(result['conversation_id'],'abc')
         self.assertIn('?return_response',captured['url'])
         self.assertEqual(captured['body']['entity_id'],'ai_task.local')
+        self.assertEqual(captured['timeout'],600)
         self.assertIn('sans afficher de raisonnement interne',captured['body']['instructions'])
+
+    def test_ai_task_call_uses_configured_timeout(self):
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self,*_): return False
+            def read(self): return json.dumps({'service_response':{'data':'ok'}}).encode()
+        captured={}
+        def fake_urlopen(request,timeout=None):
+            captured['timeout']=timeout
+            return Response()
+        with patch('analysis.ai_report.urllib.request.urlopen',side_effect=fake_urlopen):
+            result=analyze_report_with_ai(self.sample(),{'enabled':True,'timeout_seconds':900},token='token')
+        self.assertEqual(result['status'],'completed')
+        self.assertEqual(captured['timeout'],900)
+        self.assertEqual(result['timeout_seconds'],900)
+
+    def test_report_ai_timeout_validation_and_default(self):
+        default=main._validated_ai_analysis({'ai_analysis':{'enabled':True}})
+        self.assertEqual(default['timeout_seconds'],600)
+        custom=main._validated_ai_analysis({'ai_analysis':{'enabled':True,'timeout_seconds':1200}})
+        self.assertEqual(custom['timeout_seconds'],1200)
+        with self.assertRaises(ValueError):
+            main._validated_ai_analysis({'ai_analysis':{'enabled':True,'timeout_seconds':59}})
+        with self.assertRaises(ValueError):
+            main._validated_ai_analysis({'ai_analysis':{'enabled':True,'timeout_seconds':1801}})
 
 
 class HtmlRendererTests(unittest.TestCase):
@@ -463,7 +489,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.3')
+        self.assertEqual(config['version'],'0.1.0-beta.5')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         for name in ['Dockerfile','run.sh','app/main.py','app/app.js','app/index.html','app/rendering/html_report.py','app/analysis/ai_report.py']:

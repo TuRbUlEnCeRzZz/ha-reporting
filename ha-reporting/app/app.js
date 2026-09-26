@@ -2,6 +2,7 @@ let entities = [];
 let catalogs = [];
 let reports = [];
 let documents = [];
+let exportProviders = [];
 let editingReportId = null;
 let previewReportId = null;
 let categories = [];
@@ -1150,11 +1151,46 @@ async function showDocuments(push=true){
   await loadDocuments();
 }
 
-async function loadDocuments(){
-  const response=await fetch("api/documents",{cache:"no-store"});
+async function loadExportProviders(){
+  const response=await fetch("api/export-providers",{cache:"no-store"});
   const data=await response.json();
+  if(!response.ok) throw new Error(data.error || "Lecture des destinations impossible");
+  exportProviders=data.providers||[];
+  return exportProviders;
+}
+
+function exportProviderById(id){
+  return exportProviders.find(provider=>provider.id===id) || null;
+}
+
+async function loadDocuments(){
+  const [documentsResponse] = await Promise.all([
+    fetch("api/documents",{cache:"no-store"}),
+    loadExportProviders().catch(()=>{exportProviders=[]; return [];})
+  ]);
+  const data=await documentsResponse.json();
   documents=data.documents||[];
   renderDocuments();
+}
+
+function documentExportUi(doc){
+  if(!exportProviders.length) return '';
+  return exportProviders.map(provider=>{
+    const state=((doc.exports||{})[provider.id]||{});
+    let status='';
+    if(state.status==='completed'){
+      status=`<span class="exportStatus ok">${esc(provider.name)} ✓${state.delivery_status==='deposited' ? ' déposé' : ''}</span>`;
+    }else if(state.status==='error'){
+      status=`<span class="exportStatus error" title="${esc(state.error||'')}">${esc(provider.name)} · erreur</span>`;
+    }else if(state.status==='exporting'){
+      status=`<span class="exportStatus">${esc(provider.name)} · envoi…</span>`;
+    }
+    if(!provider.configured){
+      return `${status}<button onclick="showExportProviders()">Configurer ${esc(provider.name)}</button>`;
+    }
+    const label=state.status==='error' ? `Réessayer ${provider.name}` : (state.status==='completed' ? `Réexporter vers ${provider.name}` : `Exporter vers ${provider.name}`);
+    return `${status}<button onclick="exportDocument('${esc(doc.id)}','${esc(provider.id)}')">${esc(label)}</button>`;
+  }).join('');
 }
 
 function renderDocuments(){
@@ -1169,9 +1205,15 @@ function renderDocuments(){
         <div class="reportMeta">${esc(doc.report_name || doc.report_id)} · ${esc(doc.generated_at || "")} · ${esc(formatBytes(doc.size_bytes))}</div>
         <span class="reportPeriodPill">${esc((doc.period||{}).label || "")}</span>
         <span class="reportPeriodPill">PDF local</span>
+        <div class="documentExports">${Object.entries(doc.exports||{}).map(([id,state])=>{
+          const provider=exportProviderById(id);
+          if(!provider || !state || !state.filename) return '';
+          return `<small>${esc(provider.name)} : ${esc(state.filename)}${state.attempts ? ` · tentative ${esc(state.attempts)}` : ''}</small>`;
+        }).join('')}</div>
       </div>
-      <div class="reportActions">
+      <div class="reportActions documentActions">
         <button onclick="downloadDocument('${esc(doc.id)}')">Télécharger</button>
+        ${documentExportUi(doc)}
         <button class="danger" onclick="deleteDocument('${esc(doc.id)}','${esc(doc.filename)}')">Supprimer</button>
       </div>
     </div>`).join("");
@@ -1179,6 +1221,22 @@ function renderDocuments(){
 
 function downloadDocument(id){
   window.open(`api/document/${encodeURIComponent(id)}/download`,"_blank","noopener");
+}
+
+async function exportDocument(id,providerId){
+  const provider=exportProviderById(providerId);
+  const response=await fetch(`api/document/${encodeURIComponent(id)}/export/${encodeURIComponent(providerId)}`,{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:"{}"
+  });
+  const data=await response.json();
+  if(!response.ok){
+    await loadDocuments();
+    alert((provider ? provider.name : providerId) + " : " + (data.error||"Export impossible"));
+    return;
+  }
+  await loadDocuments();
 }
 
 async function deleteDocument(id,filename){
@@ -1189,8 +1247,87 @@ async function deleteDocument(id,filename){
   await loadDocuments();
 }
 
+async function showExportProviders(push=true){
+  setPage("exportProvidersPage",{},push);
+  await loadExportProviders();
+  renderExportProviders();
+}
+
+function updatePaperlessModeFields(){
+  const mode=$("paperlessMode").value || "consume_folder";
+  $("paperlessConsumeFields").classList.toggle("hidden", mode!=="consume_folder");
+  $("paperlessApiFields").classList.toggle("hidden", mode!=="api");
+  $("paperlessTestButton").textContent=mode==="consume_folder" ? "Tester le dossier consume" : "Tester l’API";
+}
+
+function renderExportProviders(){
+  const paperless=exportProviderById("paperless") || {};
+  $("paperlessMode").value=paperless.mode||"consume_folder";
+  $("paperlessConsumePath").value=paperless.consume_path||"";
+  $("paperlessUrl").value=paperless.url||"";
+  $("paperlessToken").value="";
+  $("paperlessFilenameTemplate").value=paperless.filename_template||"";
+  updatePaperlessModeFields();
+  const badge=$("paperlessBadge");
+  badge.className="providerBadge";
+  if(paperless.configured){
+    badge.textContent=paperless.mode==="api" ? "Configuré · API" : "Configuré · consume";
+    badge.classList.add("ok");
+  }else{
+    badge.textContent="Non configuré";
+  }
+}
+
+function paperlessPayload(){
+  return {
+    mode:$("paperlessMode").value,
+    consume_path:$("paperlessConsumePath").value,
+    url:$("paperlessUrl").value,
+    token:$("paperlessToken").value,
+    filename_template:$("paperlessFilenameTemplate").value
+  };
+}
+
+async function testPaperless(){
+  const status=$("paperlessStatusText");
+  status.textContent="Test en cours…";
+  status.classList.remove("error");
+  const response=await fetch("api/export-providers/paperless/test",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(paperlessPayload())
+  });
+  const data=await response.json();
+  if(!response.ok){
+    status.textContent="Erreur : "+(data.error||"Destination inaccessible");
+    status.classList.add("error");
+    return;
+  }
+  status.textContent="✓ "+(data.status.message||"Destination Paperless-ngx accessible");
+}
+
+async function savePaperless(){
+  const status=$("paperlessStatusText");
+  status.textContent="Enregistrement…";
+  status.classList.remove("error");
+  const response=await fetch("api/export-providers/paperless",{
+    method:"PATCH",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(paperlessPayload())
+  });
+  const data=await response.json();
+  if(!response.ok){
+    status.textContent="Erreur : "+(data.error||"Enregistrement impossible");
+    status.classList.add("error");
+    return;
+  }
+  await loadExportProviders();
+  renderExportProviders();
+  status.textContent="✓ Configuration Paperless-ngx enregistrée";
+}
+
 function setPage(page, state={}, push=true){
-  ["homePage","reportsPage","documentsPage","reportFormPage","reportPreviewPage","deviceAnalysisPage","providersPage","catalogPage","devicePage"].forEach(id => $(id).classList.add("hidden"));
+  ["homePage","reportsPage","documentsPage","exportProvidersPage","reportFormPage","reportPreviewPage","deviceAnalysisPage","providersPage","catalogPage","devicePage"].forEach(id => $(id).classList.add("hidden"));
   $(page).classList.remove("hidden");
   $("backButton").classList.toggle("hidden", page === "homePage");
   if(push) history.pushState({page, ...state}, "", "");
@@ -1234,6 +1371,10 @@ $("newCatalogButton").addEventListener("click", () => showNewCatalog());
 $("reportsButton").addEventListener("click", () => showReports());
 $("documentsButton").addEventListener("click", () => showDocuments());
 $("refreshDocumentsButton").addEventListener("click", () => loadDocuments());
+$("exportProvidersButton").addEventListener("click", () => showExportProviders());
+$("paperlessMode").addEventListener("change", updatePaperlessModeFields);
+$("paperlessTestButton").addEventListener("click", testPaperless);
+$("paperlessSaveButton").addEventListener("click", savePaperless);
 $("newReportButton").addEventListener("click", () => showReportForm());
 $("saveReportButton").addEventListener("click", saveReportDefinition);
 $("reportPeriodType").addEventListener("change", () => { updateReportPeriodFields(); localFilenamePreview(); });
@@ -1310,6 +1451,7 @@ window.addEventListener("popstate", async event => {
   else if(state.page === "reportFormPage") await showReportForm(state.reportId || null, false);
   else if(state.page === "reportsPage") await showReports(false);
   else if(state.page === "documentsPage") await showDocuments(false);
+  else if(state.page === "exportProvidersPage") await showExportProviders(false);
   else if(state.page === "deviceAnalysisPage") await showDeviceAnalysis(state.catalogId, state.deviceId, false);
   else if(state.page === "providersPage") await showProviders(false);
   else if(state.page === "catalogPage") showNewCatalog(false);

@@ -1,5 +1,5 @@
 name: "HA Reporting"
-version: "0.1.0-beta.10"
+version: "0.1.0-beta.12"
 slug: "ha_reporting"
 description: "Modular reporting engine for Home Assistant"
 url: "https://github.com/TuRbUlEnCeRzZz/ha-reporting"
@@ -23,6 +23,9 @@ map:
   - type: addon_config
     read_only: false
     path: /config
+  - type: share
+    read_only: false
+    path: /share
 
 options:
   log_level: "info"

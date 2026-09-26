@@ -25,6 +25,9 @@ from comparisons.engine import ComparisonEngine
 from rendering.html_report import render_report_html
 from analysis.ai_report import compact_report_context, _extract_service_response, _extract_ai_task_payload, _instructions, _sanitize_ai_text, analyze_report_with_ai
 from document_store import validate_output_config, render_filename
+from exporters.base import ExportProviderError
+from exporters.paperless import PaperlessExportProvider
+import exporters.config as export_config
 import document_store
 from rendering.pdf_report import render_pdf_native
 import main
@@ -620,7 +623,7 @@ class Beta9DocumentTests(unittest.TestCase):
         self.assertTrue(summary['output']['local_storage'])
 
     def test_native_pdf_renderer_produces_pdf(self):
-        html='<!doctype html><html><body><h1>HA Reporting beta.10</h1></body></html>'
+        html='<!doctype html><html><body><h1>HA Reporting beta.12</h1></body></html>'
         pdf=render_pdf_native(html,timeout_seconds=30)
         try:
             self.assertTrue(pdf.is_file())
@@ -650,6 +653,158 @@ class Beta9DocumentTests(unittest.TestCase):
                 self.assertTrue(deleted['ok'])
                 self.assertEqual(len(document_store.list_documents()),1)
 
+class Beta12ExportProviderTests(unittest.TestCase):
+    def test_paperless_connection_uses_token_auth(self):
+        class Response:
+            status=200
+            def __enter__(self): return self
+            def __exit__(self,*args): return False
+            def read(self): return b'{"count": 1, "results": []}'
+        seen={}
+        def fake_urlopen(request, timeout=0):
+            seen['url']=request.full_url
+            seen['auth']=request.headers.get('Authorization')
+            seen['ua']=request.headers.get('User-agent')
+            return Response()
+        provider=PaperlessExportProvider('http://paperless:8000','secret')
+        with patch('urllib.request.urlopen',side_effect=fake_urlopen):
+            status=provider.test_connection()
+        self.assertTrue(status['reachable'])
+        self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
+        self.assertEqual(seen['auth'],'Token secret')
+        self.assertIn('beta.12',seen['ua'])
+
+    def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
+        import tempfile
+        class Response:
+            status=200
+            def __enter__(self): return self
+            def __exit__(self,*args): return False
+            def read(self): return b'"task-123"'
+        seen={}
+        def fake_urlopen(request, timeout=0):
+            seen['url']=request.full_url
+            seen['auth']=request.headers.get('Authorization')
+            seen['content_type']=request.headers.get('Content-type')
+            seen['data']=request.data
+            return Response()
+        with tempfile.TemporaryDirectory() as td:
+            pdf=Path(td)/'local.pdf'; pdf.write_bytes(b'%PDF-1.4\nhello')
+            provider=PaperlessExportProvider('http://paperless:8000','secret')
+            with patch('urllib.request.urlopen',side_effect=fake_urlopen):
+                result=provider.export(pdf,'HA_MENSUEL_2026-09.pdf')
+        self.assertEqual(seen['url'],'http://paperless:8000/api/documents/post_document/')
+        self.assertEqual(seen['auth'],'Token secret')
+        self.assertIn('multipart/form-data',seen['content_type'])
+        self.assertIn(b'name="document"',seen['data'])
+        self.assertIn(b'filename="HA_MENSUEL_2026-09.pdf"',seen['data'])
+        self.assertEqual(result['remote_reference'],'task-123')
+
+    def test_export_config_masks_token_and_blank_token_preserves_secret(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            config_path=Path(td)/'exports.yaml'
+            with patch.object(export_config,'EXPORT_PROVIDER_FILE',config_path):
+                first=export_config.save_paperless_config({'mode':'api','url':'http://paperless:8000','token':'secret','filename_template':'HA_{year}-{month}'})
+                self.assertTrue(first['configured'])
+                self.assertNotIn('token',first)
+                second=export_config.save_paperless_config({'mode':'api','url':'http://paperless:8000','token':'','filename_template':'HA_{year}-{month}'})
+                self.assertTrue(second['token_configured'])
+                stored=export_config.load_export_provider_config()['paperless']
+                self.assertEqual(stored['token'],'secret')
+
+    def test_paperless_consume_connection_requires_no_token_and_tests_write(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td)
+            consume=root/'paperless_consume'; consume.mkdir()
+            provider=PaperlessExportProvider(mode='consume_folder',consume_path='paperless_consume',share_root=root)
+            status=provider.test_connection()
+            self.assertTrue(status['reachable'])
+            self.assertEqual(status['mode'],'consume_folder')
+            self.assertIn('accessible en écriture',status['message'])
+            self.assertEqual(list(consume.iterdir()),[])
+
+    def test_paperless_consume_export_is_atomic_and_versions_collision(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td)
+            consume=root/'paperless_consume'; consume.mkdir()
+            local=root/'report.pdf'; local.write_bytes(b'%PDF-1.4\n'+b'x'*2048)
+            provider=PaperlessExportProvider(mode='consume_folder',consume_path=str(consume),share_root=root)
+            first=provider.export(local,'HA_MENSUEL_2026-09.pdf')
+            second=provider.export(local,'HA_MENSUEL_2026-09.pdf')
+            self.assertEqual(first['delivery_status'],'deposited')
+            self.assertEqual(first['filename'],'HA_MENSUEL_2026-09.pdf')
+            self.assertEqual(second['filename'],'HA_MENSUEL_2026-09_2.pdf')
+            self.assertEqual((consume/first['filename']).read_bytes(),local.read_bytes())
+            self.assertEqual((consume/second['filename']).read_bytes(),local.read_bytes())
+            self.assertFalse(any(path.name.endswith('.part') for path in consume.iterdir()))
+
+    def test_paperless_consume_path_cannot_escape_share_root(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td)/'share'; root.mkdir()
+            outside=Path(td)/'outside'; outside.mkdir()
+            provider=PaperlessExportProvider(mode='consume_folder',consume_path=str(outside),share_root=root)
+            with self.assertRaises(ExportProviderError):
+                provider.test_connection()
+
+    def test_paperless_config_defaults_to_tokenless_consume_mode(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            config_path=Path(td)/'exports.yaml'
+            with patch.object(export_config,'EXPORT_PROVIDER_FILE',config_path):
+                overview=export_config.save_paperless_config({'consume_path':'/share/paperless_consume','filename_template':'HA_{year}-{month}'})
+                self.assertEqual(overview['mode'],'consume_folder')
+                self.assertTrue(overview['configured'])
+                self.assertFalse(overview['token_configured'])
+                self.assertEqual(overview['consume_path'],'/share/paperless_consume')
+                self.assertEqual(overview['recommended_mode'],'consume_folder')
+
+    def test_document_export_status_persists_and_failed_export_keeps_local_pdf(self):
+        import tempfile
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        class FailingProvider:
+            def export(self,*args,**kwargs):
+                raise ExportProviderError('Paperless indisponible')
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td)
+            with patch.object(document_store,'DOCUMENT_DIR',root):
+                period={'label':'Septembre','start':'2026-09-01T00:00:00+02:00','end':'2026-10-01T00:00:00+02:00','timezone':'Europe/Zurich'}
+                temp=root/'temp.pdf'; temp.write_bytes(b'%PDF-1.4\n'+b'x'*1200)
+                doc=document_store.register_pdf(temp,filename='rapport.pdf',report_id='r',report_name='R',resolved_period=period,output_config={'filename_template':'rapport','duplicate_policy':'version'},generated_at=datetime(2026,9,30,12,0,tzinfo=ZoneInfo('Europe/Zurich')))
+                with patch.object(main,'resolve_export_provider',return_value=FailingProvider()), patch.object(main,'load_export_provider_config',return_value={'paperless':{'filename_template':''}}), patch.object(main,'home_assistant_timezone',return_value='UTC'):
+                    with self.assertRaises(ExportProviderError):
+                        main.export_document(doc['id'],'paperless')
+                after=document_store.get_document(doc['id'])
+                self.assertTrue(Path(after['path']).is_file())
+                self.assertEqual(after['exports']['paperless']['status'],'error')
+                self.assertEqual(after['exports']['paperless']['attempts'],1)
+                self.assertIn('Paperless indisponible',after['exports']['paperless']['error'])
+
+    def test_successful_export_tracks_remote_reference(self):
+        import tempfile
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        class GoodProvider:
+            def export(self,path,filename,metadata=None):
+                return {'status_code':200,'remote_reference':'task-42','filename':filename}
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td)
+            with patch.object(document_store,'DOCUMENT_DIR',root):
+                period={'label':'Septembre','start':'2026-09-01T00:00:00+02:00','end':'2026-10-01T00:00:00+02:00','timezone':'Europe/Zurich'}
+                temp=root/'temp.pdf'; temp.write_bytes(b'%PDF-1.4\n'+b'x'*1200)
+                doc=document_store.register_pdf(temp,filename='rapport.pdf',report_id='r',report_name='R',resolved_period=period,output_config={'filename_template':'rapport','duplicate_policy':'version'},generated_at=datetime(2026,9,30,12,0,tzinfo=ZoneInfo('Europe/Zurich')))
+                with patch.object(main,'resolve_export_provider',return_value=GoodProvider()), patch.object(main,'load_export_provider_config',return_value={'paperless':{'filename_template':''}}), patch.object(main,'home_assistant_timezone',return_value='UTC'):
+                    result=main.export_document(doc['id'],'paperless')
+                self.assertTrue(result['ok'])
+                after=document_store.get_document(doc['id'])
+                self.assertEqual(after['exports']['paperless']['status'],'completed')
+                self.assertEqual(after['exports']['paperless']['remote_reference'],'task-42')
+                self.assertEqual(after['exports']['paperless']['filename'],'rapport.pdf')
+
 class PackageTests(unittest.TestCase):
     def test_yaml_and_installation_layout(self):
         import yaml
@@ -657,18 +812,24 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.10')
+        self.assertEqual(config['version'],'0.1.0-beta.12')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
+        self.assertTrue(any(item.get('type')=='share' and item.get('read_only') is False and item.get('path')=='/share' for item in config.get('map',[]) if isinstance(item,dict)))
         self.assertIn('py3-websocket-client',(addon/'Dockerfile').read_text())
         self.assertIn('weasyprint',(addon/'Dockerfile').read_text())
-        for name in ['Dockerfile','run.sh','app/main.py','app/app.js','app/index.html','app/rendering/html_report.py','app/analysis/ai_report.py']:
+        for name in ['Dockerfile','run.sh','app/main.py','app/app.js','app/index.html','app/rendering/html_report.py','app/analysis/ai_report.py','app/exporters/base.py','app/exporters/paperless.py','app/exporters/config.py']:
             self.assertTrue((addon/name).is_file(),name)
         index=(addon/'app/index.html').read_text()
         self.assertIn('reportHtmlButton', index)
         self.assertIn('Rapport HTML', index)
         self.assertIn('reportPdfButton', index)
         self.assertIn('documentsPage', index)
+        self.assertIn('exportProvidersPage', index)
+        self.assertIn('paperlessFilenameTemplate', index)
+        self.assertIn('paperlessMode', index)
+        self.assertIn('paperlessConsumePath', index)
+        self.assertIn('Dossier consume — recommandé', index)
         self.assertIn('reportFilenameTemplate', index)
         self.assertIn('reportAiEnabled', index)
         self.assertIn('Think before responding', index)

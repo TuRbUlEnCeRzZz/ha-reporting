@@ -1,3 +1,26 @@
+## 0.1.0-beta.12
+
+- Ajoute un mode **dossier `consume`** recommandé, sans token ni API, via un chemin monté sous `/share`.
+- Monte le partage Home Assistant `/share` en lecture/écriture dans l’add-on pour permettre l’export vers un stockage réseau configuré par Home Assistant OS.
+- Teste l’accessibilité en écriture du dossier consume sans créer de fichier que Paperless pourrait ingérer.
+- Copie les PDF de façon atomique via un fichier temporaire, puis renommage final ; versionne le nom en cas de collision.
+- Le statut d’export distingue le dépôt dans `consume` d’une confirmation d’indexation Paperless.
+- Conserve le mode **API REST** de beta.11 comme option avancée.
+- Préserve la compatibilité avec une configuration beta.11 existante : URL + token sans champ `mode` reste interprété en mode API.
+- Le PDF local reste toujours l’artefact de référence et n’est jamais supprimé après export.
+
+## 0.1.0-beta.11
+
+- Introduit l’abstraction `ExportProvider`, séparée de la génération et du stockage local des PDF.
+- Ajoute Paperless-ngx comme première destination d’export via son API REST.
+- Ajoute une page **Destinations d’export** avec URL, token API, modèle de nom spécifique et test de connexion.
+- Le token Paperless n’est jamais renvoyé à l’interface après enregistrement ; un champ vide conserve le secret existant.
+- Ajoute l’export manuel depuis **Documents**, avec nom Paperless spécifique ou fallback sur le nom local.
+- Enregistre le statut, les erreurs, le nombre de tentatives et la référence distante dans le manifeste du document.
+- Permet de retenter un export échoué ou de réexporter un document déjà envoyé.
+- Un échec distant laisse toujours le PDF local intact.
+- Aucun export automatique planifié ni politique de rétention automatique dans cette version.
+
 ## 0.1.0-beta.10
 
 - Reprend le socle documentaire local introduit en beta.9.

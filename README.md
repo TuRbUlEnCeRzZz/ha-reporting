@@ -1,17 +1,19 @@
 # HA Reporting
 
-Add-on Home Assistant OS — version **0.1.0-beta.10**.
+Add-on Home Assistant OS — version **0.1.0-beta.12**.
 
-Beta.10 reprend le socle documentaire local de beta.9 et ajoute les finitions du rendu PDF natif, sans plateforme tierce :
+Beta.12 conserve l’architecture `ExportProvider` de beta.11 et rend l’intégration Paperless-ngx plus simple et robuste :
 
-- génération PDF native côté add-on avec WeasyPrint ;
-- thème clair/sombre du PDF aligné sur le thème actuellement visible dans HA Reporting ;
-- conservation persistante locale dans `/config/documents` ;
-- nom de fichier configurable par rapport avec variables dynamiques ;
-- politiques de doublons `version`, `overwrite` et `fail` ;
-- page **Documents** avec historique, téléchargement et suppression ;
-- aperçu du nom de sortie dans le plan de rapport ;
-- le PDF natif exige que l'analyse IA soit terminée lorsqu'elle est activée, afin de figer un document complet ;
-- aucune intégration Paperless ni `ExportProvider` dans cette version : ce sera le chantier beta.11.
+- **mode dossier `consume` recommandé et sans token**, via un chemin sous `/share` ;
+- mode API REST avec URL + token conservé comme option avancée ;
+- test de la destination depuis l’interface ;
+- export manuel d’un PDF déjà stocké depuis **Documents** ;
+- modèle de nom Paperless optionnel, avec retour automatique au nom local lorsqu’il est vide ;
+- copie atomique vers le dossier `consume` : le fichier final n’apparaît qu’une fois complètement écrit ;
+- versionnage `_2`, `_3`, etc. si un fichier du même nom est encore présent dans `consume` ;
+- état d’export persistant par document, avec mode, erreurs et nombre de tentatives ;
+- un échec Paperless ne supprime ni n’invalide jamais le PDF local.
 
-Le moteur statistique, les comparaisons, les garde-fous runtime et le transport AI Task WebSocket restent inchangés.
+Pour le mode `consume`, Home Assistant OS doit exposer le partage Paperless sous `/share`, par exemple `/share/paperless_consume`. Le PDF local reste l’artefact de référence.
+
+Cette version n’ajoute volontairement ni planification d’export ni rétention automatique.

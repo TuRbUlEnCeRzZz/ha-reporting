@@ -1,6 +1,6 @@
-# HA Reporting — 0.1.0-beta.10
+# HA Reporting — 0.1.0-beta.12
 
-Bêta 0.1.0-beta.10 pour Home Assistant OS, notamment sur Raspberry Pi 4 (aarch64).
+Bêta 0.1.0-beta.12 pour Home Assistant OS, notamment sur Raspberry Pi 4 (aarch64).
 Le moteur statistique, les comparaisons N/N-x, la vérification runtime et l'analyse IA restent inchangés. Beta.9 ajoute la couche documentaire locale.
 
 ## Rapport HTML et PDF natif
@@ -95,7 +95,7 @@ restent disponibles. Les règles de comparaison sont conservées.
    `Dockerfile`) vers `/addons/ha-reporting` sur Home Assistant OS.
 3. Actualiser le magasin des add-ons, puis installer ou reconstruire l'add-on
    local HA Reporting selon le mode d'installation existant.
-4. Vérifier la version 0.1.0-beta.10 dans les journaux et relancer les rapports.
+4. Vérifier la version 0.1.0-beta.12 dans les journaux et relancer les rapports.
 
 Ne pas copier le dossier de dépôt complet à la place du dossier de l'add-on.
 Pour une installation issue d'un dépôt Git, mettre à jour les fichiers du même
@@ -168,3 +168,29 @@ Politiques de doublons :
 La page **Documents** permet de consulter l'historique local, télécharger un PDF ou le supprimer. Lorsque l'analyse IA est activée, la génération PDF attend que son état ne soit plus `pending`/`running`, afin de figer un document complet.
 
 Beta.10 n'effectue aucun export vers une plateforme tierce. L'abstraction `ExportProvider` et Paperless-ngx sont réservés à beta.11.
+
+## ExportProvider et Paperless-ngx (beta.11–beta.12)
+
+Le PDF natif reste toujours généré et stocké localement avant tout export. Beta.11 introduit une interface `ExportProvider` afin qu’une destination externe ne devienne jamais une dépendance du moteur de rapport. Beta.12 ajoute le mode dossier `consume` recommandé, sans supprimer le mode API.
+
+### Mode recommandé : dossier `consume`
+
+La page **Documents → Destinations d’export** propose par défaut le mode **Dossier consume**. Ce mode ne demande aucun token Paperless et n’utilise pas l’API REST. HA Reporting copie le PDF local vers un dossier sous `/share`, par exemple `/share/paperless_consume`.
+
+Sur Home Assistant OS, le partage réseau contenant le dossier `consume` de Paperless doit être monté avec un usage **Share** afin qu’il soit visible sous `/share`. L’add-on HA Reporting monte `/share` en lecture/écriture. Le bouton de test vérifie que le dossier existe et qu’HA Reporting peut y créer puis supprimer un répertoire de contrôle.
+
+Lors de l’export, HA Reporting écrit d’abord une copie temporaire dans le même dossier, force son écriture, puis la renomme vers le nom final. Paperless ne voit donc le fichier PDF final qu’une fois la copie terminée. Si le même nom existe encore dans le dossier consume, HA Reporting ajoute `_2`, `_3`, etc.
+
+Le statut `completed` signifie que le PDF a été **déposé** dans le dossier consume ; il ne constitue pas une confirmation que Paperless a déjà terminé l’indexation. Le PDF source reste conservé dans HA Reporting.
+
+### Mode API optionnel
+
+Le mode **API REST** reste disponible pour les installations qui préfèrent un envoi HTTP direct. Il utilise l’URL Paperless et un token API, ainsi que l’endpoint `/api/documents/post_document/`. Le token enregistré n’est jamais renvoyé au navigateur ; laisser le champ token vide lors d’une modification conserve le secret existant.
+
+### Nom du fichier et suivi
+
+L’export Paperless est manuel dans cette version. Chaque document local peut être envoyé, réenvoyé, ou retenté après une erreur. Le manifeste local conserve l’état de l’export, le nombre de tentatives, le mode utilisé, le nom envoyé et les informations de destination disponibles. Une erreur de copie, de réseau ou de Paperless ne supprime jamais le PDF local.
+
+Le modèle de nom Paperless est optionnel. Vide, Paperless reçoit le même nom que le PDF local. Lorsqu’un modèle est défini, les mêmes variables que pour le nom local sont disponibles, ce qui permet de préparer des workflows basés sur le nom du document.
+
+Beta.12 n’ajoute pas encore de planification d’export, de retry automatique ni de rétention automatique.

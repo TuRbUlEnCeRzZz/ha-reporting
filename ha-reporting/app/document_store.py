@@ -231,6 +231,26 @@ def register_pdf(temp_pdf: Path, *, filename: str, report_id: str, report_name: 
         return manifest
 
 
+
+def update_document_export(document_id: str, provider_id: str, values: dict[str, Any], *, increment_attempt: bool = False) -> dict[str, Any]:
+    provider_id = str(provider_id or "").strip()
+    if not provider_id:
+        raise ValueError("Identifiant de destination requis")
+    with _LOCK:
+        path = _manifest_path(document_id)
+        if not path.is_file():
+            raise FileNotFoundError(f"Document introuvable: {document_id}")
+        manifest = _load_manifest(path)
+        exports = manifest.setdefault("exports", {})
+        current = dict(exports.get(provider_id) or {})
+        if increment_attempt:
+            current["attempts"] = int(current.get("attempts") or 0) + 1
+        current.update(values or {})
+        exports[provider_id] = current
+        path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        return get_document(document_id)
+
+
 def delete_document(document_id: str) -> dict[str, Any]:
     with _LOCK:
         manifest = get_document(document_id)

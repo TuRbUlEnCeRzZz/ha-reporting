@@ -15,7 +15,7 @@
   </button>
   <div>
     <h1>HA Reporting</h1>
-    <div class="subtitle">0.1.0-beta.10 · Rapports, PDF natifs & documents</div>
+    <div class="subtitle">0.1.0-beta.12 · PDF local & destinations d’export</div>
   </div>
 </header>
 
@@ -55,9 +55,66 @@
         <h2>Documents</h2>
         <p class="muted">PDF natifs générés et conservés localement par HA Reporting.</p>
       </div>
-      <button id="refreshDocumentsButton">Actualiser</button>
+      <div class="toolbarButtons"><button id="exportProvidersButton">Destinations d’export</button><button id="refreshDocumentsButton">Actualiser</button></div>
     </div>
     <div id="documentList"></div>
+  </section>
+
+  <section id="exportProvidersPage" class="hidden">
+    <div class="card">
+      <div class="toolbar">
+        <div>
+          <h2>Destinations d’export</h2>
+          <p class="muted">Le PDF reste toujours stocké localement. Une destination externe reçoit uniquement une copie à la demande.</p>
+        </div>
+      </div>
+
+      <div class="providerCard">
+        <div class="providerHeading">
+          <div>
+            <h3>Paperless-ngx</h3>
+            <p class="muted">Le mode recommandé dépose une copie du PDF dans le dossier <code>consume</code> de Paperless-ngx, sans token ni appel API. Le mode API reste disponible en option.</p>
+          </div>
+          <span id="paperlessBadge" class="providerBadge">Non configuré</span>
+        </div>
+
+        <label>Mode d’export
+          <select id="paperlessMode">
+            <option value="consume_folder">Dossier consume — recommandé</option>
+            <option value="api">API REST Paperless-ngx</option>
+          </select>
+        </label>
+
+        <div id="paperlessConsumeFields">
+          <label>Dossier consume
+            <input id="paperlessConsumePath" placeholder="/share/paperless_consume">
+            <small class="fieldHelp">Le chemin doit se trouver sous <code>/share</code>. Sur Home Assistant OS, monte idéalement le partage réseau du dossier consume avec l’usage « Share », puis indique ici le chemin obtenu, par exemple <code>/share/paperless_consume</code>.</small>
+          </label>
+        </div>
+
+        <div id="paperlessApiFields" class="hidden">
+          <div class="grid two">
+            <label>URL Paperless-ngx
+              <input id="paperlessUrl" placeholder="http://paperless:8000">
+            </label>
+            <label>Token API
+              <input id="paperlessToken" type="password" placeholder="Laisser vide pour conserver le token enregistré">
+            </label>
+          </div>
+        </div>
+
+        <label>Modèle de nom envoyé à Paperless (optionnel)
+          <input id="paperlessFilenameTemplate" placeholder="Vide = reprendre le nom du PDF local">
+          <small class="fieldHelp">Même variables que les noms locaux : {report_id}, {report_name}, {year}, {month}, {period_start}, {period_end}, etc. Le nom déposé peut ainsi déclencher des workflows Paperless.</small>
+        </label>
+
+        <div class="actions">
+          <button id="paperlessTestButton">Tester la destination</button>
+          <button class="primary" id="paperlessSaveButton">Enregistrer</button>
+          <span id="paperlessStatusText" class="statusText"></span>
+        </div>
+      </div>
+    </div>
   </section>
 
   <section id="reportFormPage" class="hidden">

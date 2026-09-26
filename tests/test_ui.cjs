@@ -42,4 +42,15 @@ check(() => assert.match(source, /JSON\.stringify\(\{theme:currentUiTheme\(\)\}\
 check(() => assert.match(source, /function showDocuments\(/));
 check(() => assert.match(source, /reportFilenameTemplate/));
 check(() => assert.match(source, /api\/document\/\$\{encodeURIComponent\(id\)\}\/download/));
+
+check(() => assert.match(source, /function showExportProviders\(/));
+check(() => assert.match(source, /function exportDocument\(/));
+check(() => assert.match(source, /api\/export-providers\/paperless\/test/));
+check(() => assert.match(source, /api\/export-providers\/paperless/));
+check(() => assert.match(source, /paperlessMode/));
+check(() => assert.match(source, /paperlessConsumePath/));
+check(() => assert.match(source, /consume_folder/));
+check(() => assert.match(source, /Tester le dossier consume/));
+check(() => assert.match(source, /\/export\/\$\{encodeURIComponent\(providerId\)\}/));
+check(() => assert.match(source, /Réessayer \$\{provider\.name\}/));
 console.log(`${checks} JavaScript UI checks passed`);

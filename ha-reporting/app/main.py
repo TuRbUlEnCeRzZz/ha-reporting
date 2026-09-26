@@ -32,8 +32,16 @@ from document_store import (
     register_pdf,
     render_filename,
     validate_output_config,
+    update_document_export,
 )
 from analysis.ai_report import analyze_report_with_ai
+from exporters import (
+    export_provider_overview,
+    load_export_provider_config,
+    paperless_provider,
+    resolve_export_provider,
+    save_paperless_config,
+)
 
 PORT = 8099
 TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
@@ -1335,6 +1343,105 @@ def generate_report_pdf(report_id, theme="dark"):
     return manifest
 
 
+def _export_filename(document: dict, provider_id: str) -> str:
+    if provider_id != "paperless":
+        return str(document.get("filename") or "rapport.pdf")
+    config = load_export_provider_config().get("paperless") or {}
+    template = str(config.get("filename_template") or "").strip()
+    if not template:
+        return str(document.get("filename") or "rapport.pdf")
+    report = load_report(str(document.get("report_id") or ""))
+    generated_at = datetime.fromisoformat(str(document.get("generated_at"))) if document.get("generated_at") else None
+    return render_filename(
+        report,
+        document.get("period") or {},
+        {"filename_template": template, "duplicate_policy": "version"},
+        generated_at=generated_at,
+    )
+
+
+def test_export_provider(provider_id: str, payload: dict | None = None) -> dict:
+    provider_id = str(provider_id or "").strip().lower()
+    payload = payload or {}
+    if provider_id == "paperless":
+        provider = paperless_provider(payload)
+        return provider.test_connection()
+    raise ValueError(f"Destination d'export inconnue: {provider_id}")
+
+
+def save_export_provider(provider_id: str, payload: dict | None = None) -> dict:
+    provider_id = str(provider_id or "").strip().lower()
+    if provider_id == "paperless":
+        result = save_paperless_config(payload or {})
+        log.info("Paperless export provider configuration updated")
+        return result
+    raise ValueError(f"Destination d'export inconnue: {provider_id}")
+
+
+def export_document(document_id: str, provider_id: str) -> dict:
+    provider_id = str(provider_id or "").strip().lower()
+    document = get_document(document_id)
+    provider = resolve_export_provider(provider_id)
+    filename = _export_filename(document, provider_id)
+    started = datetime.now(ZoneInfo(home_assistant_timezone()))
+    update_document_export(
+        document_id,
+        provider_id,
+        {
+            "provider": provider_id,
+            "status": "exporting",
+            "filename": filename,
+            "attempted_at": started.isoformat(),
+            "error": None,
+        },
+        increment_attempt=True,
+    )
+    try:
+        result = provider.export(
+            Path(document["path"]),
+            filename,
+            metadata={
+                "document_id": document_id,
+                "report_id": document.get("report_id"),
+                "report_name": document.get("report_name"),
+                "period": document.get("period"),
+            },
+        )
+        finished = datetime.now(started.tzinfo)
+        updated = update_document_export(
+            document_id,
+            provider_id,
+            {
+                "status": "completed",
+                "filename": result.get("filename") or filename,
+                "completed_at": finished.isoformat(),
+                "status_code": result.get("status_code"),
+                "remote_reference": result.get("remote_reference"),
+                "mode": result.get("mode"),
+                "delivery_status": result.get("delivery_status"),
+                "target_path": result.get("target_path"),
+                "message": result.get("message"),
+                "error": None,
+            },
+        )
+        log.info("Document exported: %s -> %s (%s)", document.get("filename"), provider_id, filename)
+        return {"ok": True, "provider": provider_id, "result": result, "document": updated}
+    except Exception as exc:
+        failed = datetime.now(started.tzinfo)
+        update_document_export(
+            document_id,
+            provider_id,
+            {
+                "status": "error",
+                "filename": filename,
+                "failed_at": failed.isoformat(),
+                "error": str(exc),
+            },
+        )
+        log.warning("Document export failed: %s -> %s: %s", document.get("filename"), provider_id, exc)
+        raise
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         pass
@@ -1387,6 +1494,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_payload(200, {"reports": list_reports()})
             if path.endswith("/api/documents"):
                 return self.send_payload(200, {"documents": list_documents()})
+            if path.endswith("/api/export-providers"):
+                return self.send_payload(200, export_provider_overview())
             if "/api/document/" in path and path.endswith("/download"):
                 parts = self.path_parts_after_document(path)
                 if len(parts) == 2 and parts[1] == "download":
@@ -1427,6 +1536,12 @@ class Handler(BaseHTTPRequestHandler):
             payload = self.json_body()
             if path.endswith("/api/providers/victoria_metrics/test"):
                 return self.send_payload(200, {"status": provider_status(payload.get("url"))})
+            if path.endswith("/api/export-providers/paperless/test"):
+                return self.send_payload(200, {"status": test_export_provider("paperless", payload)})
+            if "/api/document/" in path and "/export/" in path:
+                parts = self.path_parts_after_document(path)
+                if len(parts) == 3 and parts[1] == "export":
+                    return self.send_payload(200, export_document(parts[0], parts[2]))
             if path.endswith("/api/data/test-series"):
                 return self.send_payload(200, {"result": normalized_series_test(payload)})
             if path.endswith("/api/data/analyze-device"):
@@ -1463,6 +1578,8 @@ class Handler(BaseHTTPRequestHandler):
             payload = self.json_body()
             if path.endswith("/api/providers/victoria_metrics"):
                 return self.send_payload(200, save_provider_config(payload))
+            if path.endswith("/api/export-providers/paperless"):
+                return self.send_payload(200, {"provider": save_export_provider("paperless", payload)})
             if "/api/report/" in path:
                 parts = self.path_parts_after_report(path)
                 if len(parts) == 1:

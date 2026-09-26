@@ -23,6 +23,36 @@ def _stat_value(stats: dict[str, Any], key: str) -> Any:
     return value
 
 
+def _comparison_quality_snapshot(quality: Any) -> dict[str, Any]:
+    quality = quality if isinstance(quality, dict) else {}
+    return {
+        "availability": quality.get("availability"),
+        "source_status": quality.get("source_status"),
+        "period_coverage_percent": quality.get("period_coverage_percent"),
+        "sample_density_percent": quality.get("sample_density_percent"),
+        "counter_mode": quality.get("counter_mode"),
+        "warnings": quality.get("warnings") or [],
+    }
+
+
+def _comparison_interpretation(source: dict[str, Any]) -> dict[str, Any]:
+    status = source.get("comparison_status")
+    base_quality = _comparison_quality_snapshot(source.get("base_quality"))
+    reference_quality = _comparison_quality_snapshot(source.get("reference_quality"))
+    base_coverage = base_quality.get("period_coverage_percent")
+    reference_coverage = reference_quality.get("period_coverage_percent")
+
+    coverage_limited = any(
+        isinstance(value, (int, float)) and value < 80.0
+        for value in (base_coverage, reference_coverage)
+    )
+    return {
+        "status": status,
+        "coverage_limited": coverage_limited,
+        "full_period_change_supported": bool(status == "comparable" and not coverage_limited),
+    }
+
+
 def compact_report_context(result: dict[str, Any]) -> dict[str, Any]:
     """Build a bounded, structured context for AI interpretation.
 
@@ -122,6 +152,9 @@ def compact_report_context(result: dict[str, Any]) -> dict[str, Any]:
                             "unit": source.get("unit"),
                             "status": source.get("comparison_status"),
                             "reasons": source.get("reasons") or [],
+                            "base_quality": _comparison_quality_snapshot(source.get("base_quality")),
+                            "reference_quality": _comparison_quality_snapshot(source.get("reference_quality")),
+                            "interpretation": _comparison_interpretation(source),
                             "values": source.get("values") or [],
                         }
                     )
@@ -174,12 +207,47 @@ def _websocket_error_message(message: dict[str, Any]) -> str:
         return str(text or code or error)
     return str(error or "Erreur WebSocket Home Assistant")
 
+def _sanitize_ai_text(text: str) -> str:
+    """Remove internally contradictory boilerplate without rewriting AI meaning."""
+    lines = str(text or "").splitlines()
+    recommendation_index = next(
+        (i for i, line in enumerate(lines) if line.strip().upper() == "RECOMMANDATIONS"),
+        None,
+    )
+    if recommendation_index is None:
+        return str(text or "").strip()
+
+    recommendation_lines = lines[recommendation_index + 1 :]
+    substantive_bullets = [
+        line
+        for line in recommendation_lines
+        if line.strip().startswith("-")
+        and line.strip().lower() != "- aucune recommandation particulière."
+    ]
+    if substantive_bullets:
+        lines = [
+            line
+            for i, line in enumerate(lines)
+            if not (
+                i > recommendation_index
+                and line.strip().lower() == "- aucune recommandation particulière."
+            )
+        ]
+    return "\n".join(lines).strip()
+
+
 def _instructions(context_json: str) -> str:
     return f"""Tu analyses un rapport domotique calculé par HA Reporting.
 Réponds directement et brièvement en français, sans afficher de raisonnement interne.
 N'invente aucun chiffre et ne recalcule pas les données : utilise exclusivement les statistiques fournies.
-Distingue clairement un fait calculé d'une interprétation. Respecte les limites de qualité et de couverture ; une comparaison partielle ou indisponible ne doit jamais être présentée comme complète.
-Ignore les identifiants techniques lorsqu'un nom lisible est disponible.
+Distingue clairement un fait calculé d'une interprétation. Ignore les identifiants techniques lorsqu'un nom lisible est disponible.
+
+Règles impératives pour les comparaisons N/N-x :
+- Une source `unavailable` ne permet aucune conclusion d'évolution.
+- Une source `partial` ou `reconstructed`, ou une comparaison dont `interpretation.coverage_limited` vaut true, ne doit jamais être formulée comme une hausse/baisse réelle de la période complète.
+- Dans ce cas, formule plutôt : « sur les données disponibles, l'écart calculé est de ... », puis précise qu'il n'est pas directement interprétable comme une variation complète à cause de la couverture/qualité indiquée.
+- N'utilise pas un pourcentage relatif issu d'une comparaison incomplète pour affirmer une dérive, une surconsommation ou une amélioration.
+- Une recommandation fondée seulement sur une comparaison partielle/reconstruite doit rester proportionnée : privilégie « surveiller », « poursuivre la collecte » ou « recontrôler quand la couverture sera suffisante ». Ne demande pas d'en rechercher les causes sauf si les données de la période courante montrent, indépendamment de la comparaison, une anomalie étayée.
 
 Produis exactement ces trois sections, en texte simple :
 SYNTHÈSE
@@ -189,11 +257,13 @@ POINTS D'ATTENTION
 0 à 5 puces commençant par "- ". Ne signale que des éléments réellement étayés par les données, y compris les limites de couverture si elles affectent l'interprétation. Écris "- Aucun point d'attention notable." si nécessaire.
 
 RECOMMANDATIONS
-0 à 4 puces commençant par "- ". Reste prudent et concret. N'invente pas de diagnostic de panne. Écris "- Aucune recommandation particulière." si nécessaire.
+0 à 4 puces commençant par "- ". Reste prudent et concret. N'invente pas de diagnostic de panne.
+Écris "- Aucune recommandation particulière." uniquement s'il n'y a aucune autre recommandation. Ne combine jamais cette phrase avec d'autres puces.
 
 Données structurées validées par HA Reporting :
 {context_json}
 """
+
 
 
 def analyze_report_with_ai(
@@ -325,6 +395,7 @@ def analyze_report_with_ai(
             text = str(data or "").strip()
         if not text:
             raise RuntimeError("AI Task a retourné un texte vide")
+        text = _sanitize_ai_text(text)
 
         finished = time.time()
         return {

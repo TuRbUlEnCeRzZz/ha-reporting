@@ -23,7 +23,7 @@ from providers.victoriametrics import VictoriaMetricsProvider as VM
 from periods.engine import PeriodEngine
 from comparisons.engine import ComparisonEngine
 from rendering.html_report import render_report_html
-from analysis.ai_report import compact_report_context, _extract_service_response, _extract_ai_task_payload, analyze_report_with_ai
+from analysis.ai_report import compact_report_context, _extract_service_response, _extract_ai_task_payload, _instructions, _sanitize_ai_text, analyze_report_with_ai
 import main
 
 SOURCE = {'entity_id': 'sensor.runtime', 'metric': 'runtime', 'unit': 'h'}
@@ -382,6 +382,39 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertNotIn('999',encoded)
         self.assertEqual(context['catalogs'][0]['devices'][0]['sources'][0]['values']['mean'],50)
 
+    def test_compact_comparison_context_exposes_quality_and_caution(self):
+        sample=self.sample()
+        sample['comparisons']={
+            'enabled':True,'target_count':1,'targets':[{
+                'label':'N-1 an','resolved_period':{'label':'2025'},'summary':{},'catalogs':[{'name':'Maison','devices':[{'name':'Frigo','sources':[{
+                    'sensor_key':'energy','metric':'energy_total','unit':'kWh','comparison_status':'reconstructed',
+                    'reasons':['Référence: couverture de période 34.8 %.'],
+                    'base_quality':{'availability':'available','period_coverage_percent':99.9,'counter_mode':'provider_reconstructed'},
+                    'reference_quality':{'availability':'available','period_coverage_percent':34.8,'counter_mode':'direct'},
+                    'values':[{'label':'Consommation','base':136,'reference':48.2,'absolute_change':87.8,'relative_change_percent':182.4,'relative_change_applicable':True}],
+                }]}]}]
+            }]
+        }
+        source=compact_report_context(sample)['comparisons'][0]['catalogs'][0]['devices'][0]['sources'][0]
+        self.assertEqual(source['reference_quality']['period_coverage_percent'],34.8)
+        self.assertTrue(source['interpretation']['coverage_limited'])
+        self.assertFalse(source['interpretation']['full_period_change_supported'])
+
+    def test_ai_prompt_requires_cautious_partial_comparison_language(self):
+        prompt=_instructions('{}')
+        self.assertIn('ne doit jamais être formulée comme une hausse/baisse réelle',prompt)
+        self.assertIn("sur les données disponibles, l'écart calculé est de",prompt)
+        self.assertIn('poursuivre la collecte',prompt)
+        self.assertIn("uniquement s'il n'y a aucune autre recommandation",prompt)
+
+    def test_ai_sanitizer_removes_contradictory_no_recommendation(self):
+        text="SYNTHÈSE\nOK\n\nPOINTS D'ATTENTION\n- Aucun point d'attention notable.\n\nRECOMMANDATIONS\n- Surveiller la tendance.\n- Aucune recommandation particulière."
+        cleaned=_sanitize_ai_text(text)
+        self.assertIn('- Surveiller la tendance.',cleaned)
+        self.assertNotIn('- Aucune recommandation particulière.',cleaned)
+        only=_sanitize_ai_text("SYNTHÈSE\nOK\n\nPOINTS D'ATTENTION\n- Aucun point d'attention notable.\n\nRECOMMANDATIONS\n- Aucune recommandation particulière.")
+        self.assertIn('- Aucune recommandation particulière.',only)
+
     def test_extract_service_response_direct(self):
         data,cid=_extract_service_response({'service_response':{'data':'ok','conversation_id':'c1'}})
         self.assertEqual(data,'ok')
@@ -510,6 +543,7 @@ class HtmlRendererTests(unittest.TestCase):
         self.assertIn('--paper:#14191f',html)
         self.assertIn('background:var(--paper)!important',html)
         self.assertIn('break-inside:auto',html)
+        self.assertNotIn('.ai-ok{break-before:page;page-break-before:always}',html)
         self.assertNotIn('body{background:#fff',html)
         self.assertIn('Rapport &lt;Maison&gt;',html)
         self.assertIn('power&lt;script&gt;',html)
@@ -527,6 +561,9 @@ class HtmlRendererTests(unittest.TestCase):
         self.assertIn('AI Task · no-thinking',html)
         self.assertIn('SYNTHÈSE<br>Tout va bien &lt;script&gt;.',html)
         self.assertNotIn('Tout va bien <script>.',html)
+        self.assertLess(html.index('Analyse IA'), html.index('Électroménager'))
+        self.assertLess(html.index('Analyse IA'), html.index('Comparaisons N / N-x'))
+        self.assertIn('permettent de vérifier, nuancer ou contester cette analyse', html)
 
 
 class PackageTests(unittest.TestCase):
@@ -536,7 +573,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.6')
+        self.assertEqual(config['version'],'0.1.0-beta.7')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertIn('py3-websocket-client',(addon/'Dockerfile').read_text())
@@ -600,5 +637,10 @@ class Beta6TransportTests(unittest.TestCase):
             final=main._ai_analysis_status('r')
             self.assertEqual(final['status'],'completed')
             self.assertEqual(final['conversation_id'],'cid')
+            cached=main._cached_report_result('r')
+            execution=cached['execution']
+            self.assertAlmostEqual(execution['ai_analysis_duration_seconds'],0.1)
+            self.assertTrue(execution['total_duration_includes_ai'])
+            self.assertIn('pipeline_finished_at_epoch',execution)
 
 if __name__ == '__main__': unittest.main()

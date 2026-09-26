@@ -1,3 +1,17 @@
+## 0.1.0-beta.7
+
+- Hiérarchie éditoriale révisée : l’analyse IA est présentée juste après la synthèse générale, avant les données détaillées et les comparaisons.
+- Le texte introductif rappelle explicitement que les chiffres, graphiques et indicateurs restent la référence pour vérifier, nuancer ou contester l’interprétation IA.
+- Le PDF ne force plus l’analyse IA sur une nouvelle page ; son titre reste néanmoins lié au début du contenu lors de la pagination.
+
+- Add comparison-quality metadata to the compact AI context, including base/reference coverage and interpretation flags.
+- Strengthen the AI prompt so partial, reconstructed or coverage-limited comparisons are not phrased as proven full-period increases/decreases.
+- Keep recommendations proportional to confidence; favor monitoring/collecting history when the comparison itself is incomplete.
+- Remove contradictory `Aucune recommandation particulière` boilerplate when substantive recommendations are already present.
+- Separate statistical, AI and end-to-end pipeline durations in execution metadata.
+- Keep the HTML/PDF footer explicit about calculation time vs AI time.
+- Place completed AI analysis immediately after the executive summary, before detailed data and comparisons.
+
 ## 0.1.0-beta.6
 
 - AI Task transport moved from a long REST call to the Home Assistant WebSocket API via `ws://supervisor/core/websocket`.

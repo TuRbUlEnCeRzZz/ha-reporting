@@ -1,15 +1,19 @@
 # HA Reporting
 
-Add-on Home Assistant OS — version **0.1.0-beta.6**.
+Add-on Home Assistant OS — version **0.1.0-beta.7**.
 
-Beta.6 conserve le moteur statistique, les comparaisons, le rendu HTML/PDF et le timeout IA configurable, mais remplace l'appel AI Task REST longue durée par le WebSocket interne Home Assistant. L'analyse IA s'exécute désormais dans un job serveur réellement indépendant de l'Ingress ; le navigateur ne fait que suivre son état par requêtes courtes.
+Beta.7 conserve le moteur statistique, le transport AI Task WebSocket et le timeout configurable de beta.6, puis consolide l’interprétation IA et le rendu final :
 
-- Transport AI Task : `ws://supervisor/core/websocket`
-- Authentification : `SUPERVISOR_TOKEN`
-- Action : `ai_task.generate_data` avec `return_response: true`
-- Heartbeat WebSocket : 20 s
-- Polling UI : 2 s
-- Timeout IA : configurable, 600 s par défaut, 60–1800 s acceptés
-- Les statistiques compactes uniquement sont transmises au modèle ; aucune série brute VictoriaMetrics.
+- comparaisons partielles/reconstruites transmises avec leur qualité et leur couverture ;
+- prompt IA plus strict : un écart sur données incomplètes n’est plus présenté comme une évolution annuelle certaine ;
+- recommandations proportionnées au niveau de confiance ;
+- suppression automatique de la phrase « Aucune recommandation particulière » lorsqu’une autre recommandation existe déjà ;
+- métadonnées de durée distinguant calcul statistique, IA et durée totale du pipeline ;
+- section IA placée après la synthèse générale et avant les données détaillées, sans saut de page forcé.
 
-Voir [VALIDATION-beta6.md](VALIDATION-beta6.md).
+Le transport AI Task reste `ws://supervisor/core/websocket`, avec heartbeat 20 s, polling UI 2 s et timeout configurable (600 s par défaut). Aucune série brute VictoriaMetrics n’est transmise au modèle.
+
+Voir [VALIDATION-beta7.md](VALIDATION-beta7.md).
+
+
+Révision beta.7 : hiérarchie éditoriale du rapport ajustée pour présenter l’analyse IA avant les données justificatives et les comparaisons.

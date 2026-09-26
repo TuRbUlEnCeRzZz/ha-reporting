@@ -194,7 +194,7 @@ def _ai_analysis(result: dict[str, Any]) -> str:
         duration = _num(ai.get("duration_seconds"), "s")
         return f"""
           <section class="ai-analysis ai-ok">
-            <div class="section-title"><div><h1>Analyse IA</h1><p>Interprétation des statistiques calculées par HA Reporting</p></div><span class="pill">AI Task · no-thinking</span></div>
+            <div class="section-title"><div><h1>Analyse IA</h1><p>Interprétation automatique des statistiques. Les données, graphiques et indicateurs ci-dessous constituent la référence et permettent de vérifier, nuancer ou contester cette analyse.</p></div><span class="pill">AI Task · no-thinking</span></div>
             <div class="ai-text">{text}</div>
             <div class="quality">Source : {_e(entity)} · durée {duration} · les séries brutes ne sont pas transmises au modèle.</div>
           </section>"""
@@ -264,7 +264,7 @@ button{{border:0;border-radius:8px;background:var(--accent);color:#fff;padding:9
 .metric span{{display:block;font-size:9px;color:var(--muted)}} .metric strong{{display:block;font-size:14px;margin-top:2px}}
 .quality{{font-size:9px}} .source-error{{border-color:#ef4444}}
 .comparisons{{margin-top:28px}}
-.ai-analysis{{margin-top:28px;border-top:2px solid #66717e;padding-top:20px;break-inside:auto}}
+.ai-analysis{{margin:8px 0 28px;border:1px solid var(--line);border-radius:12px;padding:14px;background:#151b22;break-inside:auto}}
 .ai-text{{white-space:normal;background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:14px;line-height:1.6;margin-bottom:8px}}
 .ai-error .ai-text{{border-color:#ef4444}}
 .comparison-block{{margin-top:24px;border-top:2px solid #66717e;padding-top:20px;break-inside:auto}}
@@ -296,8 +296,8 @@ footer{{border-top:1px solid var(--line);margin-top:28px;padding-top:12px;color:
   .source,.compare-source{{padding:8px;background:#171d24!important;break-inside:avoid;page-break-inside:avoid}}
   .device{{padding:10px;margin:8px 0 12px;background:#151b22!important}}
   .comparison-block{{margin-top:16px;padding-top:12px}}
-  .ai-analysis{{margin-top:16px;padding-top:12px}}
-  .ai-text{{padding:9px;background:var(--soft)!important;break-inside:avoid;page-break-inside:avoid}}
+  .ai-analysis{{margin:8px 0 14px;padding:10px;background:#151b22!important;break-inside:auto;page-break-inside:auto}}
+  .ai-text{{padding:9px;background:var(--soft)!important;break-inside:auto;page-break-inside:auto}}
   .compare-bars i{{background:var(--accent)!important;box-shadow:inset 0 0 0 99px var(--accent)!important}}
   .compare-bars i.ref{{background:var(--ref)!important;box-shadow:inset 0 0 0 99px var(--ref)!important}}
   footer{{margin-top:16px}}
@@ -313,9 +313,9 @@ footer{{border-top:1px solid var(--line);margin-top:28px;padding-top:12px;color:
 <div><span>Runtimes vérifiés</span><strong>{_e(summary.get('sources_runtime_verified', 0))}</strong></div>
 <div><span>Fallbacks</span><strong>{_e(summary.get('sources_fallback', 0))}</strong></div>
 </section>
+{_ai_analysis(result)}
 {''.join(catalogs)}
 {_comparisons(result)}
-{_ai_analysis(result)}
-<footer>HA Reporting · moteur {_e(execution.get('analysis_mode'))} · durée {_num(execution.get('total_duration_seconds') or execution.get('duration_seconds'), 's')} · sémantique {_e(period.get('semantics'))}</footer>
+<footer>HA Reporting · moteur {_e(execution.get('analysis_mode'))} · calcul {_num(execution.get('data_total_duration_seconds') or execution.get('duration_seconds'), 's')}{(' · IA ' + _num(execution.get('ai_analysis_duration_seconds'), 's')) if (execution.get('ai_analysis_duration_seconds') or 0) > 0 else ''} · sémantique {_e(period.get('semantics'))}</footer>
 </main></body></html>"""
     return html

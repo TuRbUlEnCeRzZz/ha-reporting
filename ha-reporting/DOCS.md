@@ -1,6 +1,6 @@
-# HA Reporting — 0.1.0-beta.6
+# HA Reporting — 0.1.0-beta.7
 
-Deuxième bêta pour Home Assistant OS, notamment sur Raspberry Pi 4 (aarch64).
+Bêta 0.1.0-beta.7 pour Home Assistant OS, notamment sur Raspberry Pi 4 (aarch64).
 Les calculs, contrôles de qualité, rollups, comparaisons et vérifications runtime
 de l’alpha.23 restent gelés. beta.2 consolide la sortie imprimable : le document
 HTML et la sortie PDF navigateur partagent désormais le même thème sombre et
@@ -107,7 +107,7 @@ restent disponibles. Les règles de comparaison sont conservées.
    `Dockerfile`) vers `/addons/ha-reporting` sur Home Assistant OS.
 3. Actualiser le magasin des add-ons, puis installer ou reconstruire l'add-on
    local HA Reporting selon le mode d'installation existant.
-4. Vérifier la version 0.1.0-beta.6 dans les journaux et relancer les rapports.
+4. Vérifier la version 0.1.0-beta.7 dans les journaux et relancer les rapports.
 
 Ne pas copier le dossier de dépôt complet à la place du dossier de l'add-on.
 Pour une installation issue d'un dépôt Git, mettre à jour les fichiers du même
@@ -119,7 +119,7 @@ L'archive contient les sources à construire par Supervisor, pas une image OCI.
 - [Rollups MetricsQL](https://docs.victoriametrics.com/victoriametrics/metricsql/)
 - [Export JSONL VictoriaMetrics](https://docs.victoriametrics.com/victoriametrics/single-server-victoriametrics/#how-to-export-data-in-json-line-format)
 
-Voir `VALIDATION-beta5.md` à la racine du dépôt pour les tests et résultats.
+Voir `VALIDATION-beta7.md` à la racine du dépôt pour les tests et résultats.
 
 ## Analyse IA optionnelle (beta.6)
 
@@ -148,3 +148,14 @@ Long AI analyses use Home Assistant's internal WebSocket API through the Supervi
 ## Transport IA beta.6
 
 L'analyse IA n'utilise plus une requête REST longue. HA Reporting ouvre le WebSocket interne Home Assistant via `ws://supervisor/core/websocket`, authentifié avec `SUPERVISOR_TOKEN`, puis appelle `ai_task.generate_data` avec `return_response: true`. Le job IA reste côté serveur ; l'interface Ingress ne fait que des requêtes courtes de suivi d'état toutes les 2 secondes. Des heartbeats applicatifs maintiennent le canal observable pendant les générations longues.
+
+
+## Finition IA — beta.7
+
+Beta.7 conserve le transport WebSocket de beta.6 mais renforce l’interprétation des comparaisons. Le contexte compact transmet désormais `base_quality`, `reference_quality` et un bloc `interpretation` pour chaque source comparée. Une comparaison partielle, reconstruite ou à couverture limitée ne doit pas être présentée par le modèle comme une variation certaine de la période complète. Les recommandations basées uniquement sur une référence incomplète doivent privilégier la surveillance et l’accumulation d’historique.
+
+Un post-traitement minimal supprime uniquement la contradiction « Aucune recommandation particulière » lorsqu’une autre recommandation est déjà présente ; il ne réécrit pas le contenu de l’analyse.
+
+Les temps sont séparés entre moteur statistique et IA. Après achèvement de l’AI Task, `total_duration_seconds` représente le pipeline complet et `total_duration_includes_ai` passe à `true`, tandis que le pied du rapport continue d’afficher séparément le temps de calcul statistique et le temps IA.
+
+En impression, l’analyse IA est placée juste après la synthèse générale. Elle peut rester sur la première page si l’espace le permet, tandis que le titre est protégé contre une coupure avant le début du contenu.

@@ -699,7 +699,7 @@ th{font-size:12px;color:var(--hr-secondary)}
 
 .aiChoice{margin:8px 0 12px}
 .aiModeInfo{display:flex;gap:10px;align-items:flex-start;padding:8px 0}
-.aiAnalysisCard{margin-top:18px;border:1px solid var(--hr-divider);border-radius:12px;padding:14px;background:color-mix(in srgb,var(--hr-card) 88%,transparent)}
+.aiAnalysisCard{margin:16px 0 20px;border:1px solid var(--hr-divider);border-radius:12px;padding:14px;background:color-mix(in srgb,var(--hr-card) 88%,transparent)}
 .aiAnalysisHeader{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:10px}
 .aiAnalysisText{white-space:pre-wrap;line-height:1.55;color:var(--hr-text)}
 .aiAnalysisError{border-color:color-mix(in srgb,var(--hr-error) 55%,var(--hr-divider))}

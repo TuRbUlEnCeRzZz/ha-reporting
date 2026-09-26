@@ -1117,11 +1117,15 @@ def execute_report(report_id):
                 source_count=base["summary"]["sources_total"],
                 comparison_targets=target_specs,
             ),
+            "pipeline_started_at_epoch": full_started,
             "data_total_duration_seconds": data_finished - full_started,
             "data_finished_at_epoch": data_finished,
             "ai_analysis_duration_seconds": 0.0,
-            "finished_at_epoch": data_finished,
+            "ai_analysis_finished_at_epoch": None,
+            "pipeline_finished_at_epoch": data_finished,
             "total_duration_seconds": data_finished - full_started,
+            "total_duration_includes_ai": False,
+            "finished_at_epoch": data_finished,
         },
         "comparisons": {
             "enabled": bool(comparison_targets),
@@ -1230,8 +1234,18 @@ def start_ai_analysis(report_id):
                 latest_ai = (latest or {}).get("ai_analysis") or {}
                 if latest is not None and latest_ai.get("job_id") == job_id:
                     latest["ai_analysis"] = analysis
-                    latest.setdefault("execution", {})["ai_analysis_duration_seconds"] = float(analysis.get("duration_seconds") or 0.0)
-                    latest["execution"]["ai_analysis_finished_at_epoch"] = time.time()
+                    execution = latest.setdefault("execution", {})
+                    ai_duration = float(analysis.get("duration_seconds") or 0.0)
+                    ai_finished = float(analysis.get("finished_at_epoch") or time.time())
+                    execution["ai_analysis_duration_seconds"] = ai_duration
+                    execution["ai_analysis_finished_at_epoch"] = ai_finished
+                    execution["pipeline_finished_at_epoch"] = ai_finished
+                    pipeline_started = execution.get("pipeline_started_at_epoch")
+                    if isinstance(pipeline_started, (int, float)):
+                        execution["total_duration_seconds"] = max(0.0, ai_finished - float(pipeline_started))
+                    else:
+                        execution["total_duration_seconds"] = float(execution.get("data_total_duration_seconds") or 0.0) + ai_duration
+                    execution["total_duration_includes_ai"] = True
                     _cache_report_result(report_id, latest)
 
                 AI_ANALYSIS_JOBS.pop(report_id, None)

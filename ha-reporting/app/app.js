@@ -852,7 +852,7 @@ function renderAiAnalysis(result){
         <div class="aiAnalysisHeader">
           <div>
             <h3>Analyse IA</h3>
-            <div class="muted">Interprétation des statistiques calculées par HA Reporting</div>
+            <div class="muted">Interprétation automatique des statistiques. Les données, graphiques et indicateurs ci-dessous constituent la référence et permettent de vérifier, nuancer ou contester cette analyse.</div>
           </div>
           <span class="badge">AI Task · no-thinking</span>
         </div>
@@ -935,6 +935,8 @@ function renderExecutedReport(result){
       <div class="seriesStat"><div class="label">Fallbacks</div><div class="value">${esc(summary.sources_fallback ?? 0)}</div></div>
     </div>
 
+    ${renderAiAnalysis(result)}
+
     ${catalogHtml}
 
     ${(result.comparisons || {}).enabled ? `
@@ -943,8 +945,6 @@ function renderExecutedReport(result){
         <p class="muted">Les écarts sont calculés uniquement lorsque les deux périodes fournissent des statistiques comparables. La qualité de chaque côté reste visible.</p>
         ${((result.comparisons || {}).targets || []).map(renderComparisonTarget).join("")}
       </section>` : ""}
-
-    ${renderAiAnalysis(result)}
 
     <details class="jsonDetails">
       <summary>Voir le JSON complet du rapport exécuté</summary>

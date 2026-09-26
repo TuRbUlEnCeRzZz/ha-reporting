@@ -1,7 +1,58 @@
-# HA Reporting — 0.1.0-beta.12
+# HA Reporting — 0.1.0-beta.13
 
-Bêta 0.1.0-beta.12 pour Home Assistant OS, notamment sur Raspberry Pi 4 (aarch64).
-Le moteur statistique, les comparaisons N/N-x, la vérification runtime et l'analyse IA restent inchangés. Beta.9 ajoute la couche documentaire locale.
+Bêta 0.1.0-beta.13 pour Home Assistant OS, notamment sur Raspberry Pi 4 (aarch64).
+Le moteur statistique, les comparaisons N/N-x, la vérification runtime et l'analyse IA restent inchangés. Beta.13 ajoute l'orchestration asynchrone du pipeline complet.
+
+## API d’automatisation beta.13
+
+HA Reporting peut désormais lancer un rapport complet via une requête courte et retourner immédiatement un `job_id`. Le travail se poursuit côté add-on : calcul, analyse IA éventuelle, PDF natif, stockage local et exports.
+
+### Démarrer un job
+
+```http
+POST /api/automation/report-jobs
+Content-Type: application/json
+
+{
+  "report_id": "rapport_domotique_mensuel",
+  "ai_analysis": true,
+  "generate_pdf": true,
+  "theme": "dark",
+  "destinations": ["paperless"]
+}
+```
+
+`ai_analysis` peut être `true`, `false` ou omis. Lorsqu'il est omis, la configuration enregistrée dans le rapport décide si l'IA doit être exécutée. `destinations` exige `generate_pdf=true`, car les providers exportent le document local généré.
+
+La réponse HTTP `202` contient le job :
+
+```json
+{
+  "job": {
+    "id": "…",
+    "status": "queued",
+    "report_id": "rapport_domotique_mensuel"
+  }
+}
+```
+
+### Suivre un job
+
+```http
+GET /api/automation/report-jobs/{job_id}
+```
+
+Les états possibles sont `queued`, `running`, `data_complete`, `ai_running`, `pdf_generating`, `exporting`, `completed`, `completed_with_errors` et `error`. Le résultat final contient notamment `document_id`, le nom du PDF, les exports effectués, les avertissements et l'erreur éventuelle.
+
+```http
+GET /api/automation/report-jobs
+```
+
+retourne les jobs récents. Une demande strictement identique à un job encore actif est dédupliquée et retourne le même `job_id`.
+
+L’échec d’une destination d’export ne détruit jamais le PDF local : le job termine en `completed_with_errors`. Les erreurs de calcul ou de génération PDF restent fatales et placent le job en `error`.
+
+Cette API constitue le contrat prévu pour l’intégration Home Assistant compagnon qui exposera plus tard une action native `ha_reporting.run_report`.
 
 ## Rapport HTML et PDF natif
 
@@ -95,7 +146,7 @@ restent disponibles. Les règles de comparaison sont conservées.
    `Dockerfile`) vers `/addons/ha-reporting` sur Home Assistant OS.
 3. Actualiser le magasin des add-ons, puis installer ou reconstruire l'add-on
    local HA Reporting selon le mode d'installation existant.
-4. Vérifier la version 0.1.0-beta.12 dans les journaux et relancer les rapports.
+4. Vérifier la version 0.1.0-beta.13 dans les journaux et relancer les rapports.
 
 Ne pas copier le dossier de dépôt complet à la place du dossier de l'add-on.
 Pour une installation issue d'un dépôt Git, mettre à jour les fichiers du même
@@ -107,7 +158,7 @@ L'archive contient les sources à construire par Supervisor, pas une image OCI.
 - [Rollups MetricsQL](https://docs.victoriametrics.com/victoriametrics/metricsql/)
 - [Export JSONL VictoriaMetrics](https://docs.victoriametrics.com/victoriametrics/single-server-victoriametrics/#how-to-export-data-in-json-line-format)
 
-Voir `VALIDATION-beta10.md` à la racine du dépôt pour les tests et résultats.
+Voir `VALIDATION-beta13.md` à la racine du dépôt pour les tests et résultats.
 
 ## Analyse IA optionnelle (beta.6)
 
@@ -169,7 +220,7 @@ La page **Documents** permet de consulter l'historique local, télécharger un P
 
 Beta.10 n'effectue aucun export vers une plateforme tierce. L'abstraction `ExportProvider` et Paperless-ngx sont réservés à beta.11.
 
-## ExportProvider et Paperless-ngx (beta.11–beta.12)
+## ExportProvider et Paperless-ngx (beta.11–beta.13)
 
 Le PDF natif reste toujours généré et stocké localement avant tout export. Beta.11 introduit une interface `ExportProvider` afin qu’une destination externe ne devienne jamais une dépendance du moteur de rapport. Beta.12 ajoute le mode dossier `consume` recommandé, sans supprimer le mode API.
 

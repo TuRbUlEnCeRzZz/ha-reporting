@@ -63,6 +63,11 @@ LAST_REPORT_RESULTS_LOCK = threading.Lock()
 AI_ANALYSIS_JOBS = {}
 AI_ANALYSIS_JOBS_LOCK = threading.Lock()
 
+AUTOMATION_JOBS = {}
+AUTOMATION_JOBS_LOCK = threading.Lock()
+AUTOMATION_MAX_JOBS = 100
+AUTOMATION_TERMINAL_STATES = {"completed", "completed_with_errors", "error"}
+
 DEFAULT_CATEGORIES = [
     {"id": "refrigeration", "name": "Réfrigération"},
     {"id": "appliance", "name": "Électroménager"},
@@ -1300,6 +1305,328 @@ def start_ai_analysis(report_id):
         return copy.deepcopy(running)
 
 
+
+def _finalize_cached_ai_analysis(report_id, analysis):
+    """Persist a completed/failed AI result and synchronize execution metadata."""
+    latest = _cached_report_result(report_id)
+    if latest is None:
+        return None
+    analysis = dict(analysis or {})
+    latest["ai_analysis"] = analysis
+    execution = latest.setdefault("execution", {})
+    ai_duration = float(analysis.get("duration_seconds") or 0.0)
+    ai_finished = float(analysis.get("finished_at_epoch") or time.time())
+    execution["ai_analysis_duration_seconds"] = ai_duration
+    execution["ai_analysis_finished_at_epoch"] = ai_finished
+    execution["pipeline_finished_at_epoch"] = ai_finished
+    pipeline_started = execution.get("pipeline_started_at_epoch")
+    if isinstance(pipeline_started, (int, float)):
+        execution["total_duration_seconds"] = max(0.0, ai_finished - float(pipeline_started))
+    else:
+        execution["total_duration_seconds"] = float(execution.get("data_total_duration_seconds") or 0.0) + ai_duration
+    execution["total_duration_includes_ai"] = True
+    _cache_report_result(report_id, latest)
+    return latest
+
+
+def _automation_ai_analysis(report_id, report, automation_job_id):
+    """Run AI synchronously inside an automation worker (HTTP remains non-blocking)."""
+    ai_config = dict(report.get("ai_analysis") or {})
+    ai_config["enabled"] = True
+    timeout_seconds = _ai_timeout_seconds(ai_config)
+    running = {
+        "enabled": True,
+        "status": "running",
+        "job_id": f"automation-{automation_job_id}",
+        "entity_id": str(ai_config.get("entity_id") or "").strip() or None,
+        "mode": "no_thinking_expected",
+        "mode_control": "ai_task_entity_configuration",
+        "timeout_seconds": timeout_seconds,
+        "transport": "home_assistant_websocket",
+        "started_at_epoch": time.time(),
+    }
+    snapshot = _cached_report_result(report_id)
+    if snapshot is None:
+        raise RuntimeError("Résultat statistique indisponible pour l'analyse IA")
+    snapshot["ai_analysis"] = running
+    _cache_report_result(report_id, snapshot)
+    try:
+        analysis = analyze_report_with_ai(snapshot, ai_config, token=TOKEN)
+    except Exception as exc:
+        analysis = {
+            **running,
+            "status": "error",
+            "finished_at_epoch": time.time(),
+            "duration_seconds": max(0.0, time.time() - float(running["started_at_epoch"])),
+            "error": str(exc),
+        }
+    analysis = dict(analysis or {})
+    analysis["job_id"] = running["job_id"]
+    _finalize_cached_ai_analysis(report_id, analysis)
+    return analysis
+
+
+def _automation_job_public(job):
+    if job is None:
+        return None
+    output = copy.deepcopy(job)
+    output.pop("_thread", None)
+    output.pop("_fingerprint", None)
+    return output
+
+
+def _automation_options(payload):
+    payload = payload or {}
+    report_id = str(payload.get("report_id") or "").strip()
+    if not report_id:
+        raise ValueError("report_id est obligatoire")
+    # Validate existence immediately so automation failures are deterministic.
+    load_report(report_id)
+
+    ai_option = payload.get("ai_analysis", None)
+    if ai_option is not None and not isinstance(ai_option, bool):
+        raise ValueError("ai_analysis doit être true, false ou omis")
+    generate_pdf = payload.get("generate_pdf", True)
+    if not isinstance(generate_pdf, bool):
+        raise ValueError("generate_pdf doit être true ou false")
+    theme = str(payload.get("theme") or "dark").strip().lower()
+    if theme not in {"dark", "light"}:
+        raise ValueError("theme doit être dark ou light")
+
+    destinations_raw = payload.get("destinations") or []
+    if not isinstance(destinations_raw, list):
+        raise ValueError("destinations doit être une liste")
+    destinations = []
+    for item in destinations_raw:
+        provider_id = str(item or "").strip().lower()
+        if not provider_id:
+            continue
+        if provider_id not in destinations:
+            destinations.append(provider_id)
+    if destinations and not generate_pdf:
+        raise ValueError("generate_pdf doit être activé lorsqu'une destination d'export est demandée")
+    for provider_id in destinations:
+        # Resolve now so unknown providers fail before the background job starts.
+        resolve_export_provider(provider_id)
+
+    return {
+        "report_id": report_id,
+        "ai_analysis": ai_option,
+        "generate_pdf": generate_pdf,
+        "theme": theme,
+        "destinations": destinations,
+    }
+
+
+def _automation_fingerprint(options):
+    return json.dumps(options, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _prune_automation_jobs_locked():
+    if len(AUTOMATION_JOBS) <= AUTOMATION_MAX_JOBS:
+        return
+    finished = sorted(
+        (
+            job for job in AUTOMATION_JOBS.values()
+            if job.get("status") in AUTOMATION_TERMINAL_STATES
+        ),
+        key=lambda job: float(job.get("finished_at_epoch") or job.get("created_at_epoch") or 0.0),
+    )
+    while len(AUTOMATION_JOBS) > AUTOMATION_MAX_JOBS and finished:
+        victim = finished.pop(0)
+        AUTOMATION_JOBS.pop(victim.get("id"), None)
+
+
+def _update_automation_job(job_id, *, status=None, message=None, **fields):
+    with AUTOMATION_JOBS_LOCK:
+        job = AUTOMATION_JOBS.get(job_id)
+        if job is None:
+            return None
+        now = time.time()
+        if status and status != job.get("status"):
+            job["status"] = status
+            job.setdefault("history", []).append({
+                "status": status,
+                "at_epoch": now,
+                "message": message,
+            })
+        elif message is not None:
+            job.setdefault("history", []).append({
+                "status": job.get("status"),
+                "at_epoch": now,
+                "message": message,
+            })
+        if message is not None:
+            job["message"] = message
+        for key, value in fields.items():
+            job[key] = value
+        job["updated_at_epoch"] = now
+        if status in AUTOMATION_TERMINAL_STATES:
+            job["finished_at_epoch"] = now
+        return _automation_job_public(job)
+
+
+def get_automation_job(job_id):
+    with AUTOMATION_JOBS_LOCK:
+        job = AUTOMATION_JOBS.get(str(job_id or "").strip())
+        if job is None:
+            raise ValueError("Job d'automatisation introuvable")
+        return _automation_job_public(job)
+
+
+def list_automation_jobs(limit=50):
+    try:
+        limit = max(1, min(100, int(limit)))
+    except (TypeError, ValueError):
+        limit = 50
+    with AUTOMATION_JOBS_LOCK:
+        jobs = sorted(
+            AUTOMATION_JOBS.values(),
+            key=lambda job: float(job.get("created_at_epoch") or 0.0),
+            reverse=True,
+        )[:limit]
+        return [_automation_job_public(job) for job in jobs]
+
+
+def _run_automation_job(job_id):
+    job = get_automation_job(job_id)
+    options = job["options"]
+    report_id = options["report_id"]
+    warnings = []
+    document = None
+    export_results = {}
+    try:
+        _update_automation_job(job_id, status="running", message="Calcul du rapport", started_at_epoch=time.time())
+        report = load_report(report_id)
+        result = execute_report(report_id)
+        _update_automation_job(
+            job_id,
+            status="data_complete",
+            message="Calcul statistique terminé",
+            report_summary=copy.deepcopy(result.get("summary") or {}),
+            resolved_period=copy.deepcopy(result.get("resolved_period") or {}),
+        )
+
+        configured_ai = bool((report.get("ai_analysis") or {}).get("enabled"))
+        ai_option = options.get("ai_analysis")
+        run_ai = configured_ai if ai_option is None else bool(ai_option)
+        if run_ai:
+            _update_automation_job(job_id, status="ai_running", message="Analyse IA en cours")
+            analysis = _automation_ai_analysis(report_id, report, job_id)
+            if analysis.get("status") != "completed":
+                warning = f"Analyse IA: {analysis.get('error') or analysis.get('status') or 'indisponible'}"
+                warnings.append(warning)
+                _update_automation_job(job_id, message=warning)
+        else:
+            cached = _cached_report_result(report_id)
+            if cached is not None:
+                cached["ai_analysis"] = {
+                    "enabled": False,
+                    "status": "disabled",
+                    "reason": "automation_option" if ai_option is False else "report_configuration",
+                }
+                _cache_report_result(report_id, cached)
+
+        if options.get("generate_pdf"):
+            _update_automation_job(job_id, status="pdf_generating", message="Génération du PDF natif")
+            document = generate_report_pdf(report_id, options.get("theme"))
+            _update_automation_job(
+                job_id,
+                message="PDF natif enregistré localement",
+                document_id=document.get("id"),
+                document={
+                    "id": document.get("id"),
+                    "filename": document.get("filename"),
+                    "generated_at": document.get("generated_at"),
+                    "size_bytes": document.get("size_bytes"),
+                },
+            )
+
+        destinations = options.get("destinations") or []
+        if destinations:
+            _update_automation_job(job_id, status="exporting", message="Export des destinations configurées")
+            for provider_id in destinations:
+                try:
+                    export_result = export_document(document["id"], provider_id)
+                    export_results[provider_id] = {
+                        "ok": True,
+                        "result": copy.deepcopy(export_result.get("result") or {}),
+                    }
+                except Exception as exc:
+                    warning = f"Export {provider_id}: {exc}"
+                    warnings.append(warning)
+                    export_results[provider_id] = {"ok": False, "error": str(exc)}
+                    _update_automation_job(job_id, message=warning)
+
+        terminal = "completed_with_errors" if warnings else "completed"
+        _update_automation_job(
+            job_id,
+            status=terminal,
+            message=("Pipeline terminé avec avertissements" if warnings else "Pipeline terminé"),
+            warnings=warnings,
+            exports=export_results,
+            result={
+                "report_id": report_id,
+                "document_id": (document or {}).get("id"),
+                "filename": (document or {}).get("filename"),
+                "destinations": list(export_results.keys()),
+            },
+        )
+    except Exception as exc:
+        log.exception("Automation report job failed: %s", job_id)
+        _update_automation_job(
+            job_id,
+            status="error",
+            message="Échec du pipeline",
+            error=str(exc),
+            warnings=warnings,
+            exports=export_results,
+            result={
+                "report_id": report_id,
+                "document_id": (document or {}).get("id"),
+                "filename": (document or {}).get("filename"),
+            },
+        )
+
+
+def start_automation_report_job(payload):
+    options = _automation_options(payload)
+    fingerprint = _automation_fingerprint(options)
+    now = time.time()
+    with AUTOMATION_JOBS_LOCK:
+        for existing in AUTOMATION_JOBS.values():
+            if existing.get("_fingerprint") == fingerprint and existing.get("status") not in AUTOMATION_TERMINAL_STATES:
+                public = _automation_job_public(existing)
+                public["deduplicated"] = True
+                return public
+
+        job_id = uuid.uuid4().hex
+        job = {
+            "id": job_id,
+            "report_id": options["report_id"],
+            "status": "queued",
+            "message": "Job mis en file d'attente",
+            "created_at_epoch": now,
+            "updated_at_epoch": now,
+            "started_at_epoch": None,
+            "finished_at_epoch": None,
+            "options": options,
+            "warnings": [],
+            "exports": {},
+            "document_id": None,
+            "document": None,
+            "error": None,
+            "history": [{"status": "queued", "at_epoch": now, "message": "Job mis en file d'attente"}],
+            "_fingerprint": fingerprint,
+        }
+        thread = threading.Thread(target=_run_automation_job, args=(job_id,), daemon=True, name=f"ha-report-job-{job_id[:8]}")
+        job["_thread"] = thread
+        AUTOMATION_JOBS[job_id] = job
+        _prune_automation_jobs_locked()
+        thread.start()
+        return _automation_job_public(job)
+
+
 def generate_report_pdf(report_id, theme="dark"):
     report = load_report(report_id)
     result = _cached_report_result(report_id)
@@ -1496,6 +1823,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_payload(200, {"documents": list_documents()})
             if path.endswith("/api/export-providers"):
                 return self.send_payload(200, export_provider_overview())
+            if path.endswith("/api/automation/report-jobs"):
+                return self.send_payload(200, {"jobs": list_automation_jobs()})
+            if "/api/automation/report-jobs/" in path:
+                job_id = unquote(path.rsplit("/", 1)[-1])
+                return self.send_payload(200, {"job": get_automation_job(job_id)})
             if "/api/document/" in path and path.endswith("/download"):
                 parts = self.path_parts_after_document(path)
                 if len(parts) == 2 and parts[1] == "download":
@@ -1534,6 +1866,8 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             payload = self.json_body()
+            if path.endswith("/api/automation/report-jobs"):
+                return self.send_payload(202, {"job": start_automation_report_job(payload)})
             if path.endswith("/api/providers/victoria_metrics/test"):
                 return self.send_payload(200, {"status": provider_status(payload.get("url"))})
             if path.endswith("/api/export-providers/paperless/test"):

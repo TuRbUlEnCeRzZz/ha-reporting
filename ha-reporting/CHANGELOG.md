@@ -1,3 +1,15 @@
+## 0.1.0-beta.13
+
+- Ajoute une API d’automatisation asynchrone pour lancer le pipeline complet d’un rapport sans bloquer la requête HTTP.
+- `POST /api/automation/report-jobs` accepte `report_id`, `ai_analysis`, `generate_pdf`, `theme` et `destinations`.
+- Ajoute le suivi par `job_id` avec les états `queued`, `running`, `data_complete`, `ai_running`, `pdf_generating`, `exporting`, `completed`, `completed_with_errors` et `error`.
+- Expose la liste et le détail des jobs via `GET /api/automation/report-jobs` et `GET /api/automation/report-jobs/{job_id}`.
+- Déduplique une demande strictement identique tant qu’un job correspondant est encore actif.
+- Permet de forcer l’analyse IA, de la désactiver pour un lancement, ou d’utiliser la configuration du rapport lorsque l’option est omise.
+- Le pipeline enregistre toujours le PDF local avant les exports et conserve cet artefact lorsqu’une destination échoue.
+- Un échec d’export ou d’analyse IA est signalé en avertissement sans invalider les statistiques ni supprimer le PDF ; un échec structurel du calcul/PDF met le job en `error`.
+- Prépare l’API stable qui sera consommée par l’intégration Home Assistant compagnon lors d’une version ultérieure.
+
 ## 0.1.0-beta.12
 
 - Ajoute un mode **dossier `consume`** recommandé, sans token ni API, via un chemin monté sous `/share`.

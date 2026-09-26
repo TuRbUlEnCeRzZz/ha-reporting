@@ -1,19 +1,21 @@
 # HA Reporting
 
-Add-on Home Assistant OS — version **0.1.0-beta.12**.
+Add-on Home Assistant OS — version **0.1.0-beta.13**.
 
-Beta.12 conserve l’architecture `ExportProvider` de beta.11 et rend l’intégration Paperless-ngx plus simple et robuste :
+Beta.13 ajoute une API d’automatisation asynchrone pour piloter le pipeline complet depuis Home Assistant ou, à terme, une intégration compagnon :
 
-- **mode dossier `consume` recommandé et sans token**, via un chemin sous `/share` ;
-- mode API REST avec URL + token conservé comme option avancée ;
-- test de la destination depuis l’interface ;
-- export manuel d’un PDF déjà stocké depuis **Documents** ;
-- modèle de nom Paperless optionnel, avec retour automatique au nom local lorsqu’il est vide ;
-- copie atomique vers le dossier `consume` : le fichier final n’apparaît qu’une fois complètement écrit ;
-- versionnage `_2`, `_3`, etc. si un fichier du même nom est encore présent dans `consume` ;
-- état d’export persistant par document, avec mode, erreurs et nombre de tentatives ;
-- un échec Paperless ne supprime ni n’invalide jamais le PDF local.
+- lancement d’un rapport par `report_id` ;
+- calcul statistique puis analyse IA optionnelle ;
+- génération et stockage du PDF natif ;
+- export vers une ou plusieurs destinations configurées, dont Paperless-ngx ;
+- suivi non bloquant par `job_id` avec états, historique, erreurs, document généré et résultats d’export ;
+- déduplication des demandes identiques encore actives ;
+- échec d’export non destructif : le PDF local reste conservé et le job se termine avec avertissements.
 
-Pour le mode `consume`, Home Assistant OS doit exposer le partage Paperless sous `/share`, par exemple `/share/paperless_consume`. Le PDF local reste l’artefact de référence.
+Endpoints beta.13 :
 
-Cette version n’ajoute volontairement ni planification d’export ni rétention automatique.
+- `POST /api/automation/report-jobs`
+- `GET /api/automation/report-jobs`
+- `GET /api/automation/report-jobs/{job_id}`
+
+L’intégration Home Assistant native qui exposera une action `ha_reporting.run_report` reste prévue pour l’étape suivante.

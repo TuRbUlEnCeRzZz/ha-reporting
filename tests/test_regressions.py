@@ -623,7 +623,7 @@ class Beta9DocumentTests(unittest.TestCase):
         self.assertTrue(summary['output']['local_storage'])
 
     def test_native_pdf_renderer_produces_pdf(self):
-        html='<!doctype html><html><body><h1>HA Reporting beta.12</h1></body></html>'
+        html='<!doctype html><html><body><h1>HA Reporting beta.13</h1></body></html>'
         pdf=render_pdf_native(html,timeout_seconds=30)
         try:
             self.assertTrue(pdf.is_file())
@@ -672,7 +672,7 @@ class Beta12ExportProviderTests(unittest.TestCase):
         self.assertTrue(status['reachable'])
         self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
         self.assertEqual(seen['auth'],'Token secret')
-        self.assertIn('beta.12',seen['ua'])
+        self.assertIn('beta.13',seen['ua'])
 
     def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
         import tempfile
@@ -805,6 +805,92 @@ class Beta12ExportProviderTests(unittest.TestCase):
                 self.assertEqual(after['exports']['paperless']['remote_reference'],'task-42')
                 self.assertEqual(after['exports']['paperless']['filename'],'rapport.pdf')
 
+
+class Beta13AutomationJobTests(unittest.TestCase):
+    def setUp(self):
+        with main.AUTOMATION_JOBS_LOCK:
+            main.AUTOMATION_JOBS.clear()
+
+    def tearDown(self):
+        with main.AUTOMATION_JOBS_LOCK:
+            main.AUTOMATION_JOBS.clear()
+
+    def _seed_job(self, options):
+        job_id='job-test'
+        now=time.time()
+        with main.AUTOMATION_JOBS_LOCK:
+            main.AUTOMATION_JOBS[job_id]={
+                'id':job_id,'report_id':options['report_id'],'status':'queued','message':'queued',
+                'created_at_epoch':now,'updated_at_epoch':now,'started_at_epoch':None,'finished_at_epoch':None,
+                'options':options,'warnings':[],'exports':{},'document_id':None,'document':None,'error':None,
+                'history':[{'status':'queued','at_epoch':now,'message':'queued'}], '_fingerprint':'fp'
+            }
+        return job_id
+
+    def test_automation_options_require_pdf_for_exports(self):
+        with patch.object(main,'load_report',return_value={'id':'r'}), patch.object(main,'resolve_export_provider',return_value=object()):
+            with self.assertRaises(ValueError):
+                main._automation_options({'report_id':'r','generate_pdf':False,'destinations':['paperless']})
+            options=main._automation_options({'report_id':'r','ai_analysis':False,'generate_pdf':True,'theme':'light','destinations':['paperless','paperless']})
+        self.assertEqual(options['destinations'],['paperless'])
+        self.assertFalse(options['ai_analysis'])
+        self.assertEqual(options['theme'],'light')
+
+    def test_full_automation_pipeline_generates_pdf_and_exports(self):
+        options={'report_id':'r','ai_analysis':True,'generate_pdf':True,'theme':'dark','destinations':['paperless']}
+        job_id=self._seed_job(options)
+        report={'id':'r','name':'R','ai_analysis':{'enabled':True,'entity_id':'ai_task.local','timeout_seconds':600}}
+        result={'summary':{'sources_total':1,'sources_ok':1},'resolved_period':{'label':'P','timezone':'UTC'},'execution':{},'ai_analysis':{'enabled':True,'status':'pending'}}
+        with patch.object(main,'load_report',return_value=report), \
+             patch.object(main,'execute_report',return_value=result), \
+             patch.object(main,'_automation_ai_analysis',return_value={'enabled':True,'status':'completed','text':'OK'}), \
+             patch.object(main,'generate_report_pdf',return_value={'id':'doc-1','filename':'r.pdf','generated_at':'2026-09-27T00:00:00+02:00','size_bytes':123}), \
+             patch.object(main,'export_document',return_value={'ok':True,'result':{'delivery_status':'deposited'}}):
+            main._run_automation_job(job_id)
+        job=main.get_automation_job(job_id)
+        self.assertEqual(job['status'],'completed')
+        self.assertEqual(job['document_id'],'doc-1')
+        self.assertTrue(job['exports']['paperless']['ok'])
+        states=[item['status'] for item in job['history']]
+        for expected in ['running','data_complete','ai_running','pdf_generating','exporting','completed']:
+            self.assertIn(expected,states)
+
+    def test_export_failure_is_nonfatal_and_keeps_document_reference(self):
+        options={'report_id':'r','ai_analysis':False,'generate_pdf':True,'theme':'dark','destinations':['paperless']}
+        job_id=self._seed_job(options)
+        report={'id':'r','name':'R','ai_analysis':{'enabled':True,'entity_id':'ai_task.local','timeout_seconds':600}}
+        result={'summary':{'sources_total':1,'sources_ok':1},'resolved_period':{'label':'P','timezone':'UTC'},'execution':{},'ai_analysis':{'enabled':True,'status':'pending'}}
+        with patch.object(main,'load_report',return_value=report), \
+             patch.object(main,'execute_report',return_value=result), \
+             patch.object(main,'_cached_report_result',return_value=copy.deepcopy(result)), \
+             patch.object(main,'_cache_report_result'), \
+             patch.object(main,'generate_report_pdf',return_value={'id':'doc-2','filename':'r.pdf','generated_at':'x','size_bytes':123}), \
+             patch.object(main,'export_document',side_effect=RuntimeError('NAS indisponible')):
+            main._run_automation_job(job_id)
+        job=main.get_automation_job(job_id)
+        self.assertEqual(job['status'],'completed_with_errors')
+        self.assertEqual(job['document_id'],'doc-2')
+        self.assertFalse(job['exports']['paperless']['ok'])
+        self.assertIn('NAS indisponible',job['warnings'][0])
+
+    def test_identical_active_job_is_deduplicated(self):
+        class FakeThread:
+            def __init__(self,*args,**kwargs): pass
+            def start(self): pass
+        payload={'report_id':'r','ai_analysis':False,'generate_pdf':True,'destinations':[]}
+        with patch.object(main,'load_report',return_value={'id':'r'}), patch.object(main.threading,'Thread',FakeThread):
+            first=main.start_automation_report_job(payload)
+            second=main.start_automation_report_job(payload)
+        self.assertEqual(first['id'],second['id'])
+        self.assertTrue(second['deduplicated'])
+
+    def test_automation_api_routes_are_packaged(self):
+        text=(ROOT/'ha-reporting/app/main.py').read_text()
+        self.assertIn('path.endswith("/api/automation/report-jobs")',text)
+        self.assertIn('{"job": start_automation_report_job(payload)}',text)
+        self.assertIn('{"job": get_automation_job(job_id)}',text)
+        self.assertIn('completed_with_errors',text)
+
 class PackageTests(unittest.TestCase):
     def test_yaml_and_installation_layout(self):
         import yaml
@@ -812,7 +898,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.12')
+        self.assertEqual(config['version'],'0.1.0-beta.13')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertTrue(any(item.get('type')=='share' and item.get('read_only') is False and item.get('path')=='/share' for item in config.get('map',[]) if isinstance(item,dict)))

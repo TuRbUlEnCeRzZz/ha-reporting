@@ -1,8 +1,8 @@
 # HA Reporting
 
-Add-on Home Assistant OS — version **0.1.0-beta.9**.
+Add-on Home Assistant OS — version **0.1.0-beta.10**.
 
-Beta.9 introduit le socle documentaire local, sans plateforme tierce :
+Beta.10 reprend le socle documentaire local de beta.9 et ajoute les finitions du rendu PDF natif, sans plateforme tierce :
 
 - génération PDF native côté add-on avec WeasyPrint ;
 - thème clair/sombre du PDF aligné sur le thème actuellement visible dans HA Reporting ;
@@ -12,6 +12,6 @@ Beta.9 introduit le socle documentaire local, sans plateforme tierce :
 - page **Documents** avec historique, téléchargement et suppression ;
 - aperçu du nom de sortie dans le plan de rapport ;
 - le PDF natif exige que l'analyse IA soit terminée lorsqu'elle est activée, afin de figer un document complet ;
-- aucune intégration Paperless ni `ExportProvider` dans cette version : ce sera le chantier beta.10.
+- aucune intégration Paperless ni `ExportProvider` dans cette version : ce sera le chantier beta.11.
 
 Le moteur statistique, les comparaisons, les garde-fous runtime et le transport AI Task WebSocket restent inchangés.

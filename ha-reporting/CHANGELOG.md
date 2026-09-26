@@ -1,3 +1,11 @@
+## 0.1.0-beta.10
+
+- Reprend le socle documentaire local introduit en beta.9.
+- Pagination PDF native affinée : cartes de comparaison compactées à l'impression et suppression des répétitions sur les sources indisponibles.
+- Les identifiants Home Assistant longs se coupent désormais aux séparateurs (`_` / `.`) plutôt qu'au milieu des mots.
+- Le rapport annuel de validation tient désormais sur 3 pages au lieu de 4 sans perte d'information.
+- Aucun export tiers dans cette version ; `ExportProvider` / Paperless sont reportés à beta.11.
+
 ## 0.1.0-beta.9
 
 - PDF natif local via WeasyPrint.
@@ -5,8 +13,6 @@
 - Modèles de nom de fichier configurables avec variables dynamiques.
 - Gestion des doublons : version, remplacement ou refus.
 - Nouvelle page Documents : historique, téléchargement et suppression.
-- Pagination PDF affinée : cartes de comparaison compactées à l'impression et suppression des répétitions sur les sources indisponibles.
-- Les identifiants Home Assistant longs se coupent désormais aux séparateurs (`_` / `.`) plutôt qu'au milieu des mots.
 - Aucun export tiers dans cette version.
 
 ## 0.1.0-beta.8

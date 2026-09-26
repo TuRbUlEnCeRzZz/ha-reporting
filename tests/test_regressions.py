@@ -620,7 +620,7 @@ class Beta9DocumentTests(unittest.TestCase):
         self.assertTrue(summary['output']['local_storage'])
 
     def test_native_pdf_renderer_produces_pdf(self):
-        html='<!doctype html><html><body><h1>HA Reporting beta.9</h1></body></html>'
+        html='<!doctype html><html><body><h1>HA Reporting beta.10</h1></body></html>'
         pdf=render_pdf_native(html,timeout_seconds=30)
         try:
             self.assertTrue(pdf.is_file())
@@ -657,7 +657,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.9')
+        self.assertEqual(config['version'],'0.1.0-beta.10')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertIn('py3-websocket-client',(addon/'Dockerfile').read_text())

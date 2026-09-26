@@ -1,6 +1,6 @@
-# HA Reporting — 0.1.0-beta.9
+# HA Reporting — 0.1.0-beta.10
 
-Bêta 0.1.0-beta.9 pour Home Assistant OS, notamment sur Raspberry Pi 4 (aarch64).
+Bêta 0.1.0-beta.10 pour Home Assistant OS, notamment sur Raspberry Pi 4 (aarch64).
 Le moteur statistique, les comparaisons N/N-x, la vérification runtime et l'analyse IA restent inchangés. Beta.9 ajoute la couche documentaire locale.
 
 ## Rapport HTML et PDF natif
@@ -95,7 +95,7 @@ restent disponibles. Les règles de comparaison sont conservées.
    `Dockerfile`) vers `/addons/ha-reporting` sur Home Assistant OS.
 3. Actualiser le magasin des add-ons, puis installer ou reconstruire l'add-on
    local HA Reporting selon le mode d'installation existant.
-4. Vérifier la version 0.1.0-beta.9 dans les journaux et relancer les rapports.
+4. Vérifier la version 0.1.0-beta.10 dans les journaux et relancer les rapports.
 
 Ne pas copier le dossier de dépôt complet à la place du dossier de l'add-on.
 Pour une installation issue d'un dépôt Git, mettre à jour les fichiers du même
@@ -107,7 +107,7 @@ L'archive contient les sources à construire par Supervisor, pas une image OCI.
 - [Rollups MetricsQL](https://docs.victoriametrics.com/victoriametrics/metricsql/)
 - [Export JSONL VictoriaMetrics](https://docs.victoriametrics.com/victoriametrics/single-server-victoriametrics/#how-to-export-data-in-json-line-format)
 
-Voir `VALIDATION-beta9.md` à la racine du dépôt pour les tests et résultats.
+Voir `VALIDATION-beta10.md` à la racine du dépôt pour les tests et résultats.
 
 ## Analyse IA optionnelle (beta.6)
 
@@ -153,7 +153,7 @@ Les temps restent séparés entre moteur statistique et IA. Après achèvement d
 En impression, l’analyse IA reste placée juste après la synthèse générale, avant les données détaillées et les comparaisons qui servent de référence pour vérifier ou contester l’interprétation.
 
 
-## PDF natif et documents (beta.9)
+## PDF natif et documents (beta.10)
 
 Chaque définition de rapport peut configurer un modèle de nom de fichier et une politique de doublons. Le PDF natif est généré localement par l'add-on avec WeasyPrint puis conservé dans le stockage persistant de l'add-on sous `/config/documents`.
 
@@ -167,4 +167,4 @@ Politiques de doublons :
 
 La page **Documents** permet de consulter l'historique local, télécharger un PDF ou le supprimer. Lorsque l'analyse IA est activée, la génération PDF attend que son état ne soit plus `pending`/`running`, afin de figer un document complet.
 
-Beta.9 n'effectue aucun export vers une plateforme tierce. L'abstraction `ExportProvider` et Paperless-ngx sont réservés à beta.10.
+Beta.10 n'effectue aucun export vers une plateforme tierce. L'abstraction `ExportProvider` et Paperless-ngx sont réservés à beta.11.

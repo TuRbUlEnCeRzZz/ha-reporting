@@ -1,3 +1,13 @@
+## 0.1.0-beta.8
+
+- Add explicit AI comparison wording policies: `full_period_change_allowed`, `descriptive_gap_only` and `no_change_claim`.
+- For partial, reconstructed or coverage-limited comparisons, forbid assertive full-period increase/decrease language and require descriptive « sur les données disponibles » wording.
+- Separate current-period counter reconstruction from reference-period coverage limitations in AI context and prompt guidance.
+- Preserve the cautious recommendation style and existing AI summary length.
+- Return refreshed execution metadata with AI status polling so the Ingress JSON reflects AI duration and end-to-end pipeline duration after asynchronous completion.
+- Keep the editorial order: executive summary, AI interpretation, detailed data, comparisons and technical metadata.
+- Preserve the Home Assistant WebSocket transport, heartbeat, configurable timeout and provider/statistics engine unchanged.
+
 ## 0.1.0-beta.7
 
 - Hiérarchie éditoriale révisée : l’analyse IA est présentée juste après la synthèse générale, avant les données détaillées et les comparaisons.

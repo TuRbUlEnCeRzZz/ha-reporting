@@ -398,12 +398,21 @@ class AiAnalysisTests(unittest.TestCase):
         source=compact_report_context(sample)['comparisons'][0]['catalogs'][0]['devices'][0]['sources'][0]
         self.assertEqual(source['reference_quality']['period_coverage_percent'],34.8)
         self.assertTrue(source['interpretation']['coverage_limited'])
+        self.assertTrue(source['interpretation']['reference_coverage_limited'])
+        self.assertTrue(source['interpretation']['base_reconstructed'])
+        self.assertFalse(source['interpretation']['reference_reconstructed'])
         self.assertFalse(source['interpretation']['full_period_change_supported'])
+        self.assertEqual(source['interpretation']['wording_policy'],'descriptive_gap_only')
 
     def test_ai_prompt_requires_cautious_partial_comparison_language(self):
         prompt=_instructions('{}')
-        self.assertIn('ne doit jamais être formulée comme une hausse/baisse réelle',prompt)
+        self.assertIn('il est INTERDIT',prompt)
+        self.assertIn('descriptive_gap_only',prompt)
         self.assertIn("sur les données disponibles, l'écart calculé est de",prompt)
+        self.assertIn('la consommation a augmenté de 182 %',prompt)
+        self.assertIn('reconstruction partielle',prompt)
+        self.assertIn('base_quality.counter_mode=provider_reconstructed',prompt)
+        self.assertIn('reference_quality.period_coverage_percent',prompt)
         self.assertIn('poursuivre la collecte',prompt)
         self.assertIn("uniquement s'il n'y a aucune autre recommandation",prompt)
 
@@ -573,7 +582,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.7')
+        self.assertEqual(config['version'],'0.1.0-beta.8')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertIn('py3-websocket-client',(addon/'Dockerfile').read_text())
@@ -642,5 +651,9 @@ class Beta6TransportTests(unittest.TestCase):
             self.assertAlmostEqual(execution['ai_analysis_duration_seconds'],0.1)
             self.assertTrue(execution['total_duration_includes_ai'])
             self.assertIn('pipeline_finished_at_epoch',execution)
+            payload=main._ai_analysis_status_payload('r')
+            self.assertEqual(payload['ai_analysis']['status'],'completed')
+            self.assertAlmostEqual(payload['execution']['ai_analysis_duration_seconds'],0.1)
+            self.assertTrue(payload['execution']['total_duration_includes_ai'])
 
 if __name__ == '__main__': unittest.main()

@@ -981,6 +981,9 @@ async function runAiAnalysis(reportId, result){
         if(!statusResponse.ok) throw new Error(statusData.error || "État AI Task indisponible");
         consecutiveNetworkErrors = 0;
         result.ai_analysis = statusData.ai_analysis || {enabled:true,status:"error",error:"État IA absent"};
+        if(statusData.execution && typeof statusData.execution === "object"){
+          result.execution = {...(result.execution || {}), ...statusData.execution};
+        }
         renderExecutedReport(result);
       }catch(error){
         consecutiveNetworkErrors += 1;

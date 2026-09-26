@@ -1165,6 +1165,14 @@ def _ai_analysis_status(report_id):
     return copy.deepcopy(result.get("ai_analysis") or {"enabled": False, "status": "disabled"})
 
 
+def _ai_analysis_status_payload(report_id):
+    result = _cached_report_result(report_id)
+    return {
+        "ai_analysis": _ai_analysis_status(report_id),
+        "execution": copy.deepcopy((result or {}).get("execution") or {}),
+    }
+
+
 def start_ai_analysis(report_id):
     """Start AI interpretation in a server-side background job and return immediately."""
     report = load_report(report_id)
@@ -1297,7 +1305,7 @@ class Handler(BaseHTTPRequestHandler):
             if "/api/report/" in path and path.endswith("/ai-analysis"):
                 parts = self.path_parts_after_report(path)
                 if len(parts) == 2 and parts[1] == "ai-analysis":
-                    return self.send_payload(200, {"ai_analysis": _ai_analysis_status(parts[0])})
+                    return self.send_payload(200, _ai_analysis_status_payload(parts[0]))
             if "/api/report/" in path and path.endswith("/html"):
                 parts = self.path_parts_after_report(path)
                 if len(parts) == 2 and parts[1] == "html":

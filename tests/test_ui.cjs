@@ -33,4 +33,6 @@ check(() => assert.match(sandbox.renderAiAnalysis({ai_analysis:{enabled:true,sta
 check(() => assert.match(sandbox.renderAiAnalysis({ai_analysis:{enabled:true,status:'completed',entity_id:'ai_task.local',duration_seconds:1.23,text:'<script>x<\/script>'}}), /&lt;script&gt;/));
 check(() => assert.match(sandbox.renderAiAnalysis({ai_analysis:{enabled:true,status:'error',error:'boom'}}), /boom/));
 check(() => assert.match(sandbox.renderAiAnalysis({ai_analysis:{enabled:true,status:'pending'}}), /rapport est terminé/));
+check(() => assert.match(source, /statusData\.execution/));
+check(() => assert.match(source, /result\.execution = \{\.\.\.\(result\.execution \|\| \{\}\), \.\.\.statusData\.execution\}/));
 console.log(`${checks} JavaScript UI checks passed`);

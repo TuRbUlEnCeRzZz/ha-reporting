@@ -42,14 +42,35 @@ def _comparison_interpretation(source: dict[str, Any]) -> dict[str, Any]:
     base_coverage = base_quality.get("period_coverage_percent")
     reference_coverage = reference_quality.get("period_coverage_percent")
 
-    coverage_limited = any(
-        isinstance(value, (int, float)) and value < 80.0
-        for value in (base_coverage, reference_coverage)
-    )
+    base_coverage_limited = isinstance(base_coverage, (int, float)) and base_coverage < 80.0
+    reference_coverage_limited = isinstance(reference_coverage, (int, float)) and reference_coverage < 80.0
+    coverage_limited = base_coverage_limited or reference_coverage_limited
+    base_reconstructed = str(base_quality.get("counter_mode") or "") in {
+        "provider_reconstructed",
+        "reconstructed",
+    }
+    reference_reconstructed = str(reference_quality.get("counter_mode") or "") in {
+        "provider_reconstructed",
+        "reconstructed",
+    }
+    full_period_change_supported = bool(status == "comparable" and not coverage_limited)
+
+    if status == "unavailable":
+        wording_policy = "no_change_claim"
+    elif full_period_change_supported:
+        wording_policy = "full_period_change_allowed"
+    else:
+        wording_policy = "descriptive_gap_only"
+
     return {
         "status": status,
         "coverage_limited": coverage_limited,
-        "full_period_change_supported": bool(status == "comparable" and not coverage_limited),
+        "base_coverage_limited": base_coverage_limited,
+        "reference_coverage_limited": reference_coverage_limited,
+        "base_reconstructed": base_reconstructed,
+        "reference_reconstructed": reference_reconstructed,
+        "full_period_change_supported": full_period_change_supported,
+        "wording_policy": wording_policy,
     }
 
 
@@ -244,14 +265,19 @@ Distingue clairement un fait calculé d'une interprétation. Ignore les identifi
 
 Règles impératives pour les comparaisons N/N-x :
 - Une source `unavailable` ne permet aucune conclusion d'évolution.
-- Une source `partial` ou `reconstructed`, ou une comparaison dont `interpretation.coverage_limited` vaut true, ne doit jamais être formulée comme une hausse/baisse réelle de la période complète.
-- Dans ce cas, formule plutôt : « sur les données disponibles, l'écart calculé est de ... », puis précise qu'il n'est pas directement interprétable comme une variation complète à cause de la couverture/qualité indiquée.
-- N'utilise pas un pourcentage relatif issu d'une comparaison incomplète pour affirmer une dérive, une surconsommation ou une amélioration.
+- Lis d'abord `interpretation.wording_policy` pour chaque source comparée.
+- Si `wording_policy` vaut `descriptive_gap_only` ou si `interpretation.full_period_change_supported` vaut false, il est INTERDIT d'écrire qu'une grandeur « a augmenté », « a diminué », « est en hausse », « est en baisse » ou toute formulation équivalente qui présente l'écart comme une évolution réelle de la période complète.
+- Dans ce cas, écris plutôt : « sur les données disponibles, l'écart calculé est de ... », « la valeur calculée est supérieure/inférieure de ... », puis précise pourquoi cet écart n'est pas directement interprétable comme une évolution complète.
+- Exemple interdit : « la consommation a augmenté de 182 % ». Exemple attendu : « sur les données disponibles, l'écart calculé est de +182 %, mais il ne permet pas de conclure à une hausse annuelle de cette ampleur car la référence ne couvre que 34,8 % de la période ».
+- Exemple interdit : « la puissance moyenne est en baisse de 8,6 % par rapport à l'année précédente ». Exemple attendu : « sur les données disponibles, la puissance moyenne calculée est inférieure de 8,6 %, mais la comparaison reste partielle ».
+- N'utilise jamais un pourcentage relatif issu d'une comparaison incomplète pour affirmer une dérive, une surconsommation ou une amélioration.
+- Distingue strictement reconstruction et couverture : `base_quality.counter_mode=provider_reconstructed` signifie que la valeur N a été reconstruite après un ou plusieurs resets ; `reference_quality.period_coverage_percent` décrit séparément la couverture de la référence N-x. Ne fusionne jamais ces deux notions dans une expression comme « reconstruction partielle ».
+- Si `interpretation.base_reconstructed` vaut true, dis au besoin « la valeur de la période courante a été reconstruite après reset ». Si `interpretation.reference_coverage_limited` vaut true, dis séparément « la référence historique est partielle » avec sa couverture. N'affirme pas que la référence est reconstruite sauf si `interpretation.reference_reconstructed` vaut true.
 - Une recommandation fondée seulement sur une comparaison partielle/reconstruite doit rester proportionnée : privilégie « surveiller », « poursuivre la collecte » ou « recontrôler quand la couverture sera suffisante ». Ne demande pas d'en rechercher les causes sauf si les données de la période courante montrent, indépendamment de la comparaison, une anomalie étayée.
 
 Produis exactement ces trois sections, en texte simple :
 SYNTHÈSE
-2 à 4 phrases sur les faits principaux de la période.
+2 à 4 phrases sur les faits principaux de la période. Les faits de la période courante peuvent être formulés directement ; les comparaisons incomplètes doivent suivre les règles ci-dessus.
 
 POINTS D'ATTENTION
 0 à 5 puces commençant par "- ". Ne signale que des éléments réellement étayés par les données, y compris les limites de couverture si elles affectent l'interprétation. Écris "- Aucun point d'attention notable." si nécessaire.

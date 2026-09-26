@@ -1,6 +1,6 @@
-# HA Reporting — 0.1.0-beta.7
+# HA Reporting — 0.1.0-beta.8
 
-Bêta 0.1.0-beta.7 pour Home Assistant OS, notamment sur Raspberry Pi 4 (aarch64).
+Bêta 0.1.0-beta.8 pour Home Assistant OS, notamment sur Raspberry Pi 4 (aarch64).
 Les calculs, contrôles de qualité, rollups, comparaisons et vérifications runtime
 de l’alpha.23 restent gelés. beta.2 consolide la sortie imprimable : le document
 HTML et la sortie PDF navigateur partagent désormais le même thème sombre et
@@ -107,7 +107,7 @@ restent disponibles. Les règles de comparaison sont conservées.
    `Dockerfile`) vers `/addons/ha-reporting` sur Home Assistant OS.
 3. Actualiser le magasin des add-ons, puis installer ou reconstruire l'add-on
    local HA Reporting selon le mode d'installation existant.
-4. Vérifier la version 0.1.0-beta.7 dans les journaux et relancer les rapports.
+4. Vérifier la version 0.1.0-beta.8 dans les journaux et relancer les rapports.
 
 Ne pas copier le dossier de dépôt complet à la place du dossier de l'add-on.
 Pour une installation issue d'un dépôt Git, mettre à jour les fichiers du même
@@ -150,12 +150,17 @@ Long AI analyses use Home Assistant's internal WebSocket API through the Supervi
 L'analyse IA n'utilise plus une requête REST longue. HA Reporting ouvre le WebSocket interne Home Assistant via `ws://supervisor/core/websocket`, authentifié avec `SUPERVISOR_TOKEN`, puis appelle `ai_task.generate_data` avec `return_response: true`. Le job IA reste côté serveur ; l'interface Ingress ne fait que des requêtes courtes de suivi d'état toutes les 2 secondes. Des heartbeats applicatifs maintiennent le canal observable pendant les générations longues.
 
 
-## Finition IA — beta.7
+## Finition IA — beta.8
 
-Beta.7 conserve le transport WebSocket de beta.6 mais renforce l’interprétation des comparaisons. Le contexte compact transmet désormais `base_quality`, `reference_quality` et un bloc `interpretation` pour chaque source comparée. Une comparaison partielle, reconstruite ou à couverture limitée ne doit pas être présentée par le modèle comme une variation certaine de la période complète. Les recommandations basées uniquement sur une référence incomplète doivent privilégier la surveillance et l’accumulation d’historique.
+Beta.8 conserve le transport WebSocket de beta.6 mais verrouille le vocabulaire des comparaisons incomplètes. Le contexte compact transmet `base_quality`, `reference_quality` et un bloc `interpretation` enrichi pour chaque source comparée : limitation de couverture côté N et N-x, reconstruction éventuelle de chaque côté, capacité ou non à conclure sur la période complète, et `wording_policy`.
 
-Un post-traitement minimal supprime uniquement la contradiction « Aucune recommandation particulière » lorsqu’une autre recommandation est déjà présente ; il ne réécrit pas le contenu de l’analyse.
+Lorsque `wording_policy=descriptive_gap_only`, l’AI Task ne doit pas écrire qu’une grandeur « a augmenté », « a diminué », « est en hausse » ou « est en baisse » sur la période complète. Elle doit formuler l’écart comme un résultat descriptif sur les données disponibles et rappeler la couverture insuffisante.
 
-Les temps sont séparés entre moteur statistique et IA. Après achèvement de l’AI Task, `total_duration_seconds` représente le pipeline complet et `total_duration_includes_ai` passe à `true`, tandis que le pied du rapport continue d’afficher séparément le temps de calcul statistique et le temps IA.
+La reconstruction du compteur courant est distinguée de la couverture historique : par exemple, `base_quality.counter_mode=provider_reconstructed` signifie que N a été reconstruit après reset, tandis que `reference_quality.period_coverage_percent=34.8` signifie séparément que la référence N-x est partielle. Le prompt interdit de fusionner ces notions sous une formulation ambiguë comme « reconstruction partielle ».
 
-En impression, l’analyse IA est placée juste après la synthèse générale. Elle peut rester sur la première page si l’espace le permet, tandis que le titre est protégé contre une coupure avant le début du contenu.
+Un post-traitement minimal supprime uniquement la contradiction « Aucune recommandation particulière » lorsqu’une autre recommandation est déjà présente ; il ne réécrit pas le fond de l’analyse. La longueur et le ton prudent restent inchangés.
+
+Les temps restent séparés entre moteur statistique et IA. Après achèvement de l’AI Task, le cache serveur met à jour `ai_analysis_duration_seconds`, `ai_analysis_finished_at_epoch`, `pipeline_finished_at_epoch`, `total_duration_seconds` et `total_duration_includes_ai=true`. Beta.8 transmet aussi ce bloc `execution` au polling Ingress afin que le JSON affiché dans l’interface soit resynchronisé, et pas seulement le HTML/PDF généré depuis le cache.
+
+En impression, l’analyse IA reste placée juste après la synthèse générale, avant les données détaillées et les comparaisons qui servent de référence pour vérifier ou contester l’interprétation.
+

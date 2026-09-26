@@ -14,7 +14,7 @@ Beta.9 ajoute le socle documentaire local sans modifier le moteur statistique ni
 
 ## Tests automatisés
 
-- 84 tests Python : OK
+- 86 tests Python : OK
 - 26 contrôles JavaScript UI : OK
 - syntaxe JavaScript (`node --check`) : OK
 - compilation Python : OK
@@ -29,6 +29,9 @@ Beta.9 ajoute le socle documentaire local sans modifier le moteur statistique ni
 - signature `%PDF` et taille non vide contrôlées : OK
 - HTML/CSS autonome, sans ressource web externe : conservé
 - graphiques de comparaison : rendus par CSS statique
+- pagination de finition validée sur un rapport annuel réaliste : 3 pages au lieu de 4
+- cartes `unavailable` compactées sans perte de la raison d'indisponibilité
+- identifiants longs : coupures contrôlées aux séparateurs `_` et `.`
 
 ## Stockage documentaire
 

@@ -5,6 +5,8 @@
 - Modèles de nom de fichier configurables avec variables dynamiques.
 - Gestion des doublons : version, remplacement ou refus.
 - Nouvelle page Documents : historique, téléchargement et suppression.
+- Pagination PDF affinée : cartes de comparaison compactées à l'impression et suppression des répétitions sur les sources indisponibles.
+- Les identifiants Home Assistant longs se coupent désormais aux séparateurs (`_` / `.`) plutôt qu'au milieu des mots.
 - Aucun export tiers dans cette version.
 
 ## 0.1.0-beta.8

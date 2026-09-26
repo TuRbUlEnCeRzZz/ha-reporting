@@ -583,6 +583,21 @@ class HtmlRendererTests(unittest.TestCase):
         self.assertLess(html.index('Analyse IA'), html.index('Comparaisons N / N-x'))
         self.assertIn('permettent de vérifier, nuancer ou contester cette analyse', html)
 
+    def test_pdf_identifiers_wrap_at_home_assistant_separators(self):
+        sample=self.sample_result()
+        sample['catalogs'][0]['devices'][0]['sources'][0]['sensor_key']='armoire_combinee_compresseur_cuisine_time_noreset'
+        html=render_report_html(sample)
+        self.assertIn('armoire_<wbr>combinee_<wbr>compresseur_<wbr>cuisine_<wbr>time_<wbr>noreset',html)
+        self.assertIn('overflow-wrap:normal;word-break:normal',html)
+
+    def test_unavailable_comparison_reason_is_not_duplicated(self):
+        sample=self.sample_result()
+        source=sample['comparisons']['targets'][0]['catalogs'][0]['devices'][0]['sources'][0]
+        source.update({'comparison_status':'unavailable','values':[],'reasons':['La période de référence ne fournit pas une valeur comparable.']})
+        html=render_report_html(sample)
+        self.assertEqual(html.count('La période de référence ne fournit pas une valeur comparable.'),1)
+        self.assertIn('unavailable-note',html)
+
 
 class Beta9DocumentTests(unittest.TestCase):
     def test_output_defaults_and_template_variables(self):

@@ -11,6 +11,18 @@ def _e(value: Any) -> str:
     return escape("" if value is None else str(value), quote=True)
 
 
+def _identifier(value: Any) -> str:
+    """Escape an identifier while exposing safe line-break opportunities.
+
+    Home Assistant entity IDs and sensor keys are naturally segmented by
+    underscores/dots.  Native PDF rendering should wrap at those boundaries
+    rather than cutting words in arbitrary places.
+    """
+    text = "" if value is None else str(value)
+    escaped = escape(text, quote=True)
+    return escaped.replace("_", "_<wbr>").replace(".", ".<wbr>")
+
+
 def _num(value: Any, unit: str = "") -> str:
     try:
         n = float(value)
@@ -106,8 +118,8 @@ def _source_card(source: dict[str, Any]) -> str:
     return f"""
     <article class="source source-{_e(status)}">
       <div class="source-head">
-        <div><h4>{_e(source.get('sensor_key') or source.get('entity_id'))}</h4>
-        <small>{_e(source.get('entity_id'))}</small></div>
+        <div><h4>{_identifier(source.get('sensor_key') or source.get('entity_id'))}</h4>
+        <small>{_identifier(source.get('entity_id'))}</small></div>
         <span class="pill">{_e(source.get('metric'))}</span>
       </div>
       <div class="metrics">{values}</div>
@@ -146,11 +158,20 @@ def _comparison_source(source: dict[str, Any]) -> str:
             {_comparison_chart(value.get('base'), value.get('reference'), unit)}
           </div>""")
     reasons = " · ".join(source.get("reasons") or [])
+    if rows:
+        body = "".join(rows)
+        quality = f'<div class="quality">{_e(reasons)}</div>' if reasons else ""
+    else:
+        # Avoid repeating both “Aucune valeur comparable” and the reason.
+        # One concise reason makes unavailable cards much more readable and
+        # lets the PDF paginate efficiently without losing information.
+        body = f'<p class="muted unavailable-note">{_e(reasons or "Aucune valeur comparable.")}</p>'
+        quality = ""
     return f"""
       <article class="compare-source compare-{_e(status)}">
-        <div class="source-head"><div><h4>{_e(source.get('sensor_key') or source.get('entity_id'))}</h4><small>{_e(source.get('metric'))}</small></div><span class="pill">{_e(status)}</span></div>
-        {''.join(rows) if rows else '<p class="muted">Aucune valeur comparable.</p>'}
-        <div class="quality">{_e(reasons)}</div>
+        <div class="source-head"><div><h4>{_identifier(source.get('sensor_key') or source.get('entity_id'))}</h4><small>{_e(source.get('metric'))}</small></div><span class="pill">{_e(status)}</span></div>
+        {body}
+        {quality}
       </article>"""
 
 
@@ -252,7 +273,7 @@ def render_report_html(result: dict[str, Any], theme: str = "dark") -> str:
 html{{color-scheme:{color_scheme};background:var(--canvas)}}
 body{{margin:0;background:var(--canvas);color:var(--ink);font:14px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
 .page{{max-width:1180px;margin:28px auto;background:var(--paper);padding:38px 42px;box-shadow:0 12px 40px #0008;border:1px solid #252c35}}
-h1,h2,h3,h4,p{{margin-top:0}} h1{{font-size:28px;margin-bottom:6px}} h2{{font-size:20px;margin:28px 0 12px}} h3{{font-size:16px;margin:0}} h4{{font-size:12px;margin:0 0 3px;overflow-wrap:anywhere}}
+h1,h2,h3,h4,p{{margin-top:0}} h1{{font-size:28px;margin-bottom:6px}} h2{{font-size:20px;margin:28px 0 12px}} h3{{font-size:16px;margin:0}} h4{{font-size:12px;margin:0 0 3px;overflow-wrap:normal;word-break:normal}}
 .muted,.quality,small{{color:var(--muted)}}
 .toolbar{{display:flex;justify-content:flex-end;margin-bottom:18px}}
 button{{border:0;border-radius:8px;background:var(--accent);color:#fff;padding:9px 14px;font-weight:700;cursor:pointer}}
@@ -270,6 +291,7 @@ button{{border:0;border-radius:8px;background:var(--accent);color:#fff;padding:9
 .source-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;break-inside:auto}}
 .source,.compare-source{{background:{source_bg};border:1px solid var(--line);border-radius:10px;padding:12px;break-inside:avoid;page-break-inside:avoid}}
 .source-head{{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}}
+.source-head>div{{min-width:0}} .source-head small{{overflow-wrap:normal;word-break:normal}}
 .pill{{font-size:9px;border:1px solid #4a5562;border-radius:999px;padding:3px 7px;color:var(--muted);background:#11161c}}
 .metrics{{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0 8px}}
 .metric span{{display:block;font-size:9px;color:var(--muted)}} .metric strong{{display:block;font-size:14px;margin-top:2px}}
@@ -280,6 +302,7 @@ button{{border:0;border-radius:8px;background:var(--accent);color:#fff;padding:9
 .ai-error .ai-text{{border-color:#ef4444}}
 .comparison-block{{margin-top:24px;border-top:2px solid #66717e;padding-top:20px;break-inside:auto}}
 .compare-source{{margin-bottom:0}}
+.unavailable-note{{margin:6px 0 0;font-size:9px;line-height:1.3}}
 .compare-value{{border-top:1px solid var(--line);padding-top:9px;margin-top:9px}}
 .compare-value-head{{display:flex;justify-content:space-between;gap:12px;font-size:11px}}
 .compare-bars{{margin-top:7px}}
@@ -306,7 +329,16 @@ footer{{border-top:1px solid var(--line);margin-top:28px;padding-top:12px;color:
   .source-grid{{gap:6px;break-inside:auto;page-break-inside:auto}}
   .source,.compare-source{{padding:8px;background:{source_bg}!important;break-inside:avoid;page-break-inside:avoid}}
   .device{{padding:10px;margin:8px 0 12px;background:#151b22!important}}
-  .comparison-block{{margin-top:16px;padding-top:12px}}
+  .comparison-block{{margin-top:12px;padding-top:9px}}
+  .comparison-block .catalog>h2{{margin:12px 0 6px}}
+  .comparison-block .device{{padding:7px;margin:6px 0 8px}}
+  .comparison-block .device-title{{margin-bottom:7px}}
+  .comparison-block .source-grid{{gap:4px}}
+  .comparison-block .compare-source{{padding:6px}}
+  .comparison-block .compare-value{{padding-top:6px;margin-top:6px}}
+  .comparison-block .compare-bars{{margin-top:4px}}
+  .comparison-block .compare-bars>div{{margin:2px 0}}
+  .comparison-block .unavailable-note{{margin-top:4px}}
   .ai-analysis{{margin:8px 0 14px;padding:10px;background:{device_bg}!important;break-inside:auto;page-break-inside:auto}}
   .ai-text{{padding:9px;background:var(--soft)!important;break-inside:auto;page-break-inside:auto}}
   .compare-bars i{{background:var(--accent)!important;box-shadow:inset 0 0 0 99px var(--accent)!important}}

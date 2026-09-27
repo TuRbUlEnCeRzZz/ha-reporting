@@ -250,3 +250,15 @@ Beta.12 n’ajoute pas encore de planification d’export, de retry automatique 
 ### beta.15 — intégration compagnon et événements Home Assistant
 
 L’API asynchrone de beta.14 reste la source de vérité. Beta.15 ajoute des événements Home Assistant compacts aux transitions principales du pipeline et fournit une intégration compagnon (`custom_components/ha_reporting`) qui expose l’action native `ha_reporting.run_report`. L’action démarre le job et retourne immédiatement ; les automatisations réagissent ensuite à `ha_reporting_report_completed` ou `ha_reporting_report_failed`.
+
+## Automatisations internes (beta.16)
+
+L’onglet **Automatisations** permet de planifier le pipeline complet sans YAML Home Assistant ni Companion :
+
+`rapport → IA → PDF → Documents → exports → notification`
+
+Le fuseau horaire est lu depuis Home Assistant. Les définitions sont persistées dans `/config/automations.json` (stockage `addon_config`).
+
+L’option Analyse IA possède trois états : suivre la configuration du rapport, forcer activée, forcer désactivée. La notification persistante réutilise le texte final de l’analyse IA lorsqu’il est disponible.
+
+Le bouton **Exécuter maintenant** utilise le même moteur de jobs asynchrones que l’API externe et n’attend donc pas la fin de l’analyse IA dans la requête HTTP.

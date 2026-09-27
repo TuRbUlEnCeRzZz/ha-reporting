@@ -35,6 +35,17 @@ from document_store import (
     update_document_export,
 )
 from analysis.ai_report import analyze_report_with_ai
+from automation_store import (
+    create_automation as create_scheduled_automation,
+    delete_automation as delete_scheduled_automation,
+    get_automation as get_scheduled_automation,
+    is_due as scheduled_automation_is_due,
+    list_automations as list_scheduled_automations,
+    next_run as scheduled_automation_next_run,
+    schedule_key as scheduled_automation_schedule_key,
+    update_automation as update_scheduled_automation,
+    update_runtime as update_scheduled_automation_runtime,
+)
 from exporters import (
     export_provider_overview,
     load_export_provider_config,
@@ -48,6 +59,7 @@ TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 HA_STATES_URL = "http://supervisor/core/api/states"
 HA_CONFIG_URL = "http://supervisor/core/api/config"
 HA_EVENTS_URL = "http://supervisor/core/api/events"
+HA_SERVICES_URL = "http://supervisor/core/api/services"
 CATALOG_DIR = Path("/config/catalogs")
 CATEGORY_FILE = Path("/config/categories.yaml")
 PROVIDER_FILE = Path("/config/providers.yaml")
@@ -68,6 +80,7 @@ AUTOMATION_JOBS = {}
 AUTOMATION_JOBS_LOCK = threading.Lock()
 AUTOMATION_MAX_JOBS = 100
 AUTOMATION_TERMINAL_STATES = {"completed", "completed_with_errors", "error"}
+SCHEDULER_POLL_SECONDS = 15
 
 DEFAULT_CATEGORIES = [
     {"id": "refrigeration", "name": "Réfrigération"},
@@ -203,6 +216,53 @@ def _safe_home_assistant_event(event_type, event_data):
         # Event delivery must never invalidate an otherwise successful report.
         log.warning("Unable to fire Home Assistant event %s: %s", event_type, exc)
         return False
+
+
+def home_assistant_call_service(domain, service, service_data):
+    """Call a Home Assistant service through the Supervisor/Core proxy."""
+    if not TOKEN:
+        raise RuntimeError("SUPERVISOR_TOKEN unavailable")
+    domain = str(domain or "").strip()
+    service = str(service or "").strip()
+    if not domain or not service:
+        raise ValueError("domain et service sont obligatoires")
+    body = json.dumps(service_data or {}, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        f"{HA_SERVICES_URL}/{domain}/{service}",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {TOKEN}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        raw = response.read()
+    return json.loads(raw or b"[]")
+
+
+def _persistent_notification_for_job(job, report, analysis):
+    options = (job or {}).get("options") or {}
+    notification = options.get("notification") or {}
+    if not notification.get("persistent"):
+        return None
+    report_name = str((report or {}).get("name") or job.get("report_id") or "Rapport HA Reporting")
+    ai_text = (analysis or {}).get("text") if (analysis or {}).get("status") == "completed" else None
+    if ai_text:
+        message = ai_text
+    else:
+        status = str((analysis or {}).get("status") or "désactivée")
+        message = f"Rapport généré avec succès. Analyse IA : {status}."
+    notification_id = "ha_reporting_" + stable_id(str(options.get("automation_id") or job.get("report_id") or job.get("id")))
+    return home_assistant_call_service(
+        "persistent_notification",
+        "create",
+        {
+            "notification_id": notification_id,
+            "title": report_name,
+            "message": message,
+        },
+    )
 
 
 def get_categories():
@@ -1447,12 +1507,20 @@ def _automation_options(payload):
         # Resolve now so unknown providers fail before the background job starts.
         resolve_export_provider(provider_id)
 
+    notification_raw = payload.get("notification") or {}
+    if not isinstance(notification_raw, dict):
+        raise ValueError("notification doit être un objet")
+    notification = {"persistent": bool(notification_raw.get("persistent", False))}
+    automation_id = str(payload.get("automation_id") or "").strip() or None
+
     return {
         "report_id": report_id,
         "ai_analysis": ai_option,
         "generate_pdf": generate_pdf,
         "theme": theme,
         "destinations": destinations,
+        "notification": notification,
+        "automation_id": automation_id,
     }
 
 
@@ -1542,6 +1610,7 @@ def _automation_event_payload(job, report=None):
     return {
         "report_id": report_id,
         "report_name": report.get("name") or job.get("report_name") or report_id,
+        "automation_id": ((job.get("options") or {}).get("automation_id")),
         "job_id": job.get("id"),
         "status": job.get("status"),
         "message": job.get("message"),
@@ -1630,6 +1699,15 @@ def _run_automation_job(job_id):
                     export_results[provider_id] = {"ok": False, "error": str(exc)}
                     _update_automation_job(job_id, message=warning)
 
+        notification_result = None
+        if (options.get("notification") or {}).get("persistent"):
+            try:
+                notification_result = _persistent_notification_for_job(get_automation_job(job_id), report, analysis)
+            except Exception as exc:
+                warning = f"Notification persistante: {exc}"
+                warnings.append(warning)
+                _update_automation_job(job_id, message=warning)
+
         terminal = "completed_with_errors" if warnings else "completed"
         completed_job = _update_automation_job(
             job_id,
@@ -1644,6 +1722,7 @@ def _run_automation_job(job_id):
                 "destinations": list(export_results.keys()),
                 "ai_analysis": (analysis or {}).get("text") if (analysis or {}).get("status") == "completed" else None,
                 "ai_status": (analysis or {}).get("status") if analysis else ("disabled" if not run_ai else None),
+                "notification": {"persistent": bool((options.get("notification") or {}).get("persistent")), "ok": notification_result is not None} if (options.get("notification") or {}).get("persistent") else {"persistent": False},
             },
         )
         _safe_home_assistant_event("ha_reporting_report_completed", _automation_event_payload(completed_job, report))
@@ -1703,6 +1782,120 @@ def start_automation_report_job(payload):
         _prune_automation_jobs_locked()
         thread.start()
         return _automation_job_public(job)
+
+
+def scheduled_automation_overview():
+    timezone = home_assistant_timezone()
+    now = datetime.now(ZoneInfo(timezone))
+    output = []
+    for item in list_scheduled_automations():
+        enriched = copy.deepcopy(item)
+        next_dt = scheduled_automation_next_run(item, now)
+        enriched["timezone"] = timezone
+        enriched["next_run_at"] = next_dt.isoformat() if next_dt else None
+        output.append(enriched)
+    return output
+
+
+def _scheduled_automation_payload(automation):
+    pipeline = automation.get("pipeline") or {}
+    return {
+        "report_id": automation.get("report_id"),
+        "ai_analysis": pipeline.get("ai_analysis", None),
+        "generate_pdf": bool(pipeline.get("generate_pdf", True)),
+        "theme": pipeline.get("theme") or "dark",
+        "destinations": list(pipeline.get("destinations") or []),
+        "notification": copy.deepcopy(automation.get("notification") or {}),
+        "automation_id": automation.get("id"),
+    }
+
+
+def create_scheduler_automation(payload):
+    report_id = str((payload or {}).get("report_id") or "").strip()
+    load_report(report_id)
+    for provider_id in (((payload or {}).get("pipeline") or {}).get("destinations") or []):
+        resolve_export_provider(str(provider_id or "").strip().lower())
+    return create_scheduled_automation(payload)
+
+
+def update_scheduler_automation(automation_id, payload):
+    candidate = copy.deepcopy(get_scheduled_automation(automation_id))
+    candidate.update(copy.deepcopy(payload or {}))
+    report_id = str(candidate.get("report_id") or "").strip()
+    load_report(report_id)
+    for provider_id in ((candidate.get("pipeline") or {}).get("destinations") or []):
+        resolve_export_provider(str(provider_id or "").strip().lower())
+    return update_scheduled_automation(automation_id, payload)
+
+
+def run_scheduler_automation_now(automation_id):
+    automation = get_scheduled_automation(automation_id)
+    job = start_automation_report_job(_scheduled_automation_payload(automation))
+    update_scheduled_automation_runtime(
+        automation_id,
+        last_run_at=datetime.now(ZoneInfo(home_assistant_timezone())).isoformat(),
+        last_job_id=job.get("id"),
+        last_status=job.get("status"),
+        last_error=None,
+    )
+    return job
+
+
+def _sync_scheduled_automation_runtime(automation):
+    runtime = automation.get("runtime") or {}
+    job_id = runtime.get("last_job_id")
+    if not job_id:
+        return
+    try:
+        job = get_automation_job(job_id)
+    except Exception:
+        return
+    if job.get("status") != runtime.get("last_status") or job.get("error") != runtime.get("last_error"):
+        update_scheduled_automation_runtime(
+            automation.get("id"),
+            last_status=job.get("status"),
+            last_error=job.get("error"),
+        )
+
+
+def _scheduler_loop():
+    log.info("HA Reporting internal scheduler started")
+    while True:
+        try:
+            timezone = home_assistant_timezone()
+            now = datetime.now(ZoneInfo(timezone))
+            for automation in list_scheduled_automations():
+                _sync_scheduled_automation_runtime(automation)
+                if not scheduled_automation_is_due(automation, now):
+                    continue
+                automation_id = automation.get("id")
+                key = scheduled_automation_schedule_key(automation, now)
+                # Persist the slot before creating the job so a scheduler loop or restart
+                # during the same minute cannot launch a duplicate.
+                update_scheduled_automation_runtime(
+                    automation_id,
+                    last_schedule_key=key,
+                    last_run_at=now.isoformat(),
+                    last_error=None,
+                )
+                try:
+                    job = start_automation_report_job(_scheduled_automation_payload(automation))
+                    update_scheduled_automation_runtime(
+                        automation_id,
+                        last_job_id=job.get("id"),
+                        last_status=job.get("status"),
+                    )
+                    log.info("Scheduled automation %s started job %s", automation_id, job.get("id"))
+                except Exception as exc:
+                    log.exception("Scheduled automation %s failed to start", automation_id)
+                    update_scheduled_automation_runtime(
+                        automation_id,
+                        last_status="error",
+                        last_error=str(exc),
+                    )
+        except Exception:
+            log.exception("Scheduler loop failure")
+        time.sleep(SCHEDULER_POLL_SECONDS)
 
 
 def generate_report_pdf(report_id, theme="dark"):
@@ -1876,6 +2069,10 @@ class Handler(BaseHTTPRequestHandler):
         tail = path.split("/api/document/", 1)[1]
         return [unquote(part) for part in tail.strip("/").split("/") if part]
 
+    def path_parts_after_scheduled_automation(self, path):
+        tail = path.split("/api/scheduled-automation/", 1)[1]
+        return [unquote(part) for part in tail.strip("/").split("/") if part]
+
     def send_file(self, path, filename, content_type="application/pdf"):
         body = Path(path).read_bytes()
         self.send_response(200)
@@ -1903,6 +2100,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_payload(200, export_provider_overview())
             if path.endswith("/api/automation/report-jobs"):
                 return self.send_payload(200, {"jobs": list_automation_jobs()})
+            if path.endswith("/api/scheduled-automations"):
+                return self.send_payload(200, {"automations": scheduled_automation_overview(), "timezone": home_assistant_timezone()})
+            if "/api/scheduled-automation/" in path:
+                parts = self.path_parts_after_scheduled_automation(path)
+                if len(parts) == 1:
+                    return self.send_payload(200, {"automation": get_scheduled_automation(parts[0])})
             if "/api/automation/report-jobs/" in path:
                 job_id = unquote(path.rsplit("/", 1)[-1])
                 return self.send_payload(200, {"job": get_automation_job(job_id)})
@@ -1946,6 +2149,12 @@ class Handler(BaseHTTPRequestHandler):
             payload = self.json_body()
             if path.endswith("/api/automation/report-jobs"):
                 return self.send_payload(202, {"job": start_automation_report_job(payload)})
+            if path.endswith("/api/scheduled-automations"):
+                return self.send_payload(200, {"automation": create_scheduler_automation(payload)})
+            if "/api/scheduled-automation/" in path and path.endswith("/run"):
+                parts = self.path_parts_after_scheduled_automation(path)
+                if len(parts) == 2 and parts[1] == "run":
+                    return self.send_payload(202, {"job": run_scheduler_automation_now(parts[0])})
             if path.endswith("/api/providers/victoria_metrics/test"):
                 return self.send_payload(200, {"status": provider_status(payload.get("url"))})
             if path.endswith("/api/export-providers/paperless/test"):
@@ -1992,6 +2201,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_payload(200, save_provider_config(payload))
             if path.endswith("/api/export-providers/paperless"):
                 return self.send_payload(200, {"provider": save_export_provider("paperless", payload)})
+            if "/api/scheduled-automation/" in path:
+                parts = self.path_parts_after_scheduled_automation(path)
+                if len(parts) == 1:
+                    return self.send_payload(200, {"automation": update_scheduler_automation(parts[0], payload)})
             if "/api/report/" in path:
                 parts = self.path_parts_after_report(path)
                 if len(parts) == 1:
@@ -2010,6 +2223,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         path = urlparse(self.path).path
         try:
+            if "/api/scheduled-automation/" in path:
+                parts = self.path_parts_after_scheduled_automation(path)
+                if len(parts) == 1:
+                    return self.send_payload(200, delete_scheduled_automation(parts[0]))
             if "/api/document/" in path:
                 parts = self.path_parts_after_document(path)
                 if len(parts) == 1:
@@ -2035,6 +2252,8 @@ def main():
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     DOCUMENT_DIR.mkdir(parents=True, exist_ok=True)
     log.info("Starting HA Reporting catalog manager on port %d", PORT)
+    scheduler_thread = threading.Thread(target=_scheduler_loop, daemon=True, name="ha-reporting-scheduler")
+    scheduler_thread.start()
     try:
         log.info("Home Assistant API connection successful: %d entities", len(home_assistant_states()))
     except Exception as exc:

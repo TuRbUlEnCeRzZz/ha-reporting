@@ -752,3 +752,15 @@ th{font-size:12px;color:var(--hr-secondary)}
 .exportStatus.ok{color:var(--hr-success);border-color:color-mix(in srgb,var(--hr-success) 45%,var(--hr-divider))}
 .exportStatus.error{color:var(--hr-error);border-color:color-mix(in srgb,var(--hr-error) 45%,var(--hr-divider))}
 @media(max-width:720px){.documentActions{justify-content:flex-start}}
+
+.automationTimezone{margin:0 0 12px 2px}
+.automationCard{background:var(--hr-glass-card-bg,var(--hr-card));border:1px solid var(--hr-glass-border,var(--hr-divider));border-radius:var(--hr-radius,14px);padding:16px;margin-bottom:14px;box-shadow:var(--hr-shadow,none)}
+.automationCard.disabledAutomation{opacity:.72}
+.automationCardHeader{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:14px}
+.automationMetaGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 18px;margin-bottom:12px}
+.automationMetaGrid>div{display:flex;flex-direction:column;gap:3px;min-width:0}
+.automationMetaGrid strong{font-size:.95rem;overflow-wrap:anywhere}
+.automationEnabledChoice{margin:12px 0 20px}
+.automationDestinations{margin-top:12px}
+.inlineChoice{align-self:end;min-height:42px}
+@media(max-width:760px){.automationMetaGrid{grid-template-columns:1fr}.automationCardHeader{flex-direction:column}.automationCardHeader .providerBadge{align-self:flex-start}}

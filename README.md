@@ -1,12 +1,9 @@
-# HA Reporting 0.1.0-beta.15
+# HA Reporting 0.1.0-beta.16
 
 Archive de développement pour Home Assistant OS.
 
-Beta.15 conserve l’API asynchrone du pipeline complet et ajoute la passerelle native vers Home Assistant : événements de fin de job et intégration compagnon avec l’action `ha_reporting.run_report`.
+Beta.16 ajoute les **automatisations internes HA Reporting** : un utilisateur peut planifier directement depuis l’Ingress le pipeline complet rapport → analyse IA → PDF natif → stockage local → export(s) → notification persistante, sans dépendre du Companion ni d’une automatisation YAML Home Assistant.
 
-Voir `ha-reporting/README.md`, `ha-reporting/DOCS.md`, `COMPANION-INTEGRATION.md` et `VALIDATION-beta15.md`.
+Le Companion Home Assistant reste compatible et facultatif pour les utilisateurs qui souhaitent l’action native `ha_reporting.run_report`, mais il n’est plus nécessaire pour planifier les rapports.
 
-
-## Intégration compagnon Home Assistant
-
-Beta.15 fournit aussi `custom_components/ha_reporting/`. Après copie dans `/config/custom_components/ha_reporting/` et redémarrage de Home Assistant Core, l’intégration expose l’action native `ha_reporting.run_report`. L’add-on émet les événements `ha_reporting_report_started`, `ha_reporting_report_completed` et `ha_reporting_report_failed`. Voir `COMPANION-INTEGRATION.md`.
+Voir `ha-reporting/README.md`, `ha-reporting/DOCS.md` et `VALIDATION-beta16.md`.

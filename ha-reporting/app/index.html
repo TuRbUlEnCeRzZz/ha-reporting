@@ -15,7 +15,7 @@
   </button>
   <div>
     <h1>HA Reporting</h1>
-    <div class="subtitle">0.1.0-beta.15 · API d’automatisation, événements HA, PDF local & exports</div>
+    <div class="subtitle">0.1.0-beta.16 · Automatisations internes, IA, PDF local & exports</div>
   </div>
 </header>
 
@@ -28,6 +28,7 @@
       </div>
       <div class="toolbarButtons">
         <button id="reportsButton">Rapports</button>
+        <button id="automationsButton">Automatisations</button>
         <button id="providersButton">Sources de données</button>
         <button class="primary" id="newCatalogButton">+ Nouveau catalogue</button>
       </div>
@@ -47,6 +48,102 @@
       </div>
     </div>
     <div id="reportList"></div>
+  </section>
+
+
+  <section id="automationsPage" class="hidden">
+    <div class="toolbar">
+      <div>
+        <h2>Automatisations</h2>
+        <p class="muted">Planifie le pipeline complet : rapport, analyse IA, PDF local, exports et notification Home Assistant.</p>
+      </div>
+      <div class="toolbarButtons">
+        <button id="refreshAutomationsButton">Actualiser</button>
+        <button class="primary" id="newAutomationButton">+ Nouvelle automatisation</button>
+      </div>
+    </div>
+    <div id="automationTimezone" class="muted automationTimezone"></div>
+    <div id="automationList"></div>
+
+    <div id="automationFormCard" class="card hidden">
+      <h3 id="automationFormTitle">Nouvelle automatisation</h3>
+      <div class="grid two">
+        <label>Nom
+          <input id="automationName" placeholder="Rapport mensuel automatique">
+        </label>
+        <label>Rapport
+          <select id="automationReport"></select>
+        </label>
+      </div>
+      <label class="choiceItem automationEnabledChoice">
+        <input id="automationEnabled" type="checkbox" checked>
+        <span>Automatisation activée</span>
+      </label>
+
+      <h3>Planification</h3>
+      <div class="grid three">
+        <label>Fréquence
+          <select id="automationScheduleType">
+            <option value="hourly">Toutes les heures</option>
+            <option value="daily">Tous les jours</option>
+            <option value="weekly">Toutes les semaines</option>
+            <option value="monthly" selected>Tous les mois</option>
+            <option value="yearly">Tous les ans</option>
+          </select>
+        </label>
+        <label id="automationTimeLabel">Heure
+          <input id="automationTime" type="time" value="05:40">
+        </label>
+        <label id="automationMinuteLabel" class="hidden">Minute de l'heure
+          <input id="automationMinute" type="number" min="0" max="59" value="0">
+        </label>
+        <label id="automationWeekdayLabel" class="hidden">Jour de la semaine
+          <select id="automationWeekday">
+            <option value="0">Lundi</option><option value="1">Mardi</option><option value="2">Mercredi</option>
+            <option value="3">Jeudi</option><option value="4">Vendredi</option><option value="5">Samedi</option><option value="6">Dimanche</option>
+          </select>
+        </label>
+        <label id="automationDayLabel">Jour du mois
+          <input id="automationDay" type="number" min="1" max="31" value="1">
+        </label>
+        <label id="automationMonthLabel" class="hidden">Mois
+          <select id="automationMonth">
+            <option value="1">Janvier</option><option value="2">Février</option><option value="3">Mars</option><option value="4">Avril</option>
+            <option value="5">Mai</option><option value="6">Juin</option><option value="7">Juillet</option><option value="8">Août</option>
+            <option value="9">Septembre</option><option value="10">Octobre</option><option value="11">Novembre</option><option value="12">Décembre</option>
+          </select>
+        </label>
+      </div>
+
+      <h3>Pipeline</h3>
+      <div class="grid three">
+        <label>Analyse IA
+          <select id="automationAiMode">
+            <option value="inherit">Suivre la configuration du rapport</option>
+            <option value="true">Forcer activée</option>
+            <option value="false">Forcer désactivée</option>
+          </select>
+        </label>
+        <label>Thème PDF
+          <select id="automationTheme"><option value="dark">Sombre</option><option value="light">Clair</option></select>
+        </label>
+        <label class="choiceItem inlineChoice">
+          <input id="automationGeneratePdf" type="checkbox" checked>
+          <span>Générer le PDF natif</span>
+        </label>
+      </div>
+      <div class="choiceGrid automationDestinations">
+        <label class="choiceItem"><input id="automationPaperless" type="checkbox"><span>Exporter vers Paperless-ngx</span></label>
+        <label class="choiceItem"><input id="automationPersistentNotification" type="checkbox"><span>Notification persistante avec l'analyse IA</span></label>
+      </div>
+      <p class="muted">Les heures utilisent le fuseau Home Assistant. L'export Paperless nécessite la génération du PDF.</p>
+
+      <div class="actions">
+        <button id="cancelAutomationButton">Annuler</button>
+        <button class="primary" id="saveAutomationButton">Enregistrer</button>
+        <span id="automationFormStatus" class="statusText"></span>
+      </div>
+    </div>
   </section>
 
   <section id="documentsPage" class="hidden">

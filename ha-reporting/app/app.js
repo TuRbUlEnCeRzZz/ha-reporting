@@ -3,6 +3,8 @@ let catalogs = [];
 let reports = [];
 let documents = [];
 let exportProviders = [];
+let scheduledAutomations = [];
+let editingAutomationId = null;
 let editingReportId = null;
 let previewReportId = null;
 let categories = [];
@@ -1326,8 +1328,181 @@ async function savePaperless(){
   status.textContent="✓ Configuration Paperless-ngx enregistrée";
 }
 
+
+const automationWeekdays = ["Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi","Dimanche"];
+
+function automationScheduleLabel(item){
+  const schedule=item.schedule||{};
+  const time=schedule.time||"05:40";
+  if(schedule.type==="hourly") return `Toutes les heures à :${String(schedule.minute??0).padStart(2,"0")}`;
+  if(schedule.type==="daily") return `Tous les jours à ${time}`;
+  if(schedule.type==="weekly") return `${automationWeekdays[Number(schedule.weekday||0)]||"Lundi"} à ${time}`;
+  if(schedule.type==="monthly") return `Le ${schedule.day||1} de chaque mois à ${time}`;
+  if(schedule.type==="yearly") return `Le ${String(schedule.day||1).padStart(2,"0")}.${String(schedule.month||1).padStart(2,"0")} à ${time}`;
+  return "Planification inconnue";
+}
+
+function automationAiLabel(value){
+  if(value===true) return "IA forcée activée";
+  if(value===false) return "IA forcée désactivée";
+  return "IA selon le rapport";
+}
+
+function formatAutomationDate(value){
+  if(!value) return "—";
+  try{return new Date(value).toLocaleString("fr-CH");}catch(_){return String(value);}
+}
+
+function updateAutomationScheduleFields(){
+  const type=$("automationScheduleType").value;
+  $("automationTimeLabel").classList.toggle("hidden", type==="hourly");
+  $("automationMinuteLabel").classList.toggle("hidden", type!=="hourly");
+  $("automationWeekdayLabel").classList.toggle("hidden", type!=="weekly");
+  $("automationDayLabel").classList.toggle("hidden", !(type==="monthly"||type==="yearly"));
+  $("automationMonthLabel").classList.toggle("hidden", type!=="yearly");
+}
+
+function populateAutomationReports(){
+  $("automationReport").innerHTML=(reports||[]).filter(r=>!r.error).map(r=>`<option value="${esc(r.id)}">${esc(r.name)}</option>`).join("") || '<option value="">Aucun rapport</option>';
+}
+
+function resetAutomationForm(item=null){
+  editingAutomationId=item?item.id:null;
+  $("automationFormTitle").textContent=item?`Modifier « ${item.name} »`:"Nouvelle automatisation";
+  $("automationName").value=item?.name||"";
+  $("automationEnabled").checked=item?item.enabled!==false:true;
+  populateAutomationReports();
+  $("automationReport").value=item?.report_id||($("automationReport").options[0]?.value||"");
+  const schedule=item?.schedule||{type:"monthly",time:"05:40",day:1};
+  $("automationScheduleType").value=schedule.type||"monthly";
+  $("automationTime").value=schedule.time||"05:40";
+  $("automationMinute").value=schedule.minute??0;
+  $("automationWeekday").value=schedule.weekday??0;
+  $("automationDay").value=schedule.day??1;
+  $("automationMonth").value=schedule.month??1;
+  const pipeline=item?.pipeline||{};
+  $("automationAiMode").value=pipeline.ai_analysis===true?"true":pipeline.ai_analysis===false?"false":"inherit";
+  $("automationGeneratePdf").checked=pipeline.generate_pdf!==false;
+  $("automationTheme").value=pipeline.theme||"dark";
+  $("automationPaperless").checked=(pipeline.destinations||[]).includes("paperless");
+  $("automationPersistentNotification").checked=Boolean((item?.notification||{}).persistent);
+  $("automationFormStatus").textContent="";
+  updateAutomationScheduleFields();
+}
+
+function renderScheduledAutomations(timezone){
+  $("automationTimezone").textContent=`Fuseau utilisé : ${timezone||"Home Assistant"}`;
+  if(!scheduledAutomations.length){
+    $("automationList").innerHTML='<div class="card empty">Aucune automatisation HA Reporting.</div>';
+    return;
+  }
+  $("automationList").innerHTML=scheduledAutomations.map(item=>{
+    const runtime=item.runtime||{};
+    const pipeline=item.pipeline||{};
+    const lastStatus=runtime.last_status||"jamais exécutée";
+    const lastClass=lastStatus==="error"?"bad":(lastStatus==="completed"?"good":"");
+    return `<div class="automationCard ${item.enabled?"":"disabledAutomation"}">
+      <div class="automationCardHeader">
+        <div>
+          <div class="catalogTitle">${esc(item.name)}</div>
+          <div class="catalogMeta">${esc(item.report_id)} · ${esc(automationScheduleLabel(item))}</div>
+        </div>
+        <span class="providerBadge ${item.enabled?"ok":""}">${item.enabled?"Activée":"Désactivée"}</span>
+      </div>
+      <div class="automationMetaGrid">
+        <div><span class="muted">Prochaine exécution</span><strong>${esc(formatAutomationDate(item.next_run_at))}</strong></div>
+        <div><span class="muted">Dernière exécution</span><strong>${esc(formatAutomationDate(runtime.last_run_at))}</strong></div>
+        <div><span class="muted">Dernier statut</span><strong class="${lastClass}">${esc(lastStatus)}</strong></div>
+        <div><span class="muted">Pipeline</span><strong>${esc(automationAiLabel(pipeline.ai_analysis))}${pipeline.generate_pdf?" · PDF":""}${(pipeline.destinations||[]).length?" · "+pipeline.destinations.join(", "):""}${(item.notification||{}).persistent?" · notification":""}</strong></div>
+      </div>
+      ${runtime.last_error?`<div class="statusText error">${esc(runtime.last_error)}</div>`:""}
+      <div class="actions">
+        <button onclick="runScheduledAutomationNow('${esc(item.id)}')">Exécuter maintenant</button>
+        <button onclick="editScheduledAutomation('${esc(item.id)}')">Modifier</button>
+        <button class="danger" onclick="deleteScheduledAutomation('${esc(item.id)}','${esc(item.name)}')">Supprimer</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+async function loadScheduledAutomations(){
+  const response=await fetch("api/scheduled-automations",{cache:"no-store"});
+  const data=await response.json();
+  if(!response.ok) throw new Error(data.error||"Lecture des automatisations impossible");
+  scheduledAutomations=data.automations||[];
+  renderScheduledAutomations(data.timezone);
+}
+
+async function showAutomations(push=true){
+  setPage("automationsPage",{},push);
+  await loadReports();
+  await loadScheduledAutomations();
+  $("automationFormCard").classList.add("hidden");
+}
+
+function showAutomationForm(item=null){
+  resetAutomationForm(item);
+  $("automationFormCard").classList.remove("hidden");
+  $("automationFormCard").scrollIntoView({behavior:"smooth",block:"start"});
+}
+
+function editScheduledAutomation(id){
+  const item=scheduledAutomations.find(a=>a.id===id);
+  if(item) showAutomationForm(item);
+}
+
+async function saveScheduledAutomation(){
+  const status=$("automationFormStatus");
+  status.classList.remove("error");
+  status.textContent="Enregistrement…";
+  const type=$("automationScheduleType").value;
+  const schedule={type};
+  if(type==="hourly") schedule.minute=Number($("automationMinute").value||0);
+  else schedule.time=$("automationTime").value||"05:40";
+  if(type==="weekly") schedule.weekday=Number($("automationWeekday").value||0);
+  if(type==="monthly"||type==="yearly") schedule.day=Number($("automationDay").value||1);
+  if(type==="yearly") schedule.month=Number($("automationMonth").value||1);
+  const aiMode=$("automationAiMode").value;
+  const payload={
+    name:$("automationName").value,
+    enabled:$("automationEnabled").checked,
+    report_id:$("automationReport").value,
+    schedule,
+    pipeline:{
+      ai_analysis:aiMode==="true"?true:aiMode==="false"?false:null,
+      generate_pdf:$("automationGeneratePdf").checked,
+      theme:$("automationTheme").value,
+      destinations:$("automationPaperless").checked?["paperless"]:[]
+    },
+    notification:{persistent:$("automationPersistentNotification").checked}
+  };
+  const url=editingAutomationId?`api/scheduled-automation/${encodeURIComponent(editingAutomationId)}`:"api/scheduled-automations";
+  const response=await fetch(url,{method:editingAutomationId?"PATCH":"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+  const data=await response.json();
+  if(!response.ok){status.textContent="Erreur : "+(data.error||"Enregistrement impossible");status.classList.add("error");return;}
+  status.textContent="✓ Automatisation enregistrée";
+  await loadScheduledAutomations();
+  setTimeout(()=>$("automationFormCard").classList.add("hidden"),500);
+}
+
+async function runScheduledAutomationNow(id){
+  const response=await fetch(`api/scheduled-automation/${encodeURIComponent(id)}/run`,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+  const data=await response.json();
+  if(!response.ok){alert(data.error||"Lancement impossible");return;}
+  alert(`Job lancé : ${data.job.id}\nStatut : ${data.job.status}`);
+  await loadScheduledAutomations();
+}
+
+async function deleteScheduledAutomation(id,name){
+  if(!confirm(`Supprimer l'automatisation « ${name} » ?`)) return;
+  const response=await fetch(`api/scheduled-automation/${encodeURIComponent(id)}`,{method:"DELETE"});
+  const data=await response.json();
+  if(!response.ok){alert(data.error||"Suppression impossible");return;}
+  await loadScheduledAutomations();
+}
+
 function setPage(page, state={}, push=true){
-  ["homePage","reportsPage","documentsPage","exportProvidersPage","reportFormPage","reportPreviewPage","deviceAnalysisPage","providersPage","catalogPage","devicePage"].forEach(id => $(id).classList.add("hidden"));
+  ["homePage","reportsPage","automationsPage","documentsPage","exportProvidersPage","reportFormPage","reportPreviewPage","deviceAnalysisPage","providersPage","catalogPage","devicePage"].forEach(id => $(id).classList.add("hidden"));
   $(page).classList.remove("hidden");
   $("backButton").classList.toggle("hidden", page === "homePage");
   if(push) history.pushState({page, ...state}, "", "");
@@ -1369,6 +1544,12 @@ async function addDeviceTo(id, name, push=true){
 $("backButton").addEventListener("click", () => history.back());
 $("newCatalogButton").addEventListener("click", () => showNewCatalog());
 $("reportsButton").addEventListener("click", () => showReports());
+$("automationsButton").addEventListener("click", () => showAutomations());
+$("refreshAutomationsButton").addEventListener("click", () => loadScheduledAutomations());
+$("newAutomationButton").addEventListener("click", () => showAutomationForm());
+$("automationScheduleType").addEventListener("change", updateAutomationScheduleFields);
+$("saveAutomationButton").addEventListener("click", saveScheduledAutomation);
+$("cancelAutomationButton").addEventListener("click", () => $("automationFormCard").classList.add("hidden"));
 $("documentsButton").addEventListener("click", () => showDocuments());
 $("refreshDocumentsButton").addEventListener("click", () => loadDocuments());
 $("exportProvidersButton").addEventListener("click", () => showExportProviders());
@@ -1450,6 +1631,7 @@ window.addEventListener("popstate", async event => {
   if(state.page === "reportPreviewPage") await previewReport(state.reportId, false);
   else if(state.page === "reportFormPage") await showReportForm(state.reportId || null, false);
   else if(state.page === "reportsPage") await showReports(false);
+  else if(state.page === "automationsPage") await showAutomations(false);
   else if(state.page === "documentsPage") await showDocuments(false);
   else if(state.page === "exportProvidersPage") await showExportProviders(false);
   else if(state.page === "deviceAnalysisPage") await showDeviceAnalysis(state.catalogId, state.deviceId, false);

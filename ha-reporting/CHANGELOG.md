@@ -1,3 +1,13 @@
+## 0.1.0-beta.16
+
+- Add a persistent internal scheduler and an **Automatisations** page in HA Reporting.
+- Schedule hourly, daily, weekly, monthly or yearly report pipelines in the Home Assistant timezone.
+- Configure per-schedule AI inheritance/override, native PDF generation, theme and export destinations.
+- Add optional persistent Home Assistant notifications containing the completed AI analysis.
+- Persist schedule configuration and last-run metadata under add-on storage.
+- Prevent duplicate execution of the same schedule slot and reuse the existing asynchronous job engine.
+- Keep the beta.15 Companion integration optional rather than required for scheduled reporting.
+
 # 0.1.0-beta.15
 
 - Add Home Assistant completion events for automation jobs: `ha_reporting_report_started`, `ha_reporting_report_completed`, `ha_reporting_report_failed`.

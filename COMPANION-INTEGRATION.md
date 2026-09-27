@@ -1,3 +1,7 @@
+# Companion HA Reporting — FACULTATIF depuis beta.16
+
+Les automatisations planifiées peuvent désormais être créées directement dans HA Reporting. Le Companion reste disponible uniquement pour les scénarios qui nécessitent l’action native `ha_reporting.run_report` dans Home Assistant Core.
+
 # HA Reporting companion integration — beta.15
 
 La beta.15 ajoute une intégration Home Assistant légère. Elle ne calcule aucun rapport : elle expose l'action native `ha_reporting.run_report` et envoie la requête au moteur de l'add-on.
@@ -37,7 +41,7 @@ response_variable: lancement
 
 ## Événements Home Assistant
 
-L'add-on beta.15 émet :
+L'add-on beta.15+ émet :
 
 - `ha_reporting_report_started`
 - `ha_reporting_report_completed`

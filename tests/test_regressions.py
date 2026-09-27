@@ -29,6 +29,7 @@ from exporters.base import ExportProviderError
 from exporters.paperless import PaperlessExportProvider
 import exporters.config as export_config
 import document_store
+import automation_store
 from rendering.pdf_report import render_pdf_native
 import main
 
@@ -672,7 +673,7 @@ class Beta12ExportProviderTests(unittest.TestCase):
         self.assertTrue(status['reachable'])
         self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
         self.assertEqual(seen['auth'],'Token secret')
-        self.assertIn('beta.15',seen['ua'])
+        self.assertIn('beta.16',seen['ua'])
 
     def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
         import tempfile
@@ -989,7 +990,7 @@ class Beta15HomeAssistantBridgeTests(unittest.TestCase):
             self.assertTrue((integration/name).is_file(),name)
         manifest=json.loads((integration/'manifest.json').read_text())
         self.assertEqual(manifest['domain'],'ha_reporting')
-        self.assertEqual(manifest['version'],'0.1.0-beta.15')
+        self.assertEqual(manifest['version'],'0.1.0-beta.16')
         self.assertTrue(manifest['config_flow'])
         source=(integration/'__init__.py').read_text()
         self.assertIn('SERVICE_RUN_REPORT',source)
@@ -999,6 +1000,100 @@ class Beta15HomeAssistantBridgeTests(unittest.TestCase):
             ast.parse(py.read_text(),filename=str(py))
 
 
+class Beta16InternalSchedulerTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.old_file = automation_store.AUTOMATION_FILE
+        automation_store.AUTOMATION_FILE = Path(self.tempdir.name) / 'automations.json'
+        with main.AUTOMATION_JOBS_LOCK:
+            main.AUTOMATION_JOBS.clear()
+
+    def tearDown(self):
+        automation_store.AUTOMATION_FILE = self.old_file
+        self.tempdir.cleanup()
+        with main.AUTOMATION_JOBS_LOCK:
+            main.AUTOMATION_JOBS.clear()
+
+    def payload(self):
+        return {
+            'name':'Rapport mensuel automatique',
+            'enabled':True,
+            'report_id':'rapport_domotique_mensuel',
+            'schedule':{'type':'monthly','day':1,'time':'05:40'},
+            'pipeline':{'ai_analysis':None,'generate_pdf':True,'theme':'dark','destinations':['paperless']},
+            'notification':{'persistent':True},
+        }
+
+    def test_store_persists_and_monthly_due_once(self):
+        item=automation_store.create_automation(self.payload())
+        self.assertEqual(item['schedule']['type'],'monthly')
+        now=datetime(2026,10,1,5,40,tzinfo=ZoneInfo('Europe/Zurich'))
+        self.assertTrue(automation_store.is_due(item,now))
+        key=automation_store.schedule_key(item,now)
+        automation_store.update_runtime(item['id'],last_schedule_key=key)
+        refreshed=automation_store.get_automation(item['id'])
+        self.assertFalse(automation_store.is_due(refreshed,now))
+        self.assertTrue(automation_store.AUTOMATION_FILE.exists())
+
+    def test_next_run_weekly_and_hourly(self):
+        weekly=automation_store.normalize_automation({**self.payload(),'schedule':{'type':'weekly','weekday':0,'time':'05:40'}})
+        now=datetime(2026,9,27,12,0,tzinfo=ZoneInfo('Europe/Zurich')) # Sunday
+        nxt=automation_store.next_run(weekly,now)
+        self.assertEqual((nxt.weekday(),nxt.hour,nxt.minute),(0,5,40))
+        hourly=automation_store.normalize_automation({**self.payload(),'schedule':{'type':'hourly','minute':15}})
+        nxt2=automation_store.next_run(hourly,now)
+        self.assertEqual((nxt2.hour,nxt2.minute),(12,15))
+
+    def test_scheduler_payload_preserves_inherit_and_notification(self):
+        item=automation_store.normalize_automation(self.payload())
+        payload=main._scheduled_automation_payload(item)
+        self.assertIsNone(payload['ai_analysis'])
+        self.assertTrue(payload['generate_pdf'])
+        self.assertEqual(payload['destinations'],['paperless'])
+        self.assertTrue(payload['notification']['persistent'])
+        self.assertEqual(payload['automation_id'],item['id'])
+
+    def test_persistent_notification_calls_home_assistant_service(self):
+        job={'id':'j','report_id':'r','options':{'notification':{'persistent':True},'automation_id':'auto_1'}}
+        report={'name':'Rapport test'}
+        analysis={'status':'completed','text':'SYNTHÈSE\nTout va bien.'}
+        with patch.object(main,'home_assistant_call_service',return_value=[]) as call:
+            result=main._persistent_notification_for_job(job,report,analysis)
+        self.assertEqual(result,[])
+        args=call.call_args.args
+        self.assertEqual(args[0:2],('persistent_notification','create'))
+        self.assertEqual(args[2]['message'],'SYNTHÈSE\nTout va bien.')
+        self.assertEqual(args[2]['notification_id'],'ha_reporting_auto_1')
+
+    def test_pipeline_notification_is_nonfatal_and_recorded(self):
+        options={'report_id':'r','ai_analysis':True,'generate_pdf':True,'theme':'dark','destinations':[], 'notification':{'persistent':True}, 'automation_id':'auto'}
+        job_id='job-beta16'
+        now=time.time()
+        with main.AUTOMATION_JOBS_LOCK:
+            main.AUTOMATION_JOBS[job_id]={'id':job_id,'report_id':'r','status':'queued','message':'queued','created_at_epoch':now,'updated_at_epoch':now,'started_at_epoch':None,'finished_at_epoch':None,'options':options,'warnings':[],'exports':{},'document_id':None,'document':None,'error':None,'history':[],'_fingerprint':'fp'}
+        report={'id':'r','name':'Rapport test','ai_analysis':{'enabled':True}}
+        result={'summary':{},'resolved_period':{'timezone':'UTC'},'execution':{},'ai_analysis':{'status':'pending'}}
+        analysis={'status':'completed','text':'OK'}
+        with patch.object(main,'load_report',return_value=report), patch.object(main,'execute_report',return_value=result), patch.object(main,'_automation_ai_analysis',return_value=analysis), patch.object(main,'generate_report_pdf',return_value={'id':'d','filename':'r.pdf','generated_at':'x','size_bytes':1}), patch.object(main,'_persistent_notification_for_job',return_value=[]) as notify, patch.object(main,'_safe_home_assistant_event',return_value=True):
+            main._run_automation_job(job_id)
+        job=main.get_automation_job(job_id)
+        self.assertEqual(job['status'],'completed')
+        self.assertTrue(job['result']['notification']['persistent'])
+        self.assertTrue(job['result']['notification']['ok'])
+        notify.assert_called_once()
+
+    def test_scheduler_api_and_ui_are_packaged(self):
+        main_text=(ROOT/'ha-reporting/app/main.py').read_text()
+        index=(ROOT/'ha-reporting/app/index.html').read_text()
+        self.assertIn('/api/scheduled-automations',main_text)
+        self.assertIn('_scheduler_loop',main_text)
+        self.assertIn('automationsPage',index)
+        self.assertIn('automationPersistentNotification',index)
+        self.assertIn('Suivre la configuration du rapport',index)
+
+
+
 class PackageTests(unittest.TestCase):
     def test_yaml_and_installation_layout(self):
         import yaml
@@ -1006,13 +1101,13 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.15')
+        self.assertEqual(config['version'],'0.1.0-beta.16')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertTrue(any(item.get('type')=='share' and item.get('read_only') is False and item.get('path')=='/share' for item in config.get('map',[]) if isinstance(item,dict)))
         self.assertIn('py3-websocket-client',(addon/'Dockerfile').read_text())
         self.assertIn('weasyprint',(addon/'Dockerfile').read_text())
-        for name in ['Dockerfile','run.sh','app/main.py','app/app.js','app/index.html','app/rendering/html_report.py','app/analysis/ai_report.py','app/exporters/base.py','app/exporters/paperless.py','app/exporters/config.py']:
+        for name in ['Dockerfile','run.sh','app/main.py','app/app.js','app/index.html','app/rendering/html_report.py','app/analysis/ai_report.py','app/exporters/base.py','app/exporters/paperless.py','app/exporters/config.py','app/automation_store.py']:
             self.assertTrue((addon/name).is_file(),name)
         index=(addon/'app/index.html').read_text()
         self.assertIn('reportHtmlButton', index)

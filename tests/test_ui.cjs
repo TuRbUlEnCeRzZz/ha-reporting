@@ -53,4 +53,11 @@ check(() => assert.match(source, /consume_folder/));
 check(() => assert.match(source, /Tester le dossier consume/));
 check(() => assert.match(source, /\/export\/\$\{encodeURIComponent\(providerId\)\}/));
 check(() => assert.match(source, /Réessayer \$\{provider\.name\}/));
+check(() => assert.match(source, /function showAutomations\(/));
+check(() => assert.match(source, /api\/scheduled-automations/));
+check(() => assert.match(source, /function saveScheduledAutomation\(/));
+check(() => assert.match(source, /function runScheduledAutomationNow\(/));
+check(() => assert.match(source, /automationPersistentNotification/));
+check(() => assert.match(source, /IA selon le rapport/));
+
 console.log(`${checks} JavaScript UI checks passed`);

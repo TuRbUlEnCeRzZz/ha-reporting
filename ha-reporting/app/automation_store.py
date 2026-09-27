@@ -5,12 +5,13 @@ import re
 import tempfile
 import threading
 import unicodedata
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 AUTOMATION_FILE = Path('/config/automations.json')
 VALID_SCHEDULE_TYPES = {'hourly', 'daily', 'weekly', 'monthly', 'yearly'}
 VALID_THEMES = {'dark', 'light'}
+HISTORY_LIMIT = 50
 _STORE_LOCK = threading.RLock()
 
 
@@ -39,7 +40,7 @@ def _atomic_write(path: Path, payload):
 
 def _read_all():
     if not AUTOMATION_FILE.exists():
-        return {'version': 1, 'automations': []}
+        return {'version': 2, 'automations': []}
     data = json.loads(AUTOMATION_FILE.read_text(encoding='utf-8') or '{}')
     if not isinstance(data, dict):
         raise ValueError('Fichier des automatisations invalide')
@@ -60,6 +61,31 @@ def _parse_time(value):
     if not 0 <= hour <= 23 or not 0 <= minute <= 59:
         raise ValueError('Heure invalide')
     return f'{hour:02d}:{minute:02d}'
+
+
+def _normalize_history(raw_history):
+    if not isinstance(raw_history, list):
+        return []
+    history = []
+    for item in raw_history[-HISTORY_LIMIT:]:
+        if not isinstance(item, dict):
+            continue
+        history.append({
+            'job_id': item.get('job_id'),
+            'trigger': str(item.get('trigger') or 'unknown'),
+            'attempt': max(0, int(item.get('attempt') or 0)),
+            'started_at': item.get('started_at'),
+            'finished_at': item.get('finished_at'),
+            'status': item.get('status'),
+            'duration_seconds': item.get('duration_seconds'),
+            'error': item.get('error'),
+            'warnings': copy.deepcopy(item.get('warnings') or []),
+            'document_id': item.get('document_id'),
+            'filename': item.get('filename'),
+            'exports': copy.deepcopy(item.get('exports') or {}),
+            'ai_status': item.get('ai_status'),
+        })
+    return history
 
 
 def normalize_automation(payload, automation_id=None):
@@ -129,6 +155,15 @@ def normalize_automation(payload, automation_id=None):
     notification = copy.deepcopy(payload.get('notification') or {})
     persistent = bool(notification.get('persistent', False))
 
+    retry = copy.deepcopy(payload.get('retry') or {})
+    retry_enabled = bool(retry.get('enabled', False))
+    max_retries = int(retry.get('max_retries', 1))
+    delay_minutes = int(retry.get('delay_minutes', 10))
+    if not 0 <= max_retries <= 3:
+        raise ValueError('retry.max_retries doit être compris entre 0 et 3')
+    if not 1 <= delay_minutes <= 1440:
+        raise ValueError('retry.delay_minutes doit être compris entre 1 et 1440')
+
     runtime = copy.deepcopy(payload.get('runtime') or {})
     return {
         'id': aid,
@@ -145,19 +180,43 @@ def normalize_automation(payload, automation_id=None):
         'notification': {
             'persistent': persistent,
         },
+        'retry': {
+            'enabled': retry_enabled,
+            'max_retries': max_retries,
+            'delay_minutes': delay_minutes,
+        },
         'runtime': {
             'last_schedule_key': runtime.get('last_schedule_key'),
             'last_run_at': runtime.get('last_run_at'),
+            'last_finished_at': runtime.get('last_finished_at'),
             'last_job_id': runtime.get('last_job_id'),
             'last_status': runtime.get('last_status'),
             'last_error': runtime.get('last_error'),
+            'last_duration_seconds': runtime.get('last_duration_seconds'),
+            'last_warnings': copy.deepcopy(runtime.get('last_warnings') or []),
+            'last_document_id': runtime.get('last_document_id'),
+            'last_filename': runtime.get('last_filename'),
+            'last_exports': copy.deepcopy(runtime.get('last_exports') or {}),
+            'last_trigger': runtime.get('last_trigger'),
+            'active_job_id': runtime.get('active_job_id'),
+            'next_retry_at': runtime.get('next_retry_at'),
+            'retry_attempt': max(0, int(runtime.get('retry_attempt') or 0)),
+            'consecutive_failures': max(0, int(runtime.get('consecutive_failures') or 0)),
         },
+        'history': _normalize_history(payload.get('history')),
     }
+
+
+def _normalized_items(data):
+    output = []
+    for item in data.get('automations') or []:
+        output.append(normalize_automation(item, automation_id=item.get('id')))
+    return output
 
 
 def list_automations():
     with _STORE_LOCK:
-        return copy.deepcopy(_read_all()['automations'])
+        return copy.deepcopy(_normalized_items(_read_all()))
 
 
 def get_automation(automation_id):
@@ -165,7 +224,7 @@ def get_automation(automation_id):
     with _STORE_LOCK:
         for item in _read_all()['automations']:
             if item.get('id') == automation_id:
-                return copy.deepcopy(item)
+                return normalize_automation(item, automation_id=automation_id)
     raise ValueError("Automatisation introuvable")
 
 
@@ -175,6 +234,7 @@ def create_automation(payload):
         data = _read_all()
         if any(existing.get('id') == item['id'] for existing in data['automations']):
             raise ValueError("Cet ID d'automatisation existe déjà")
+        data['version'] = 2
         data['automations'].append(item)
         _atomic_write(AUTOMATION_FILE, data)
     return copy.deepcopy(item)
@@ -186,13 +246,15 @@ def update_automation(automation_id, payload):
         index = next((i for i, item in enumerate(data['automations']) if item.get('id') == automation_id), None)
         if index is None:
             raise ValueError('Automatisation introuvable')
-        current = copy.deepcopy(data['automations'][index])
+        current = normalize_automation(data['automations'][index], automation_id=automation_id)
         merged = copy.deepcopy(current)
-        for key in ('name', 'enabled', 'report_id', 'schedule', 'pipeline', 'notification'):
+        for key in ('name', 'enabled', 'report_id', 'schedule', 'pipeline', 'notification', 'retry'):
             if key in (payload or {}):
                 merged[key] = copy.deepcopy(payload[key])
         merged['runtime'] = current.get('runtime') or {}
+        merged['history'] = current.get('history') or []
         item = normalize_automation(merged, automation_id=automation_id)
+        data['version'] = 2
         data['automations'][index] = item
         _atomic_write(AUTOMATION_FILE, data)
     return copy.deepcopy(item)
@@ -205,6 +267,7 @@ def delete_automation(automation_id):
         data['automations'] = [item for item in data['automations'] if item.get('id') != automation_id]
         if len(data['automations']) == before:
             raise ValueError('Automatisation introuvable')
+        data['version'] = 2
         _atomic_write(AUTOMATION_FILE, data)
     return {'deleted': automation_id}
 
@@ -215,10 +278,44 @@ def update_runtime(automation_id, **fields):
         index = next((i for i, item in enumerate(data['automations']) if item.get('id') == automation_id), None)
         if index is None:
             return None
-        runtime = data['automations'][index].setdefault('runtime', {})
-        runtime.update(fields)
+        current = normalize_automation(data['automations'][index], automation_id=automation_id)
+        runtime = current.setdefault('runtime', {})
+        runtime.update(copy.deepcopy(fields))
+        data['version'] = 2
+        data['automations'][index] = normalize_automation(current, automation_id=automation_id)
         _atomic_write(AUTOMATION_FILE, data)
         return copy.deepcopy(data['automations'][index])
+
+
+def append_history(automation_id, record, limit=HISTORY_LIMIT):
+    try:
+        limit = max(1, min(HISTORY_LIMIT, int(limit)))
+    except (TypeError, ValueError):
+        limit = HISTORY_LIMIT
+    with _STORE_LOCK:
+        data = _read_all()
+        index = next((i for i, item in enumerate(data['automations']) if item.get('id') == automation_id), None)
+        if index is None:
+            return None
+        current = normalize_automation(data['automations'][index], automation_id=automation_id)
+        history = list(current.get('history') or [])
+        normalized = _normalize_history([record])
+        if normalized:
+            history.append(normalized[0])
+        current['history'] = history[-limit:]
+        data['version'] = 2
+        data['automations'][index] = normalize_automation(current, automation_id=automation_id)
+        _atomic_write(AUTOMATION_FILE, data)
+        return copy.deepcopy(data['automations'][index])
+
+
+def list_history(automation_id, limit=HISTORY_LIMIT):
+    item = get_automation(automation_id)
+    try:
+        limit = max(1, min(HISTORY_LIMIT, int(limit)))
+    except (TypeError, ValueError):
+        limit = HISTORY_LIMIT
+    return copy.deepcopy((item.get('history') or [])[-limit:][::-1])
 
 
 def schedule_key(automation, now):

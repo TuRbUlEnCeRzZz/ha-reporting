@@ -15,7 +15,7 @@
   </button>
   <div>
     <h1>HA Reporting</h1>
-    <div class="subtitle">0.1.0-beta.16 · Automatisations internes, IA, PDF local & exports</div>
+    <div class="subtitle">0.1.0-beta.17 · Automatisations fiables, historique, IA, PDF & exports</div>
   </div>
 </header>
 
@@ -65,6 +65,17 @@
     <div id="automationTimezone" class="muted automationTimezone"></div>
     <div id="automationList"></div>
 
+    <div id="automationHistoryCard" class="card hidden">
+      <div class="toolbar compactToolbar">
+        <div>
+          <h3 id="automationHistoryTitle">Historique</h3>
+          <p class="muted">Les 50 dernières exécutions sont conservées localement.</p>
+        </div>
+        <button id="closeAutomationHistoryButton">Fermer</button>
+      </div>
+      <div id="automationHistoryList"></div>
+    </div>
+
     <div id="automationFormCard" class="card hidden">
       <h3 id="automationFormTitle">Nouvelle automatisation</h3>
       <div class="grid two">
@@ -91,8 +102,8 @@
             <option value="yearly">Tous les ans</option>
           </select>
         </label>
-        <label id="automationTimeLabel">Heure
-          <input id="automationTime" type="time" value="05:40">
+        <label id="automationTimeLabel">Heure (24 h)
+          <input id="automationTime" type="text" inputmode="numeric" autocomplete="off" pattern="(?:[01]\d|2[0-3]):[0-5]\d" placeholder="05:40" value="05:40">
         </label>
         <label id="automationMinuteLabel" class="hidden">Minute de l'heure
           <input id="automationMinute" type="number" min="0" max="59" value="0">
@@ -136,7 +147,22 @@
         <label class="choiceItem"><input id="automationPaperless" type="checkbox"><span>Exporter vers Paperless-ngx</span></label>
         <label class="choiceItem"><input id="automationPersistentNotification" type="checkbox"><span>Notification persistante avec l'analyse IA</span></label>
       </div>
-      <p class="muted">Les heures utilisent le fuseau Home Assistant. L'export Paperless nécessite la génération du PDF.</p>
+      <p class="muted">Les heures sont saisies au format 24 h et utilisent le fuseau Home Assistant. L'export Paperless nécessite la génération du PDF.</p>
+
+      <h3>Fiabilité</h3>
+      <div class="grid three">
+        <label class="choiceItem inlineChoice">
+          <input id="automationRetryEnabled" type="checkbox" checked>
+          <span>Réessayer après un échec global</span>
+        </label>
+        <label>Nombre de nouvelles tentatives
+          <select id="automationMaxRetries"><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option></select>
+        </label>
+        <label>Délai avant nouvelle tentative
+          <div class="inputSuffix"><input id="automationRetryDelay" type="number" min="1" max="1440" value="10"><span>min</span></div>
+        </label>
+      </div>
+      <p class="muted">Le retry s'applique uniquement aux échecs du pipeline. Un rapport terminé avec avertissements n'est pas relancé afin d'éviter les doublons d'export.</p>
 
       <div class="actions">
         <button id="cancelAutomationButton">Annuler</button>

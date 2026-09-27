@@ -9,7 +9,7 @@ import threading
 import copy
 import uuid
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, unquote
@@ -36,11 +36,13 @@ from document_store import (
 )
 from analysis.ai_report import analyze_report_with_ai
 from automation_store import (
+    append_history as append_scheduled_automation_history,
     create_automation as create_scheduled_automation,
     delete_automation as delete_scheduled_automation,
     get_automation as get_scheduled_automation,
     is_due as scheduled_automation_is_due,
     list_automations as list_scheduled_automations,
+    list_history as list_scheduled_automation_history,
     next_run as scheduled_automation_next_run,
     schedule_key as scheduled_automation_schedule_key,
     update_automation as update_scheduled_automation,
@@ -80,6 +82,7 @@ AUTOMATION_JOBS = {}
 AUTOMATION_JOBS_LOCK = threading.Lock()
 AUTOMATION_MAX_JOBS = 100
 AUTOMATION_TERMINAL_STATES = {"completed", "completed_with_errors", "error"}
+AUTOMATION_ACTIVE_STATES = {"queued", "running", "data_complete", "ai_running", "pdf_generating", "exporting"}
 SCHEDULER_POLL_SECONDS = 15
 
 DEFAULT_CATEGORIES = [
@@ -1512,6 +1515,13 @@ def _automation_options(payload):
         raise ValueError("notification doit être un objet")
     notification = {"persistent": bool(notification_raw.get("persistent", False))}
     automation_id = str(payload.get("automation_id") or "").strip() or None
+    trigger = str(payload.get("trigger") or "external").strip().lower()
+    if trigger not in {"external", "scheduled", "manual", "retry"}:
+        raise ValueError("trigger invalide")
+    try:
+        retry_attempt = max(0, int(payload.get("retry_attempt") or 0))
+    except (TypeError, ValueError):
+        raise ValueError("retry_attempt invalide")
 
     return {
         "report_id": report_id,
@@ -1521,11 +1531,17 @@ def _automation_options(payload):
         "destinations": destinations,
         "notification": notification,
         "automation_id": automation_id,
+        "trigger": trigger,
+        "retry_attempt": retry_attempt,
     }
 
 
 def _automation_fingerprint(options):
-    return json.dumps(options, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    # trigger/retry metadata must not bypass active-job deduplication.
+    stable = copy.deepcopy(options)
+    stable.pop("trigger", None)
+    stable.pop("retry_attempt", None)
+    return json.dumps(stable, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _prune_automation_jobs_locked():
@@ -1626,6 +1642,183 @@ def _automation_event_payload(job, report=None):
     }
 
 
+def _job_iso(epoch, timezone=None):
+    if not isinstance(epoch, (int, float)):
+        return None
+    timezone = timezone or home_assistant_timezone()
+    return datetime.fromtimestamp(float(epoch), ZoneInfo(timezone)).isoformat()
+
+
+def _mark_scheduled_job_queued(job):
+    options = (job or {}).get("options") or {}
+    automation_id = options.get("automation_id")
+    if not automation_id:
+        return
+    try:
+        trigger = options.get("trigger") or "external"
+        retry_attempt = max(0, int(options.get("retry_attempt") or 0))
+        update_scheduled_automation_runtime(
+            automation_id,
+            last_job_id=job.get("id"),
+            active_job_id=job.get("id"),
+            last_status=job.get("status") or "queued",
+            last_run_at=_job_iso(job.get("created_at_epoch")),
+            last_trigger=trigger,
+            last_error=None,
+            last_warnings=[],
+            retry_attempt=retry_attempt,
+            next_retry_at=None,
+        )
+    except Exception:
+        log.exception("Unable to persist queued automation job %s", job.get("id"))
+
+
+def _mark_scheduled_job_running(job):
+    options = (job or {}).get("options") or {}
+    automation_id = options.get("automation_id")
+    if not automation_id:
+        return
+    try:
+        update_scheduled_automation_runtime(
+            automation_id,
+            active_job_id=job.get("id"),
+            last_job_id=job.get("id"),
+            last_status=job.get("status") or "running",
+            last_run_at=_job_iso(job.get("started_at_epoch") or job.get("created_at_epoch")),
+            last_trigger=options.get("trigger") or "external",
+            retry_attempt=max(0, int(options.get("retry_attempt") or 0)),
+            last_error=None,
+        )
+    except Exception:
+        log.exception("Unable to persist running automation job %s", job.get("id"))
+
+
+def _record_scheduled_job_terminal(job):
+    options = (job or {}).get("options") or {}
+    automation_id = options.get("automation_id")
+    if not automation_id:
+        return
+    try:
+        automation = get_scheduled_automation(automation_id)
+    except Exception:
+        # The automation may have been deleted while its already-running job finished.
+        return
+
+    timezone = home_assistant_timezone()
+    started_epoch = job.get("started_at_epoch")
+    finished_epoch = job.get("finished_at_epoch") or time.time()
+    duration = None
+    if isinstance(started_epoch, (int, float)):
+        duration = max(0.0, float(finished_epoch) - float(started_epoch))
+    result = job.get("result") or {}
+    record = {
+        "job_id": job.get("id"),
+        "trigger": options.get("trigger") or "external",
+        "attempt": max(0, int(options.get("retry_attempt") or 0)),
+        "started_at": _job_iso(started_epoch or job.get("created_at_epoch"), timezone),
+        "finished_at": _job_iso(finished_epoch, timezone),
+        "status": job.get("status"),
+        "duration_seconds": duration,
+        "error": job.get("error"),
+        "warnings": copy.deepcopy(job.get("warnings") or []),
+        "document_id": job.get("document_id") or result.get("document_id"),
+        "filename": (job.get("document") or {}).get("filename") or result.get("filename"),
+        "exports": copy.deepcopy(job.get("exports") or {}),
+        "ai_status": result.get("ai_status"),
+    }
+    history = automation.get("history") or []
+    if not any(item.get("job_id") == job.get("id") for item in history):
+        append_scheduled_automation_history(automation_id, record)
+
+    status = job.get("status")
+    current_runtime = automation.get("runtime") or {}
+    consecutive_failures = int(current_runtime.get("consecutive_failures") or 0)
+    next_retry_at = None
+    retry_attempt = max(0, int(options.get("retry_attempt") or 0))
+    if status == "error":
+        consecutive_failures += 1
+        retry = automation.get("retry") or {}
+        max_retries = max(0, int(retry.get("max_retries") or 0))
+        if retry.get("enabled") and retry_attempt < max_retries:
+            delay = max(1, int(retry.get("delay_minutes") or 10))
+            retry_at = datetime.fromtimestamp(float(finished_epoch), ZoneInfo(timezone)) + timedelta(minutes=delay)
+            next_retry_at = retry_at.isoformat()
+    else:
+        consecutive_failures = 0
+        retry_attempt = 0
+
+    update_scheduled_automation_runtime(
+        automation_id,
+        active_job_id=None,
+        last_job_id=job.get("id"),
+        last_status=status,
+        last_finished_at=_job_iso(finished_epoch, timezone),
+        last_duration_seconds=duration,
+        last_error=job.get("error"),
+        last_warnings=copy.deepcopy(job.get("warnings") or []),
+        last_document_id=record.get("document_id"),
+        last_filename=record.get("filename"),
+        last_exports=copy.deepcopy(job.get("exports") or {}),
+        last_trigger=record.get("trigger"),
+        consecutive_failures=consecutive_failures,
+        retry_attempt=retry_attempt,
+        next_retry_at=next_retry_at,
+    )
+
+
+def _parse_runtime_datetime(value, timezone):
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=ZoneInfo(timezone))
+        return parsed.astimezone(ZoneInfo(timezone))
+    except Exception:
+        return None
+
+
+def _mark_interrupted_automation(automation, now):
+    runtime = automation.get("runtime") or {}
+    job_id = runtime.get("active_job_id") or runtime.get("last_job_id")
+    if not job_id or runtime.get("last_status") not in AUTOMATION_ACTIVE_STATES:
+        return automation
+    message = "Job interrompu par un redémarrage de HA Reporting"
+    history = automation.get("history") or []
+    if not any(item.get("job_id") == job_id for item in history):
+        append_scheduled_automation_history(automation.get("id"), {
+            "job_id": job_id,
+            "trigger": runtime.get("last_trigger") or "unknown",
+            "attempt": int(runtime.get("retry_attempt") or 0),
+            "started_at": runtime.get("last_run_at"),
+            "finished_at": now.isoformat(),
+            "status": "interrupted",
+            "duration_seconds": None,
+            "error": message,
+            "warnings": [],
+            "document_id": runtime.get("last_document_id"),
+            "filename": runtime.get("last_filename"),
+            "exports": copy.deepcopy(runtime.get("last_exports") or {}),
+            "ai_status": None,
+        })
+    retry = automation.get("retry") or {}
+    attempt = int(runtime.get("retry_attempt") or 0)
+    next_retry_at = None
+    if retry.get("enabled") and attempt < int(retry.get("max_retries") or 0):
+        next_retry_at = (now + timedelta(minutes=max(1, int(retry.get("delay_minutes") or 10)))).isoformat()
+    updated = update_scheduled_automation_runtime(
+        automation.get("id"),
+        active_job_id=None,
+        last_status="interrupted",
+        last_finished_at=now.isoformat(),
+        last_error=message,
+        last_duration_seconds=None,
+        consecutive_failures=int(runtime.get("consecutive_failures") or 0) + 1,
+        next_retry_at=next_retry_at,
+    )
+    return updated or automation
+
+
 def _run_automation_job(job_id):
     job = get_automation_job(job_id)
     options = job["options"]
@@ -1637,6 +1830,7 @@ def _run_automation_job(job_id):
     report = None
     try:
         started_job = _update_automation_job(job_id, status="running", message="Calcul du rapport", started_at_epoch=time.time())
+        _mark_scheduled_job_running(started_job)
         report = load_report(report_id)
         _safe_home_assistant_event("ha_reporting_report_started", _automation_event_payload(started_job, report))
         result = execute_report(report_id)
@@ -1725,6 +1919,7 @@ def _run_automation_job(job_id):
                 "notification": {"persistent": bool((options.get("notification") or {}).get("persistent")), "ok": notification_result is not None} if (options.get("notification") or {}).get("persistent") else {"persistent": False},
             },
         )
+        _record_scheduled_job_terminal(completed_job)
         _safe_home_assistant_event("ha_reporting_report_completed", _automation_event_payload(completed_job, report))
     except Exception as exc:
         log.exception("Automation report job failed: %s", job_id)
@@ -1743,6 +1938,7 @@ def _run_automation_job(job_id):
                 "ai_status": (analysis or {}).get("status") if analysis else None,
             },
         )
+        _record_scheduled_job_terminal(failed_job)
         _safe_home_assistant_event("ha_reporting_report_failed", _automation_event_payload(failed_job, report or {"name": report_id}))
 
 
@@ -1780,8 +1976,10 @@ def start_automation_report_job(payload):
         job["_thread"] = thread
         AUTOMATION_JOBS[job_id] = job
         _prune_automation_jobs_locked()
+        public = _automation_job_public(job)
+        _mark_scheduled_job_queued(public)
         thread.start()
-        return _automation_job_public(job)
+        return public
 
 
 def scheduled_automation_overview():
@@ -1790,14 +1988,20 @@ def scheduled_automation_overview():
     output = []
     for item in list_scheduled_automations():
         enriched = copy.deepcopy(item)
-        next_dt = scheduled_automation_next_run(item, now)
+        scheduled_dt = scheduled_automation_next_run(item, now)
+        retry_dt = _parse_runtime_datetime((item.get("runtime") or {}).get("next_retry_at"), timezone)
+        candidates = [value for value in (scheduled_dt, retry_dt) if value is not None]
+        next_dt = min(candidates) if candidates else None
         enriched["timezone"] = timezone
+        enriched["next_scheduled_at"] = scheduled_dt.isoformat() if scheduled_dt else None
+        enriched["next_retry_at"] = retry_dt.isoformat() if retry_dt else None
         enriched["next_run_at"] = next_dt.isoformat() if next_dt else None
+        enriched["history_count"] = len(item.get("history") or [])
         output.append(enriched)
     return output
 
 
-def _scheduled_automation_payload(automation):
+def _scheduled_automation_payload(automation, trigger="scheduled", retry_attempt=0):
     pipeline = automation.get("pipeline") or {}
     return {
         "report_id": automation.get("report_id"),
@@ -1807,6 +2011,8 @@ def _scheduled_automation_payload(automation):
         "destinations": list(pipeline.get("destinations") or []),
         "notification": copy.deepcopy(automation.get("notification") or {}),
         "automation_id": automation.get("id"),
+        "trigger": trigger,
+        "retry_attempt": max(0, int(retry_attempt or 0)),
     }
 
 
@@ -1830,32 +2036,95 @@ def update_scheduler_automation(automation_id, payload):
 
 def run_scheduler_automation_now(automation_id):
     automation = get_scheduled_automation(automation_id)
-    job = start_automation_report_job(_scheduled_automation_payload(automation))
+    # A manual run supersedes a pending retry, but never alters the regular schedule slot.
     update_scheduled_automation_runtime(
         automation_id,
-        last_run_at=datetime.now(ZoneInfo(home_assistant_timezone())).isoformat(),
-        last_job_id=job.get("id"),
-        last_status=job.get("status"),
+        next_retry_at=None,
+        retry_attempt=0,
         last_error=None,
     )
-    return job
+    return start_automation_report_job(_scheduled_automation_payload(automation, trigger="manual", retry_attempt=0))
 
 
 def _sync_scheduled_automation_runtime(automation):
     runtime = automation.get("runtime") or {}
-    job_id = runtime.get("last_job_id")
+    job_id = runtime.get("active_job_id") or runtime.get("last_job_id")
     if not job_id:
-        return
+        return automation
     try:
         job = get_automation_job(job_id)
     except Exception:
-        return
-    if job.get("status") != runtime.get("last_status") or job.get("error") != runtime.get("last_error"):
-        update_scheduled_automation_runtime(
+        if runtime.get("last_status") in AUTOMATION_ACTIVE_STATES:
+            return _mark_interrupted_automation(
+                automation,
+                datetime.now(ZoneInfo(home_assistant_timezone())),
+            )
+        return automation
+
+    if job.get("status") in AUTOMATION_TERMINAL_STATES:
+        _record_scheduled_job_terminal(job)
+        try:
+            return get_scheduled_automation(automation.get("id"))
+        except Exception:
+            return automation
+
+    if (
+        job.get("status") != runtime.get("last_status")
+        or job.get("error") != runtime.get("last_error")
+        or runtime.get("active_job_id") != job.get("id")
+    ):
+        updated = update_scheduled_automation_runtime(
             automation.get("id"),
+            active_job_id=job.get("id"),
+            last_job_id=job.get("id"),
             last_status=job.get("status"),
             last_error=job.get("error"),
         )
+        return updated or automation
+    return automation
+
+
+def _record_scheduler_start_failure(automation, trigger, retry_attempt, now, exc):
+    automation_id = automation.get("id")
+    synthetic_job_id = f"start-{uuid.uuid4().hex}"
+    retry = automation.get("retry") or {}
+    next_retry_at = None
+    if retry.get("enabled") and int(retry_attempt or 0) < int(retry.get("max_retries") or 0):
+        next_retry_at = (now + timedelta(minutes=max(1, int(retry.get("delay_minutes") or 10)))).isoformat()
+    append_scheduled_automation_history(automation_id, {
+        "job_id": synthetic_job_id,
+        "trigger": trigger,
+        "attempt": int(retry_attempt or 0),
+        "started_at": now.isoformat(),
+        "finished_at": now.isoformat(),
+        "status": "error",
+        "duration_seconds": 0.0,
+        "error": str(exc),
+        "warnings": [],
+        "document_id": None,
+        "filename": None,
+        "exports": {},
+        "ai_status": None,
+    })
+    runtime = automation.get("runtime") or {}
+    update_scheduled_automation_runtime(
+        automation_id,
+        active_job_id=None,
+        last_job_id=synthetic_job_id,
+        last_status="error",
+        last_run_at=now.isoformat(),
+        last_finished_at=now.isoformat(),
+        last_duration_seconds=0.0,
+        last_error=str(exc),
+        last_warnings=[],
+        last_document_id=None,
+        last_filename=None,
+        last_exports={},
+        last_trigger=trigger,
+        retry_attempt=int(retry_attempt or 0),
+        consecutive_failures=int(runtime.get("consecutive_failures") or 0) + 1,
+        next_retry_at=next_retry_at,
+    )
 
 
 def _scheduler_loop():
@@ -1864,35 +2133,54 @@ def _scheduler_loop():
         try:
             timezone = home_assistant_timezone()
             now = datetime.now(ZoneInfo(timezone))
-            for automation in list_scheduled_automations():
-                _sync_scheduled_automation_runtime(automation)
+            for stored in list_scheduled_automations():
+                automation = _sync_scheduled_automation_runtime(stored)
+                automation_id = automation.get("id")
+                runtime = automation.get("runtime") or {}
+
+                # Retry only terminal/global failures. completed_with_errors stays visible
+                # as a warning and is deliberately not re-run to avoid duplicate exports.
+                retry_at = _parse_runtime_datetime(runtime.get("next_retry_at"), timezone)
+                if automation.get("enabled") and retry_at is not None and now >= retry_at:
+                    next_attempt = int(runtime.get("retry_attempt") or 0) + 1
+                    update_scheduled_automation_runtime(
+                        automation_id,
+                        next_retry_at=None,  # reserve retry slot before starting
+                        retry_attempt=next_attempt,
+                        last_error=None,
+                    )
+                    try:
+                        job = start_automation_report_job(
+                            _scheduled_automation_payload(automation, trigger="retry", retry_attempt=next_attempt)
+                        )
+                        log.info("Scheduled automation %s retry %s started job %s", automation_id, next_attempt, job.get("id"))
+                    except Exception as exc:
+                        log.exception("Scheduled automation %s retry failed to start", automation_id)
+                        refreshed = get_scheduled_automation(automation_id)
+                        _record_scheduler_start_failure(refreshed, "retry", next_attempt, now, exc)
+                    continue
+
                 if not scheduled_automation_is_due(automation, now):
                     continue
-                automation_id = automation.get("id")
                 key = scheduled_automation_schedule_key(automation, now)
-                # Persist the slot before creating the job so a scheduler loop or restart
-                # during the same minute cannot launch a duplicate.
+                # Reserve the regular slot before creating the job so a poll loop or
+                # add-on restart during the same minute cannot launch it twice.
                 update_scheduled_automation_runtime(
                     automation_id,
                     last_schedule_key=key,
-                    last_run_at=now.isoformat(),
+                    retry_attempt=0,
+                    next_retry_at=None,
                     last_error=None,
                 )
                 try:
-                    job = start_automation_report_job(_scheduled_automation_payload(automation))
-                    update_scheduled_automation_runtime(
-                        automation_id,
-                        last_job_id=job.get("id"),
-                        last_status=job.get("status"),
+                    job = start_automation_report_job(
+                        _scheduled_automation_payload(automation, trigger="scheduled", retry_attempt=0)
                     )
                     log.info("Scheduled automation %s started job %s", automation_id, job.get("id"))
                 except Exception as exc:
                     log.exception("Scheduled automation %s failed to start", automation_id)
-                    update_scheduled_automation_runtime(
-                        automation_id,
-                        last_status="error",
-                        last_error=str(exc),
-                    )
+                    refreshed = get_scheduled_automation(automation_id)
+                    _record_scheduler_start_failure(refreshed, "scheduled", 0, now, exc)
         except Exception:
             log.exception("Scheduler loop failure")
         time.sleep(SCHEDULER_POLL_SECONDS)
@@ -2104,6 +2392,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_payload(200, {"automations": scheduled_automation_overview(), "timezone": home_assistant_timezone()})
             if "/api/scheduled-automation/" in path:
                 parts = self.path_parts_after_scheduled_automation(path)
+                if len(parts) == 2 and parts[1] == "history":
+                    return self.send_payload(200, {"history": list_scheduled_automation_history(parts[0])})
                 if len(parts) == 1:
                     return self.send_payload(200, {"automation": get_scheduled_automation(parts[0])})
             if "/api/automation/report-jobs/" in path:

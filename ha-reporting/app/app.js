@@ -1350,7 +1350,33 @@ function automationAiLabel(value){
 
 function formatAutomationDate(value){
   if(!value) return "—";
-  try{return new Date(value).toLocaleString("fr-CH");}catch(_){return String(value);}
+  try{return new Date(value).toLocaleString("fr-CH",{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});}catch(_){return String(value);}
+}
+
+function formatAutomationDuration(value){
+  const seconds=Number(value);
+  if(!Number.isFinite(seconds)||seconds<0) return "—";
+  if(seconds<60) return `${Math.round(seconds)} s`;
+  const minutes=Math.floor(seconds/60);
+  const remain=Math.round(seconds%60);
+  if(minutes<60) return `${minutes} min ${String(remain).padStart(2,"0")} s`;
+  const hours=Math.floor(minutes/60);
+  return `${hours} h ${String(minutes%60).padStart(2,"0")} min`;
+}
+
+function automationStatusLabel(value){
+  return ({queued:"En file",running:"Calcul du rapport",data_complete:"Données calculées",ai_running:"Analyse IA",pdf_generating:"Génération PDF",exporting:"Export",completed:"Terminé",completed_with_errors:"Terminé avec avertissements",error:"Échec",interrupted:"Interrompu"})[value]||value||"Jamais exécutée";
+}
+
+function automationStatusClass(value){
+  if(value==="completed") return "good";
+  if(value==="completed_with_errors"||value==="interrupted") return "warn";
+  if(value==="error") return "bad";
+  return "";
+}
+
+function automationTriggerLabel(value){
+  return ({scheduled:"Planifiée",manual:"Manuelle",retry:"Retry",external:"Externe",unknown:"Inconnue"})[value]||value||"—";
 }
 
 function updateAutomationScheduleFields(){
@@ -1386,6 +1412,12 @@ function resetAutomationForm(item=null){
   $("automationTheme").value=pipeline.theme||"dark";
   $("automationPaperless").checked=(pipeline.destinations||[]).includes("paperless");
   $("automationPersistentNotification").checked=Boolean((item?.notification||{}).persistent);
+  const retry=item?.retry||{};
+  $("automationRetryEnabled").checked=item?Boolean(retry.enabled):true;
+  $("automationMaxRetries").value=String(retry.max_retries??1);
+  $("automationRetryDelay").value=retry.delay_minutes??10;
+  $("automationMaxRetries").disabled=!$("automationRetryEnabled").checked;
+  $("automationRetryDelay").disabled=!$("automationRetryEnabled").checked;
   $("automationFormStatus").textContent="";
   updateAutomationScheduleFields();
 }
@@ -1399,8 +1431,14 @@ function renderScheduledAutomations(timezone){
   $("automationList").innerHTML=scheduledAutomations.map(item=>{
     const runtime=item.runtime||{};
     const pipeline=item.pipeline||{};
-    const lastStatus=runtime.last_status||"jamais exécutée";
-    const lastClass=lastStatus==="error"?"bad":(lastStatus==="completed"?"good":"");
+    const retry=item.retry||{};
+    const lastStatus=runtime.last_status||null;
+    const lastClass=automationStatusClass(lastStatus);
+    const warningCount=(runtime.last_warnings||[]).length;
+    const pendingRetry=item.next_retry_at||runtime.next_retry_at;
+    const exports=runtime.last_exports||{};
+    const paperless=exports.paperless;
+    const paperlessLabel=paperless ? (paperless.ok?"Paperless ✓":"Paperless ✕") : "Paperless —";
     return `<div class="automationCard ${item.enabled?"":"disabledAutomation"}">
       <div class="automationCardHeader">
         <div>
@@ -1412,12 +1450,20 @@ function renderScheduledAutomations(timezone){
       <div class="automationMetaGrid">
         <div><span class="muted">Prochaine exécution</span><strong>${esc(formatAutomationDate(item.next_run_at))}</strong></div>
         <div><span class="muted">Dernière exécution</span><strong>${esc(formatAutomationDate(runtime.last_run_at))}</strong></div>
-        <div><span class="muted">Dernier statut</span><strong class="${lastClass}">${esc(lastStatus)}</strong></div>
+        <div><span class="muted">Dernier statut</span><strong class="${lastClass}">${esc(automationStatusLabel(lastStatus))}</strong></div>
+        <div><span class="muted">Durée</span><strong>${esc(formatAutomationDuration(runtime.last_duration_seconds))}</strong></div>
+        <div><span class="muted">Déclenchement</span><strong>${esc(automationTriggerLabel(runtime.last_trigger))}</strong></div>
+        <div><span class="muted">Dernier export</span><strong>${esc(paperlessLabel)}</strong></div>
         <div><span class="muted">Pipeline</span><strong>${esc(automationAiLabel(pipeline.ai_analysis))}${pipeline.generate_pdf?" · PDF":""}${(pipeline.destinations||[]).length?" · "+pipeline.destinations.join(", "):""}${(item.notification||{}).persistent?" · notification":""}</strong></div>
+        <div><span class="muted">Fiabilité</span><strong>${retry.enabled?`${retry.max_retries||0} retry · ${retry.delay_minutes||10} min`:"Retry désactivé"} · ${item.history_count||0} historique(s)</strong></div>
       </div>
+      ${pendingRetry?`<div class="statusText warn">Nouvelle tentative prévue : ${esc(formatAutomationDate(pendingRetry))}</div>`:""}
+      ${warningCount?`<div class="statusText warn">${warningCount} avertissement(s) lors de la dernière exécution.</div>`:""}
       ${runtime.last_error?`<div class="statusText error">${esc(runtime.last_error)}</div>`:""}
+      ${runtime.last_filename?`<div class="statusText">PDF : ${esc(runtime.last_filename)}</div>`:""}
       <div class="actions">
         <button onclick="runScheduledAutomationNow('${esc(item.id)}')">Exécuter maintenant</button>
+        <button onclick="showAutomationHistory('${esc(item.id)}')">Historique</button>
         <button onclick="editScheduledAutomation('${esc(item.id)}')">Modifier</button>
         <button class="danger" onclick="deleteScheduledAutomation('${esc(item.id)}','${esc(item.name)}')">Supprimer</button>
       </div>
@@ -1438,6 +1484,7 @@ async function showAutomations(push=true){
   await loadReports();
   await loadScheduledAutomations();
   $("automationFormCard").classList.add("hidden");
+  $("automationHistoryCard").classList.add("hidden");
 }
 
 function showAutomationForm(item=null){
@@ -1458,7 +1505,11 @@ async function saveScheduledAutomation(){
   const type=$("automationScheduleType").value;
   const schedule={type};
   if(type==="hourly") schedule.minute=Number($("automationMinute").value||0);
-  else schedule.time=$("automationTime").value||"05:40";
+  else {
+    const timeValue=($("automationTime").value||"").trim();
+    if(!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(timeValue)){status.textContent="Erreur : heure invalide, format attendu HH:MM";status.classList.add("error");return;}
+    schedule.time=timeValue;
+  }
   if(type==="weekly") schedule.weekday=Number($("automationWeekday").value||0);
   if(type==="monthly"||type==="yearly") schedule.day=Number($("automationDay").value||1);
   if(type==="yearly") schedule.month=Number($("automationMonth").value||1);
@@ -1474,7 +1525,12 @@ async function saveScheduledAutomation(){
       theme:$("automationTheme").value,
       destinations:$("automationPaperless").checked?["paperless"]:[]
     },
-    notification:{persistent:$("automationPersistentNotification").checked}
+    notification:{persistent:$("automationPersistentNotification").checked},
+    retry:{
+      enabled:$("automationRetryEnabled").checked,
+      max_retries:Number($("automationMaxRetries").value||1),
+      delay_minutes:Number($("automationRetryDelay").value||10)
+    }
   };
   const url=editingAutomationId?`api/scheduled-automation/${encodeURIComponent(editingAutomationId)}`:"api/scheduled-automations";
   const response=await fetch(url,{method:editingAutomationId?"PATCH":"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
@@ -1483,6 +1539,30 @@ async function saveScheduledAutomation(){
   status.textContent="✓ Automatisation enregistrée";
   await loadScheduledAutomations();
   setTimeout(()=>$("automationFormCard").classList.add("hidden"),500);
+}
+
+async function showAutomationHistory(id){
+  const item=scheduledAutomations.find(a=>a.id===id);
+  $("automationHistoryTitle").textContent=`Historique — ${item?.name||id}`;
+  $("automationHistoryList").innerHTML='<div class="sourceMessage">Chargement…</div>';
+  $("automationHistoryCard").classList.remove("hidden");
+  $("automationHistoryCard").scrollIntoView({behavior:"smooth",block:"start"});
+  const response=await fetch(`api/scheduled-automation/${encodeURIComponent(id)}/history`,{cache:"no-store"});
+  const data=await response.json();
+  if(!response.ok){$("automationHistoryList").innerHTML=`<div class="statusText error">${esc(data.error||"Historique indisponible")}</div>`;return;}
+  const history=data.history||[];
+  if(!history.length){$("automationHistoryList").innerHTML='<div class="sourceMessage">Aucune exécution enregistrée.</div>';return;}
+  $("automationHistoryList").innerHTML=`<div class="automationHistoryTable">${history.map(row=>{
+    const warnings=(row.warnings||[]).length;
+    const exportResult=(row.exports||{}).paperless;
+    const exportLabel=exportResult?(exportResult.ok?"Paperless ✓":"Paperless ✕"):"—";
+    return `<div class="automationHistoryRow">
+      <div><strong>${esc(formatAutomationDate(row.started_at))}</strong><span class="muted">${esc(automationTriggerLabel(row.trigger))}${Number(row.attempt)>0?` · tentative ${Number(row.attempt)+1}`:""}</span></div>
+      <div><strong class="${automationStatusClass(row.status)}">${esc(automationStatusLabel(row.status))}</strong><span class="muted">${esc(formatAutomationDuration(row.duration_seconds))}</span></div>
+      <div><strong>${esc(exportLabel)}</strong><span class="muted">${row.filename?esc(row.filename):"Aucun PDF"}</span></div>
+      <div>${warnings?`<span class="warn">${warnings} avertissement(s)</span>`:""}${row.error?`<span class="bad">${esc(row.error)}</span>`:""}</div>
+    </div>`;
+  }).join("")}</div>`;
 }
 
 async function runScheduledAutomationNow(id){
@@ -1550,6 +1630,12 @@ $("newAutomationButton").addEventListener("click", () => showAutomationForm());
 $("automationScheduleType").addEventListener("change", updateAutomationScheduleFields);
 $("saveAutomationButton").addEventListener("click", saveScheduledAutomation);
 $("cancelAutomationButton").addEventListener("click", () => $("automationFormCard").classList.add("hidden"));
+$("closeAutomationHistoryButton").addEventListener("click", () => $("automationHistoryCard").classList.add("hidden"));
+$("automationRetryEnabled").addEventListener("change", () => {
+  const enabled=$("automationRetryEnabled").checked;
+  $("automationMaxRetries").disabled=!enabled;
+  $("automationRetryDelay").disabled=!enabled;
+});
 $("documentsButton").addEventListener("click", () => showDocuments());
 $("refreshDocumentsButton").addEventListener("click", () => loadDocuments());
 $("exportProvidersButton").addEventListener("click", () => showExportProviders());

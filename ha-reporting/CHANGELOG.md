@@ -1,3 +1,14 @@
+## 0.1.0-beta.17
+
+- Ajoute un historique persistant borné aux 50 dernières exécutions par automatisation.
+- Affiche dernier/prochain lancement, durée, déclencheur, PDF, export Paperless, avertissements et erreurs dans l’onglet **Automatisations**.
+- Ajoute une vue **Historique** par automatisation et l’endpoint `GET /api/scheduled-automation/{id}/history`.
+- Ajoute un retry contrôlé et configurable pour les échecs globaux du pipeline, sans relancer les rapports terminés avec avertissements.
+- Détecte les jobs interrompus par un redémarrage de l’add-on et les marque explicitement `interrupted`, avec retry éventuel.
+- Renforce la prévention des doubles lancements : réservation du créneau planifié et déduplication indépendante du type de déclenchement.
+- Force la saisie des heures en format 24 h `HH:MM` tout en conservant le fuseau horaire Home Assistant.
+- Le Companion reste facultatif et compatible ; aucune dépendance supplémentaire n’est ajoutée.
+
 ## 0.1.0-beta.16
 
 - Add a persistent internal scheduler and an **Automatisations** page in HA Reporting.

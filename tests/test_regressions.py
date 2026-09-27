@@ -673,7 +673,7 @@ class Beta12ExportProviderTests(unittest.TestCase):
         self.assertTrue(status['reachable'])
         self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
         self.assertEqual(seen['auth'],'Token secret')
-        self.assertIn('beta.16',seen['ua'])
+        self.assertIn('beta.17',seen['ua'])
 
     def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
         import tempfile
@@ -1094,6 +1094,118 @@ class Beta16InternalSchedulerTests(unittest.TestCase):
 
 
 
+class Beta17AutomationReliabilityTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.old_file = automation_store.AUTOMATION_FILE
+        automation_store.AUTOMATION_FILE = Path(self.tempdir.name) / 'automations.json'
+        with main.AUTOMATION_JOBS_LOCK:
+            main.AUTOMATION_JOBS.clear()
+
+    def tearDown(self):
+        automation_store.AUTOMATION_FILE = self.old_file
+        self.tempdir.cleanup()
+        with main.AUTOMATION_JOBS_LOCK:
+            main.AUTOMATION_JOBS.clear()
+
+    def payload(self, **changes):
+        payload={
+            'name':'Rapport fiable',
+            'enabled':True,
+            'report_id':'r',
+            'schedule':{'type':'daily','time':'05:40'},
+            'pipeline':{'ai_analysis':None,'generate_pdf':True,'theme':'dark','destinations':[]},
+            'notification':{'persistent':False},
+            'retry':{'enabled':True,'max_retries':1,'delay_minutes':10},
+        }
+        payload.update(changes)
+        return payload
+
+    def test_history_is_persistent_and_bounded_to_50(self):
+        item=automation_store.create_automation(self.payload())
+        for i in range(55):
+            automation_store.append_history(item['id'],{'job_id':f'j{i}','trigger':'scheduled','attempt':0,'status':'completed'})
+        history=automation_store.list_history(item['id'])
+        self.assertEqual(len(history),50)
+        self.assertEqual(history[0]['job_id'],'j54')
+        self.assertEqual(history[-1]['job_id'],'j5')
+        stored=json.loads(automation_store.AUTOMATION_FILE.read_text())
+        self.assertEqual(stored['version'],2)
+        self.assertEqual(len(stored['automations'][0]['history']),50)
+
+    def test_terminal_error_records_history_and_schedules_retry(self):
+        item=automation_store.create_automation(self.payload())
+        options=main._scheduled_automation_payload(item,trigger='scheduled',retry_attempt=0)
+        now=time.time()
+        job={
+            'id':'job-error','report_id':'r','status':'error','created_at_epoch':now-5,'started_at_epoch':now-4,'finished_at_epoch':now,
+            'options':options,'warnings':[],'exports':{},'document_id':None,'document':None,'error':'VM indisponible',
+            'result':{'report_id':'r','ai_status':None},
+        }
+        with patch.object(main,'home_assistant_timezone',return_value='Europe/Zurich'):
+            main._record_scheduled_job_terminal(job)
+        refreshed=automation_store.get_automation(item['id'])
+        self.assertEqual(refreshed['runtime']['last_status'],'error')
+        self.assertEqual(refreshed['runtime']['consecutive_failures'],1)
+        self.assertIsNotNone(refreshed['runtime']['next_retry_at'])
+        self.assertEqual(len(refreshed['history']),1)
+        self.assertEqual(refreshed['history'][0]['error'],'VM indisponible')
+
+    def test_completed_with_errors_is_not_retried(self):
+        item=automation_store.create_automation(self.payload())
+        options=main._scheduled_automation_payload(item,trigger='scheduled',retry_attempt=0)
+        now=time.time()
+        job={
+            'id':'job-warning','report_id':'r','status':'completed_with_errors','created_at_epoch':now-5,'started_at_epoch':now-4,'finished_at_epoch':now,
+            'options':options,'warnings':['Paperless indisponible'],'exports':{'paperless':{'ok':False}},'document_id':'d','document':{'filename':'r.pdf'},'error':None,
+            'result':{'report_id':'r','document_id':'d','filename':'r.pdf','ai_status':'completed'},
+        }
+        with patch.object(main,'home_assistant_timezone',return_value='Europe/Zurich'):
+            main._record_scheduled_job_terminal(job)
+        refreshed=automation_store.get_automation(item['id'])
+        self.assertEqual(refreshed['runtime']['last_status'],'completed_with_errors')
+        self.assertIsNone(refreshed['runtime']['next_retry_at'])
+        self.assertEqual(refreshed['runtime']['consecutive_failures'],0)
+        self.assertEqual(refreshed['runtime']['last_filename'],'r.pdf')
+
+    def test_interrupted_job_is_detected_after_restart(self):
+        item=automation_store.create_automation(self.payload())
+        automation_store.update_runtime(item['id'],last_job_id='lost-job',active_job_id='lost-job',last_status='ai_running',last_run_at='2026-09-27T12:00:00+02:00',last_trigger='scheduled',retry_attempt=0)
+        item=automation_store.get_automation(item['id'])
+        now=datetime(2026,9,27,12,30,tzinfo=ZoneInfo('Europe/Zurich'))
+        updated=main._mark_interrupted_automation(item,now)
+        self.assertEqual(updated['runtime']['last_status'],'interrupted')
+        self.assertIsNotNone(updated['runtime']['next_retry_at'])
+        self.assertEqual(automation_store.list_history(item['id'])[0]['status'],'interrupted')
+
+    def test_active_dedup_ignores_trigger_and_retry_metadata(self):
+        a=main._automation_fingerprint({'report_id':'r','automation_id':'a','trigger':'scheduled','retry_attempt':0})
+        b=main._automation_fingerprint({'report_id':'r','automation_id':'a','trigger':'retry','retry_attempt':1})
+        self.assertEqual(a,b)
+
+    def test_overview_prefers_pending_retry_before_regular_schedule(self):
+        item=automation_store.create_automation(self.payload())
+        automation_store.update_runtime(item['id'],next_retry_at='2026-09-27T12:10:00+02:00')
+        with patch.object(main,'home_assistant_timezone',return_value='Europe/Zurich'), patch.object(main,'datetime') as mocked_datetime:
+            mocked_datetime.now.return_value=datetime(2026,9,27,12,0,tzinfo=ZoneInfo('Europe/Zurich'))
+            mocked_datetime.fromisoformat.side_effect=datetime.fromisoformat
+            overview=main.scheduled_automation_overview()[0]
+        self.assertTrue(overview['next_run_at'].startswith('2026-09-27T12:10:00'))
+        self.assertEqual(overview['history_count'],0)
+
+    def test_beta17_ui_exposes_history_retry_and_24h_input(self):
+        index=(ROOT/'ha-reporting/app/index.html').read_text()
+        app=(ROOT/'ha-reporting/app/app.js').read_text()
+        main_text=(ROOT/'ha-reporting/app/main.py').read_text()
+        self.assertIn('automationHistoryCard',index)
+        self.assertIn('automationRetryEnabled',index)
+        self.assertIn('Heure (24 h)',index)
+        self.assertIn('showAutomationHistory',app)
+        self.assertIn('parts[1] == "history"',main_text)
+
+
+
 class PackageTests(unittest.TestCase):
     def test_yaml_and_installation_layout(self):
         import yaml
@@ -1101,7 +1213,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.16')
+        self.assertEqual(config['version'],'0.1.0-beta.17')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertTrue(any(item.get('type')=='share' and item.get('read_only') is False and item.get('path')=='/share' for item in config.get('map',[]) if isinstance(item,dict)))

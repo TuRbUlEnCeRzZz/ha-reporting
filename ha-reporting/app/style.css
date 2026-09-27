@@ -764,3 +764,16 @@ th{font-size:12px;color:var(--hr-secondary)}
 .automationDestinations{margin-top:12px}
 .inlineChoice{align-self:end;min-height:42px}
 @media(max-width:760px){.automationMetaGrid{grid-template-columns:1fr}.automationCardHeader{flex-direction:column}.automationCardHeader .providerBadge{align-self:flex-start}}
+
+.good{color:var(--hr-success)}
+.warn{color:#d6a63b}
+.bad{color:var(--hr-error)}
+.compactToolbar{margin-bottom:10px}
+.inputSuffix{display:flex;align-items:center;gap:8px}
+.inputSuffix input{flex:1}
+.inputSuffix span{color:var(--hr-secondary);font-size:.9rem}
+.automationHistoryTable{display:flex;flex-direction:column;gap:8px}
+.automationHistoryRow{display:grid;grid-template-columns:minmax(170px,1.1fr) minmax(150px,.8fr) minmax(180px,1fr) minmax(180px,1.2fr);gap:12px;padding:12px;border:1px solid var(--hr-divider);border-radius:12px;background:color-mix(in srgb,var(--hr-card) 92%,transparent)}
+.automationHistoryRow>div{display:flex;flex-direction:column;gap:4px;min-width:0;overflow-wrap:anywhere}
+@media(max-width:900px){.automationHistoryRow{grid-template-columns:1fr 1fr}}
+@media(max-width:620px){.automationHistoryRow{grid-template-columns:1fr}}

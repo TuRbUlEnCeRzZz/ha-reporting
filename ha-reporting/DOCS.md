@@ -262,3 +262,12 @@ Le fuseau horaire est lu depuis Home Assistant. Les définitions sont persistée
 L’option Analyse IA possède trois états : suivre la configuration du rapport, forcer activée, forcer désactivée. La notification persistante réutilise le texte final de l’analyse IA lorsqu’il est disponible.
 
 Le bouton **Exécuter maintenant** utilise le même moteur de jobs asynchrones que l’API externe et n’attend donc pas la fin de l’analyse IA dans la requête HTTP.
+
+
+## Fiabilité des automatisations (beta.17)
+
+Chaque automatisation conserve les 50 dernières exécutions avec statut, déclencheur, durée, erreurs, avertissements, PDF et résultat des exports. L’interface affiche également le prochain lancement et une éventuelle tentative de retry.
+
+Le retry est configurable par automatisation (`enabled`, `max_retries`, `delay_minutes`) et ne s’applique qu’aux échecs globaux (`error`). Un job `completed_with_errors` n’est pas relancé afin d’éviter de dupliquer un PDF ou un export déjà réussi. Après redémarrage de l’add-on, un job qui était encore actif est marqué `interrupted` et peut être replanifié selon la même politique de retry.
+
+Les heures sont saisies en format 24 h `HH:MM`. Le scheduler continue d’utiliser le fuseau renvoyé par Home Assistant, y compris pour les changements heure d’été/hiver.

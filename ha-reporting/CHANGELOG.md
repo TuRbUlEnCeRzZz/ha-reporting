@@ -1,5 +1,7 @@
-## 0.1.0-beta.13
+## 0.1.0-beta.14
 
+- Corrige la sérialisation publique des jobs asynchrones : les objets runtime privés (notamment `threading.Thread`) sont retirés avant copie profonde, ce qui évite l'erreur `cannot pickle '_contextvars.Context' object`.
+- Conserve l’API d’automatisation asynchrone introduite dans la beta.13 et son pipeline complet calcul → IA → PDF → exports.
 - Ajoute une API d’automatisation asynchrone pour lancer le pipeline complet d’un rapport sans bloquer la requête HTTP.
 - `POST /api/automation/report-jobs` accepte `report_id`, `ai_analysis`, `generate_pdf`, `theme` et `destinations`.
 - Ajoute le suivi par `job_id` avec les états `queued`, `running`, `data_complete`, `ai_running`, `pdf_generating`, `exporting`, `completed`, `completed_with_errors` et `error`.

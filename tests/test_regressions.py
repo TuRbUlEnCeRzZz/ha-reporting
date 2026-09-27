@@ -672,7 +672,7 @@ class Beta12ExportProviderTests(unittest.TestCase):
         self.assertTrue(status['reachable'])
         self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
         self.assertEqual(seen['auth'],'Token secret')
-        self.assertIn('beta.13',seen['ua'])
+        self.assertIn('beta.14',seen['ua'])
 
     def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
         import tempfile
@@ -873,6 +873,22 @@ class Beta13AutomationJobTests(unittest.TestCase):
         self.assertFalse(job['exports']['paperless']['ok'])
         self.assertIn('NAS indisponible',job['warnings'][0])
 
+    def test_automation_job_public_excludes_unpickleable_runtime_fields_before_deepcopy(self):
+        runtime_thread = threading.Thread(target=lambda: None)
+        job = {
+            'id': 'job-thread',
+            'status': 'queued',
+            'nested': {'values': [1, 2, 3]},
+            '_thread': runtime_thread,
+            '_fingerprint': 'fp',
+        }
+        public = main._automation_job_public(job)
+        self.assertNotIn('_thread', public)
+        self.assertNotIn('_fingerprint', public)
+        self.assertEqual(public['nested']['values'], [1, 2, 3])
+        public['nested']['values'].append(4)
+        self.assertEqual(job['nested']['values'], [1, 2, 3])
+
     def test_identical_active_job_is_deduplicated(self):
         class FakeThread:
             def __init__(self,*args,**kwargs): pass
@@ -898,7 +914,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.13')
+        self.assertEqual(config['version'],'0.1.0-beta.14')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertTrue(any(item.get('type')=='share' and item.get('read_only') is False and item.get('path')=='/share' for item in config.get('map',[]) if isinstance(item,dict)))

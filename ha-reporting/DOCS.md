@@ -1,9 +1,9 @@
-# HA Reporting — 0.1.0-beta.13
+# HA Reporting — 0.1.0-beta.14
 
-Bêta 0.1.0-beta.13 pour Home Assistant OS, notamment sur Raspberry Pi 4 (aarch64).
+Bêta 0.1.0-beta.14 pour Home Assistant OS, notamment sur Raspberry Pi 4 (aarch64).
 Le moteur statistique, les comparaisons N/N-x, la vérification runtime et l'analyse IA restent inchangés. Beta.13 ajoute l'orchestration asynchrone du pipeline complet.
 
-## API d’automatisation beta.13
+## API d’automatisation beta.14
 
 HA Reporting peut désormais lancer un rapport complet via une requête courte et retourner immédiatement un `job_id`. Le travail se poursuit côté add-on : calcul, analyse IA éventuelle, PDF natif, stockage local et exports.
 
@@ -146,7 +146,7 @@ restent disponibles. Les règles de comparaison sont conservées.
    `Dockerfile`) vers `/addons/ha-reporting` sur Home Assistant OS.
 3. Actualiser le magasin des add-ons, puis installer ou reconstruire l'add-on
    local HA Reporting selon le mode d'installation existant.
-4. Vérifier la version 0.1.0-beta.13 dans les journaux et relancer les rapports.
+4. Vérifier la version 0.1.0-beta.14 dans les journaux et relancer les rapports.
 
 Ne pas copier le dossier de dépôt complet à la place du dossier de l'add-on.
 Pour une installation issue d'un dépôt Git, mettre à jour les fichiers du même

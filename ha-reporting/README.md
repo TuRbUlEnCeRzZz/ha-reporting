@@ -1,6 +1,6 @@
 # HA Reporting
 
-Add-on Home Assistant OS — version **0.1.0-beta.13**.
+Add-on Home Assistant OS — version **0.1.0-beta.14**.
 
 Beta.13 ajoute une API d’automatisation asynchrone pour piloter le pipeline complet depuis Home Assistant ou, à terme, une intégration compagnon :
 
@@ -12,7 +12,7 @@ Beta.13 ajoute une API d’automatisation asynchrone pour piloter le pipeline co
 - déduplication des demandes identiques encore actives ;
 - échec d’export non destructif : le PDF local reste conservé et le job se termine avec avertissements.
 
-Endpoints beta.13 :
+Endpoints beta.14 :
 
 - `POST /api/automation/report-jobs`
 - `GET /api/automation/report-jobs`

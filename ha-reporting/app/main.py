@@ -1369,10 +1369,15 @@ def _automation_ai_analysis(report_id, report, automation_job_id):
 def _automation_job_public(job):
     if job is None:
         return None
-    output = copy.deepcopy(job)
-    output.pop("_thread", None)
-    output.pop("_fingerprint", None)
-    return output
+    # Runtime-only fields (notably threading.Thread) must be removed before
+    # deepcopy. Python Thread objects may contain unpicklable internals such
+    # as contextvars.Context / thread handles, which made the beta.13 API
+    # fail while serializing a freshly created automation job.
+    public_fields = {
+        key: value for key, value in job.items()
+        if not str(key).startswith("_")
+    }
+    return copy.deepcopy(public_fields)
 
 
 def _automation_options(payload):

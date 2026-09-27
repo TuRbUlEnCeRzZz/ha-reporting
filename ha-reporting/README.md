@@ -1,8 +1,8 @@
 # HA Reporting
 
-Add-on Home Assistant OS — version **0.1.0-beta.14**.
+Add-on Home Assistant OS — version **0.1.0-beta.15**.
 
-Beta.13 ajoute une API d’automatisation asynchrone pour piloter le pipeline complet depuis Home Assistant ou, à terme, une intégration compagnon :
+Beta.15 conserve l’API d’automatisation asynchrone et ajoute les événements Home Assistant nécessaires à l’intégration compagnon :
 
 - lancement d’un rapport par `report_id` ;
 - calcul statistique puis analyse IA optionnelle ;
@@ -12,10 +12,15 @@ Beta.13 ajoute une API d’automatisation asynchrone pour piloter le pipeline co
 - déduplication des demandes identiques encore actives ;
 - échec d’export non destructif : le PDF local reste conservé et le job se termine avec avertissements.
 
-Endpoints beta.14 :
+Endpoints beta.15 :
 
 - `POST /api/automation/report-jobs`
 - `GET /api/automation/report-jobs`
 - `GET /api/automation/report-jobs/{job_id}`
 
-L’intégration Home Assistant native qui exposera une action `ha_reporting.run_report` reste prévue pour l’étape suivante.
+L’intégration compagnon fournie à la racine du dépôt expose maintenant l’action native `ha_reporting.run_report`.
+
+
+## Événements Home Assistant beta.15
+
+Les jobs d’automatisation émettent des événements compacts sur le bus Home Assistant : `ha_reporting_report_started`, `ha_reporting_report_completed` et `ha_reporting_report_failed`. L’événement de fin inclut le texte de l’analyse IA, le document local et l’état des exports, sans séries brutes.

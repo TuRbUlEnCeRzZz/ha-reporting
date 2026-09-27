@@ -47,6 +47,7 @@ PORT = 8099
 TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 HA_STATES_URL = "http://supervisor/core/api/states"
 HA_CONFIG_URL = "http://supervisor/core/api/config"
+HA_EVENTS_URL = "http://supervisor/core/api/events"
 CATALOG_DIR = Path("/config/catalogs")
 CATEGORY_FILE = Path("/config/categories.yaml")
 PROVIDER_FILE = Path("/config/providers.yaml")
@@ -170,6 +171,38 @@ def home_assistant_timezone():
     except Exception as exc:
         log.warning("Unable to read Home Assistant timezone: %s", exc)
         return "UTC"
+
+
+def home_assistant_fire_event(event_type, event_data):
+    """Fire a compact HA Reporting event through Home Assistant's REST API."""
+    if not TOKEN:
+        raise RuntimeError("SUPERVISOR_TOKEN unavailable")
+    event_type = str(event_type or "").strip()
+    if not event_type:
+        raise ValueError("event_type est obligatoire")
+    body = json.dumps(event_data or {}, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        f"{HA_EVENTS_URL}/{event_type}",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {TOKEN}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        raw = response.read()
+    return json.loads(raw or b"{}")
+
+
+def _safe_home_assistant_event(event_type, event_data):
+    try:
+        home_assistant_fire_event(event_type, event_data)
+        return True
+    except Exception as exc:
+        # Event delivery must never invalidate an otherwise successful report.
+        log.warning("Unable to fire Home Assistant event %s: %s", event_type, exc)
+        return False
 
 
 def get_categories():
@@ -1493,6 +1526,37 @@ def list_automation_jobs(limit=50):
         return [_automation_job_public(job) for job in jobs]
 
 
+def _automation_event_payload(job, report=None):
+    """Build the deliberately compact payload exposed on Home Assistant's event bus."""
+    job = job or {}
+    report_id = job.get("report_id")
+    report = report or {}
+    terminal_status = job.get("status") in AUTOMATION_TERMINAL_STATES
+    cached = _cached_report_result(report_id) if report_id and terminal_status else None
+    ai = copy.deepcopy((cached or {}).get("ai_analysis") or {})
+    started = job.get("started_at_epoch")
+    finished = job.get("finished_at_epoch") or time.time()
+    duration = None
+    if isinstance(started, (int, float)):
+        duration = max(0.0, float(finished) - float(started))
+    return {
+        "report_id": report_id,
+        "report_name": report.get("name") or job.get("report_name") or report_id,
+        "job_id": job.get("id"),
+        "status": job.get("status"),
+        "message": job.get("message"),
+        "ai_analysis": ai.get("text") if ai.get("status") == "completed" else None,
+        "ai_status": ai.get("status"),
+        "document_id": job.get("document_id"),
+        "filename": (job.get("document") or {}).get("filename"),
+        "exports": copy.deepcopy(job.get("exports") or {}),
+        "warnings": copy.deepcopy(job.get("warnings") or []),
+        "error": job.get("error"),
+        "duration_seconds": duration,
+        "period": copy.deepcopy(job.get("resolved_period") or {}),
+    }
+
+
 def _run_automation_job(job_id):
     job = get_automation_job(job_id)
     options = job["options"]
@@ -1500,9 +1564,12 @@ def _run_automation_job(job_id):
     warnings = []
     document = None
     export_results = {}
+    analysis = None
+    report = None
     try:
-        _update_automation_job(job_id, status="running", message="Calcul du rapport", started_at_epoch=time.time())
+        started_job = _update_automation_job(job_id, status="running", message="Calcul du rapport", started_at_epoch=time.time())
         report = load_report(report_id)
+        _safe_home_assistant_event("ha_reporting_report_started", _automation_event_payload(started_job, report))
         result = execute_report(report_id)
         _update_automation_job(
             job_id,
@@ -1564,7 +1631,7 @@ def _run_automation_job(job_id):
                     _update_automation_job(job_id, message=warning)
 
         terminal = "completed_with_errors" if warnings else "completed"
-        _update_automation_job(
+        completed_job = _update_automation_job(
             job_id,
             status=terminal,
             message=("Pipeline terminé avec avertissements" if warnings else "Pipeline terminé"),
@@ -1575,11 +1642,14 @@ def _run_automation_job(job_id):
                 "document_id": (document or {}).get("id"),
                 "filename": (document or {}).get("filename"),
                 "destinations": list(export_results.keys()),
+                "ai_analysis": (analysis or {}).get("text") if (analysis or {}).get("status") == "completed" else None,
+                "ai_status": (analysis or {}).get("status") if analysis else ("disabled" if not run_ai else None),
             },
         )
+        _safe_home_assistant_event("ha_reporting_report_completed", _automation_event_payload(completed_job, report))
     except Exception as exc:
         log.exception("Automation report job failed: %s", job_id)
-        _update_automation_job(
+        failed_job = _update_automation_job(
             job_id,
             status="error",
             message="Échec du pipeline",
@@ -1590,8 +1660,11 @@ def _run_automation_job(job_id):
                 "report_id": report_id,
                 "document_id": (document or {}).get("id"),
                 "filename": (document or {}).get("filename"),
+                "ai_analysis": (analysis or {}).get("text") if (analysis or {}).get("status") == "completed" else None,
+                "ai_status": (analysis or {}).get("status") if analysis else None,
             },
         )
+        _safe_home_assistant_event("ha_reporting_report_failed", _automation_event_payload(failed_job, report or {"name": report_id}))
 
 
 def start_automation_report_job(payload):

@@ -1,0 +1,46 @@
+run_report:
+  name: Exécuter un rapport
+  description: Lance le pipeline asynchrone HA Reporting et retourne immédiatement le job créé.
+  fields:
+    report_id:
+      name: Identifiant du rapport
+      description: Identifiant interne du rapport HA Reporting.
+      required: true
+      example: rapport_domotique_mensuel
+      selector:
+        text:
+    ai_analysis:
+      name: Analyse IA
+      description: Force ou désactive l'analyse IA. Laisser vide pour suivre la configuration du rapport.
+      required: false
+      selector:
+        boolean:
+    generate_pdf:
+      name: Générer le PDF
+      description: Génère et conserve le PDF natif à la fin du rapport.
+      default: true
+      required: false
+      selector:
+        boolean:
+    theme:
+      name: Thème PDF
+      description: Thème utilisé pour le PDF natif.
+      default: dark
+      required: false
+      selector:
+        select:
+          options:
+            - dark
+            - light
+    destinations:
+      name: Destinations
+      description: Destinations d'export à exécuter après le PDF, par exemple paperless.
+      required: false
+      example:
+        - paperless
+      selector:
+        select:
+          multiple: true
+          custom_value: true
+          options:
+            - paperless

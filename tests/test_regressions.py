@@ -672,7 +672,7 @@ class Beta12ExportProviderTests(unittest.TestCase):
         self.assertTrue(status['reachable'])
         self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
         self.assertEqual(seen['auth'],'Token secret')
-        self.assertIn('beta.14',seen['ua'])
+        self.assertIn('beta.15',seen['ua'])
 
     def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
         import tempfile
@@ -907,6 +907,98 @@ class Beta13AutomationJobTests(unittest.TestCase):
         self.assertIn('{"job": get_automation_job(job_id)}',text)
         self.assertIn('completed_with_errors',text)
 
+
+class Beta15HomeAssistantBridgeTests(unittest.TestCase):
+    def setUp(self):
+        with main.AUTOMATION_JOBS_LOCK:
+            main.AUTOMATION_JOBS.clear()
+
+    def tearDown(self):
+        with main.AUTOMATION_JOBS_LOCK:
+            main.AUTOMATION_JOBS.clear()
+
+    def _seed_job(self, options):
+        job_id='job-beta15'
+        now=time.time()
+        with main.AUTOMATION_JOBS_LOCK:
+            main.AUTOMATION_JOBS[job_id]={
+                'id':job_id,'report_id':options['report_id'],'status':'queued','message':'queued',
+                'created_at_epoch':now,'updated_at_epoch':now,'started_at_epoch':None,'finished_at_epoch':None,
+                'options':options,'warnings':[],'exports':{},'document_id':None,'document':None,'error':None,
+                'history':[{'status':'queued','at_epoch':now,'message':'queued'}], '_fingerprint':'fp'
+            }
+        return job_id
+
+    def test_home_assistant_event_uses_supervisor_rest_api(self):
+        response=io.BytesIO(b'{}')
+        with patch.object(main,'TOKEN','token-test'), patch('urllib.request.urlopen',return_value=response) as mocked:
+            main.home_assistant_fire_event('ha_reporting_report_completed',{'report_id':'r'})
+        request=mocked.call_args.args[0]
+        self.assertEqual(request.get_method(),'POST')
+        self.assertTrue(request.full_url.endswith('/api/events/ha_reporting_report_completed'))
+        self.assertEqual(request.headers.get('Authorization'),'Bearer token-test')
+        self.assertEqual(json.loads(request.data),{'report_id':'r'})
+
+    def test_completed_pipeline_exposes_ai_text_and_fires_events(self):
+        options={'report_id':'r','ai_analysis':True,'generate_pdf':True,'theme':'dark','destinations':['paperless']}
+        job_id=self._seed_job(options)
+        report={'id':'r','name':'Rapport test','ai_analysis':{'enabled':True,'entity_id':'ai_task.local','timeout_seconds':600}}
+        result={'summary':{'sources_total':1,'sources_ok':1},'resolved_period':{'label':'P','timezone':'UTC'},'execution':{},'ai_analysis':{'enabled':True,'status':'pending'}}
+        analysis={'enabled':True,'status':'completed','text':'SYNTHÈSE\nTout va bien.'}
+        cached_after=copy.deepcopy(result); cached_after['ai_analysis']=analysis
+        events=[]
+        def collect(event_type,event_data):
+            events.append((event_type,copy.deepcopy(event_data))); return True
+        with patch.object(main,'load_report',return_value=report), \
+             patch.object(main,'execute_report',return_value=result), \
+             patch.object(main,'_automation_ai_analysis',return_value=analysis), \
+             patch.object(main,'_cached_report_result',return_value=cached_after), \
+             patch.object(main,'generate_report_pdf',return_value={'id':'doc-15','filename':'r.pdf','generated_at':'x','size_bytes':123}), \
+             patch.object(main,'export_document',return_value={'ok':True,'result':{'delivery_status':'deposited'}}), \
+             patch.object(main,'_safe_home_assistant_event',side_effect=collect):
+            main._run_automation_job(job_id)
+        job=main.get_automation_job(job_id)
+        self.assertEqual(job['status'],'completed')
+        self.assertEqual(job['result']['ai_analysis'],'SYNTHÈSE\nTout va bien.')
+        self.assertEqual([item[0] for item in events],['ha_reporting_report_started','ha_reporting_report_completed'])
+        completed=events[-1][1]
+        self.assertEqual(completed['report_name'],'Rapport test')
+        self.assertEqual(completed['ai_analysis'],'SYNTHÈSE\nTout va bien.')
+        self.assertEqual(completed['filename'],'r.pdf')
+        self.assertTrue(completed['exports']['paperless']['ok'])
+
+    def test_failed_pipeline_fires_failed_event(self):
+        options={'report_id':'r','ai_analysis':False,'generate_pdf':True,'theme':'dark','destinations':[]}
+        job_id=self._seed_job(options)
+        report={'id':'r','name':'Rapport test','ai_analysis':{'enabled':False}}
+        events=[]
+        def collect(event_type,event_data):
+            events.append((event_type,copy.deepcopy(event_data))); return True
+        with patch.object(main,'load_report',return_value=report), \
+             patch.object(main,'execute_report',side_effect=RuntimeError('boom')), \
+             patch.object(main,'_safe_home_assistant_event',side_effect=collect):
+            main._run_automation_job(job_id)
+        job=main.get_automation_job(job_id)
+        self.assertEqual(job['status'],'error')
+        self.assertEqual([item[0] for item in events],['ha_reporting_report_started','ha_reporting_report_failed'])
+        self.assertEqual(events[-1][1]['error'],'boom')
+
+    def test_companion_integration_is_packaged(self):
+        integration=ROOT/'custom_components/ha_reporting'
+        for name in ['__init__.py','client.py','config_flow.py','const.py','manifest.json','services.yaml','strings.json','translations/fr.json']:
+            self.assertTrue((integration/name).is_file(),name)
+        manifest=json.loads((integration/'manifest.json').read_text())
+        self.assertEqual(manifest['domain'],'ha_reporting')
+        self.assertEqual(manifest['version'],'0.1.0-beta.15')
+        self.assertTrue(manifest['config_flow'])
+        source=(integration/'__init__.py').read_text()
+        self.assertIn('SERVICE_RUN_REPORT',source)
+        self.assertIn('SupportsResponse.OPTIONAL',source)
+        import ast
+        for py in integration.rglob('*.py'):
+            ast.parse(py.read_text(),filename=str(py))
+
+
 class PackageTests(unittest.TestCase):
     def test_yaml_and_installation_layout(self):
         import yaml
@@ -914,7 +1006,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.14')
+        self.assertEqual(config['version'],'0.1.0-beta.15')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertTrue(any(item.get('type')=='share' and item.get('read_only') is False and item.get('path')=='/share' for item in config.get('map',[]) if isinstance(item,dict)))

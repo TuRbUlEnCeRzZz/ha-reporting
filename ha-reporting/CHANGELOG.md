@@ -1,3 +1,10 @@
+# 0.1.0-beta.15
+
+- Add Home Assistant completion events for automation jobs: `ha_reporting_report_started`, `ha_reporting_report_completed`, `ha_reporting_report_failed`.
+- Expose compact AI analysis text, document metadata, export results and duration in terminal events and job results.
+- Add the companion Home Assistant custom integration with native `ha_reporting.run_report` action and optional response data containing the `job_id`.
+- Keep report execution fully asynchronous; event delivery failures never invalidate a completed local report.
+
 ## 0.1.0-beta.14
 
 - Corrige la sérialisation publique des jobs asynchrones : les objets runtime privés (notamment `threading.Thread`) sont retirés avant copie profonde, ce qui évite l'erreur `cannot pickle '_contextvars.Context' object`.

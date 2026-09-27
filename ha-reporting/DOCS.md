@@ -245,3 +245,8 @@ L’export Paperless est manuel dans cette version. Chaque document local peut �
 Le modèle de nom Paperless est optionnel. Vide, Paperless reçoit le même nom que le PDF local. Lorsqu’un modèle est défini, les mêmes variables que pour le nom local sont disponibles, ce qui permet de préparer des workflows basés sur le nom du document.
 
 Beta.12 n’ajoute pas encore de planification d’export, de retry automatique ni de rétention automatique.
+
+
+### beta.15 — intégration compagnon et événements Home Assistant
+
+L’API asynchrone de beta.14 reste la source de vérité. Beta.15 ajoute des événements Home Assistant compacts aux transitions principales du pipeline et fournit une intégration compagnon (`custom_components/ha_reporting`) qui expose l’action native `ha_reporting.run_report`. L’action démarre le job et retourne immédiatement ; les automatisations réagissent ensuite à `ha_reporting_report_completed` ou `ha_reporting_report_failed`.

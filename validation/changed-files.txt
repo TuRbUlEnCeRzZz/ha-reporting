@@ -1,0 +1,12 @@
+ha-reporting/README.md
+ha-reporting/config.yaml
+ha-reporting/run.sh
+ha-reporting/app/main.py
+ha-reporting/app/index.html
+ha-reporting/app/automation_store.py
+ha-reporting/app/style.css
+ha-reporting/app/app.js
+ha-reporting/CHANGELOG.md
+ha-reporting/DOCS.md
+README.md
+tests/test_regressions.py

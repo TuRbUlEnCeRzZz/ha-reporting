@@ -84,6 +84,7 @@ def _normalize_history(raw_history):
             'filename': item.get('filename'),
             'exports': copy.deepcopy(item.get('exports') or {}),
             'ai_status': item.get('ai_status'),
+            'progress': copy.deepcopy(item.get('progress')),
         })
     return history
 
@@ -191,6 +192,7 @@ def normalize_automation(payload, automation_id=None):
             'last_finished_at': runtime.get('last_finished_at'),
             'last_job_id': runtime.get('last_job_id'),
             'last_status': runtime.get('last_status'),
+            'last_progress': copy.deepcopy(runtime.get('last_progress')),
             'last_error': runtime.get('last_error'),
             'last_duration_seconds': runtime.get('last_duration_seconds'),
             'last_warnings': copy.deepcopy(runtime.get('last_warnings') or []),

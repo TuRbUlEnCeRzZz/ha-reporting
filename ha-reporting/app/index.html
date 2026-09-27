@@ -5,9 +5,12 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>HA Reporting</title>
   <link rel="stylesheet" href="style.css">
+  <link rel="icon" type="image/png" href="favicon.png">
 </head>
 <body>
+<div id="appToast" class="appToast hidden" role="status" aria-live="polite" aria-atomic="true"></div>
 <header class="topbar">
+  <img class="brandIcon" src="icon.png" width="48" height="48" alt="">
   <button id="backButton" class="iconButton hidden" aria-label="Retour" title="Retour">
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.42-1.41L7.83 13H20v-2z"></path>
@@ -15,7 +18,7 @@
   </button>
   <div>
     <h1>HA Reporting</h1>
-    <div class="subtitle">0.1.0-beta.17 · Automatisations fiables, historique, IA, PDF & exports</div>
+    <div class="subtitle">0.1.0-beta.18 · Rapports, analyses et automatisations</div>
   </div>
 </header>
 
@@ -55,7 +58,7 @@
     <div class="toolbar">
       <div>
         <h2>Automatisations</h2>
-        <p class="muted">Planifie le pipeline complet : rapport, analyse IA, PDF local, exports et notification Home Assistant.</p>
+        <p class="muted">Planifie toutes les étapes : rapport, analyse IA, PDF local, exports et notification Home Assistant.</p>
       </div>
       <div class="toolbarButtons">
         <button id="refreshAutomationsButton">Actualiser</button>
@@ -63,6 +66,7 @@
       </div>
     </div>
     <div id="automationTimezone" class="muted automationTimezone"></div>
+    <p id="automationRefreshStatus" class="muted" role="status">Connexion au suivi…</p>
     <div id="automationList"></div>
 
     <div id="automationHistoryCard" class="card hidden">

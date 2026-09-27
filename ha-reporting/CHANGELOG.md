@@ -1,3 +1,16 @@
+# 0.1.0-beta.18 — Product polish
+
+- Replace the manual-run technical alert with a short, accessible toast and prevent repeated launch clicks.
+- Show real pipeline stage outcomes and elapsed duration on automation cards, including skipped, warning and failed stages.
+- Refresh cards and open history automatically; pause while hidden and retry after network interruptions without resubmitting a job.
+- Preserve terminal stage outcomes in existing automation storage. Keep beta.17 API statuses, retry rules and calculation behavior.
+- Add matching Home Assistant icon/logo, interface icon, favicon and editable SVG sources.
+- Show report names and move card error diagnostics behind expandable details.
+- Add an English README covering installation, AI Tasks, Paperless, privacy, experimental status and irregular/non-guaranteed maintenance with substantial ChatGPT assistance.
+- No EMHASS-specific development and no PDF template redesign.
+
+See VALIDATION-beta18.md for checks and remaining on-device validation.
+
 ## 0.1.0-beta.17
 
 - Ajoute un historique persistant borné aux 50 dernières exécutions par automatisation.

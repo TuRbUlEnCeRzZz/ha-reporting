@@ -1354,7 +1354,8 @@ function formatAutomationDate(value){
 }
 
 function formatAutomationDuration(value){
-  const seconds=Number(value);
+  if(value===null || value===undefined) return "—";
+  const seconds=Math.round(Number(value));
   if(!Number.isFinite(seconds)||seconds<0) return "—";
   if(seconds<60) return `${Math.round(seconds)} s`;
   const minutes=Math.floor(seconds/60);
@@ -1376,7 +1377,7 @@ function automationStatusClass(value){
 }
 
 function automationTriggerLabel(value){
-  return ({scheduled:"Planifiée",manual:"Manuelle",retry:"Retry",external:"Externe",unknown:"Inconnue"})[value]||value||"—";
+  return ({scheduled:"Planifiée",manual:"Manuelle",retry:"Nouvelle tentative",external:"Externe",unknown:"Inconnue"})[value]||value||"—";
 }
 
 function updateAutomationScheduleFields(){
@@ -1422,19 +1423,77 @@ function resetAutomationForm(item=null){
   updateAutomationScheduleFields();
 }
 
+let automationPollTimer = null;
+let automationLoadPromise = null;
+let visibleAutomationHistory = null;
+const launchingAutomations = new Set();
+const automationLaunchErrors = new Map();
+let toastTimer = null;
+
+function showToast(message, error=false){
+  const toast = $("appToast");
+  clearTimeout(toastTimer);
+  toast.textContent = message;
+  toast.className = `appToast${error ? " toastError" : ""}`;
+  toastTimer = setTimeout(() => toast.classList.add("hidden"), error ? 9000 : 4500);
+}
+
+function automationIsActive(item){
+  const status = item.progress?.status || item.runtime?.last_status;
+  return ["queued","running","data_complete","ai_running","pdf_generating","exporting"].includes(status);
+}
+
+function renderPipelineProgress(progress){
+  if(!progress?.steps) return "";
+  const labels = {data:"Collecte et statistiques", ai:"Analyse IA", pdf:"Génération PDF", export:"Export Paperless", notification:"Notification"};
+  const states = {pending:"À venir", running:"En cours", completed:"Terminé", skipped:"Désactivé", warning:"À vérifier", error:"Échec"};
+  const symbols = {pending:"○", running:"◉", completed:"✓", skipped:"—", warning:"!", error:"×"};
+  const terminal = ["completed","completed_with_errors","error"].includes(progress.status);
+  const steps = Object.entries(labels).map(([key,label]) => {
+    const state = progress.steps[key]?.state || "pending";
+    const safeState = Object.hasOwn(states,state) ? state : "pending";
+    const text = terminal && safeState === "pending" ? "Non exécuté" : states[safeState];
+    return `<li class="pipelineStep ${safeState}"><span aria-hidden="true">${symbols[safeState]}</span><span>${label}<small>${text}</small></span></li>`;
+  }).join("");
+  const end = progress.finished_at_epoch || Date.now()/1000;
+  const duration = progress.started_at_epoch ? formatAutomationDuration(Math.max(0,end-progress.started_at_epoch)) : "En attente";
+  const activeLabel = Object.entries(labels).find(([key])=>progress.steps[key]?.state==="running")?.[1];
+  return `<div class="pipelineProgress" aria-label="Avancement du rapport"><div class="pipelineHeading"><strong>${esc(activeLabel || automationStatusLabel(progress.status))}</strong><span>${esc(duration)}</span></div><ol>${steps}</ol></div>`;
+}
+
+function scheduleAutomationRefresh(){
+  clearTimeout(automationPollTimer);
+  if(document.hidden || $("automationsPage").classList.contains("hidden")) return;
+  automationPollTimer = setTimeout(async () => {
+    try {
+      await loadScheduledAutomations();
+      if(visibleAutomationHistory && !$("automationHistoryCard").classList.contains("hidden")) await showAutomationHistory(visibleAutomationHistory, true);
+      $("automationRefreshStatus").textContent = "Suivi automatique actif";
+    } catch(_) {
+      $("automationRefreshStatus").textContent = "Connexion interrompue — nouvelle tentative automatique…";
+    } finally { scheduleAutomationRefresh(); }
+  }, scheduledAutomations.some(automationIsActive) ? 3000 : 15000);
+}
+
+document.addEventListener("visibilitychange", scheduleAutomationRefresh);
+
 function renderScheduledAutomations(timezone){
   $("automationTimezone").textContent=`Fuseau utilisé : ${timezone||"Home Assistant"}`;
   if(!scheduledAutomations.length){
     $("automationList").innerHTML='<div class="card empty">Aucune automatisation HA Reporting.</div>';
     return;
   }
-  $("automationList").innerHTML=scheduledAutomations.map(item=>{
+  const list = $("automationList");
+  const focused = list.contains(document.activeElement) ? document.activeElement?.dataset.focusKey : null;
+  const openDetails = new Set(Array.from(list.querySelectorAll("details[open]")).map(el => el.dataset.detailsKey));
+  list.innerHTML=scheduledAutomations.map(item=>{
     const runtime=item.runtime||{};
     const pipeline=item.pipeline||{};
     const retry=item.retry||{};
-    const lastStatus=runtime.last_status||null;
+    const lastStatus=item.progress?.status||runtime.last_status||null;
     const lastClass=automationStatusClass(lastStatus);
     const warningCount=(runtime.last_warnings||[]).length;
+    const diagnosticMessages=[automationLaunchErrors.get(item.id),runtime.last_error,...(runtime.last_warnings||[])].filter(Boolean);
     const pendingRetry=item.next_retry_at||runtime.next_retry_at;
     const exports=runtime.last_exports||{};
     const paperless=exports.paperless;
@@ -1443,7 +1502,7 @@ function renderScheduledAutomations(timezone){
       <div class="automationCardHeader">
         <div>
           <div class="catalogTitle">${esc(item.name)}</div>
-          <div class="catalogMeta">${esc(item.report_id)} · ${esc(automationScheduleLabel(item))}</div>
+          <div class="catalogMeta">${esc(reports.find(report=>report.id===item.report_id)?.name || "Rapport indisponible")} · ${esc(automationScheduleLabel(item))}</div>
         </div>
         <span class="providerBadge ${item.enabled?"ok":""}">${item.enabled?"Activée":"Désactivée"}</span>
       </div>
@@ -1454,35 +1513,46 @@ function renderScheduledAutomations(timezone){
         <div><span class="muted">Durée</span><strong>${esc(formatAutomationDuration(runtime.last_duration_seconds))}</strong></div>
         <div><span class="muted">Déclenchement</span><strong>${esc(automationTriggerLabel(runtime.last_trigger))}</strong></div>
         <div><span class="muted">Dernier export</span><strong>${esc(paperlessLabel)}</strong></div>
-        <div><span class="muted">Pipeline</span><strong>${esc(automationAiLabel(pipeline.ai_analysis))}${pipeline.generate_pdf?" · PDF":""}${(pipeline.destinations||[]).length?" · "+pipeline.destinations.join(", "):""}${(item.notification||{}).persistent?" · notification":""}</strong></div>
-        <div><span class="muted">Fiabilité</span><strong>${retry.enabled?`${retry.max_retries||0} retry · ${retry.delay_minutes||10} min`:"Retry désactivé"} · ${item.history_count||0} historique(s)</strong></div>
+        <div><span class="muted">Étapes prévues</span><strong>${esc(automationAiLabel(pipeline.ai_analysis))}${pipeline.generate_pdf?" · PDF":""}${(pipeline.destinations||[]).length?" · "+esc(pipeline.destinations.map(name=>name==="paperless"?"Paperless":name).join(", ")):""}${(item.notification||{}).persistent?" · notification":""}</strong></div>
+        <div><span class="muted">Fiabilité</span><strong>${retry.enabled?`${retry.max_retries||0} nouvelle(s) tentative(s) · ${retry.delay_minutes||10} min`:"Nouvelle tentative désactivée"} · ${item.history_count||0} historique(s)</strong></div>
       </div>
+      ${renderPipelineProgress(item.progress)}
       ${pendingRetry?`<div class="statusText warn">Nouvelle tentative prévue : ${esc(formatAutomationDate(pendingRetry))}</div>`:""}
       ${warningCount?`<div class="statusText warn">${warningCount} avertissement(s) lors de la dernière exécution.</div>`:""}
-      ${runtime.last_error?`<div class="statusText error">${esc(runtime.last_error)}</div>`:""}
+      ${diagnosticMessages.length?`<details data-details-key="${esc(item.id)}" ${openDetails.has(item.id)?"open":""}><summary class="statusText error">Informations sur l’exécution — voir les détails</summary><p>${diagnosticMessages.map(esc).join("<br>")}</p></details>`:""}
       ${runtime.last_filename?`<div class="statusText">PDF : ${esc(runtime.last_filename)}</div>`:""}
       <div class="actions">
-        <button onclick="runScheduledAutomationNow('${esc(item.id)}')">Exécuter maintenant</button>
-        <button onclick="showAutomationHistory('${esc(item.id)}')">Historique</button>
-        <button onclick="editScheduledAutomation('${esc(item.id)}')">Modifier</button>
-        <button class="danger" onclick="deleteScheduledAutomation('${esc(item.id)}','${esc(item.name)}')">Supprimer</button>
+        <button data-focus-key="run-${esc(item.id)}" ${automationIsActive(item)||launchingAutomations.has(item.id)?"disabled":""} onclick="runScheduledAutomationNow('${esc(item.id)}')">${automationIsActive(item)?"Exécution en cours…":"Exécuter maintenant"}</button>
+        <button data-focus-key="history-${esc(item.id)}" onclick="showAutomationHistory('${esc(item.id)}')">Historique</button>
+        <button data-focus-key="edit-${esc(item.id)}" onclick="editScheduledAutomation('${esc(item.id)}')">Modifier</button>
+        <button class="danger" data-focus-key="delete-${esc(item.id)}" onclick="deleteScheduledAutomation('${esc(item.id)}','${esc(item.name)}')">Supprimer</button>
       </div>
     </div>`;
   }).join("");
+  if(focused) Array.from(list.querySelectorAll("[data-focus-key]")).find(el=>el.dataset.focusKey===focused)?.focus({preventScroll:true});
 }
 
 async function loadScheduledAutomations(){
-  const response=await fetch("api/scheduled-automations",{cache:"no-store"});
-  const data=await response.json();
-  if(!response.ok) throw new Error(data.error||"Lecture des automatisations impossible");
-  scheduledAutomations=data.automations||[];
-  renderScheduledAutomations(data.timezone);
+  if(automationLoadPromise) return automationLoadPromise;
+  automationLoadPromise = (async () => {
+    const response=await fetch("api/scheduled-automations",{cache:"no-store",signal:AbortSignal.timeout(10000)});
+    const data=await response.json();
+    if(!response.ok) throw new Error(data.error||"Lecture des automatisations impossible");
+    scheduledAutomations=data.automations||[];
+    renderScheduledAutomations(data.timezone);
+  })();
+  try { await automationLoadPromise; } finally { automationLoadPromise=null; }
 }
 
 async function showAutomations(push=true){
   setPage("automationsPage",{},push);
-  await loadReports();
-  await loadScheduledAutomations();
+  try {
+    await loadReports();
+    await loadScheduledAutomations();
+    $("automationRefreshStatus").textContent="Suivi automatique actif";
+  } catch(_) {
+    $("automationRefreshStatus").textContent="Connexion interrompue — nouvelle tentative automatique…";
+  } finally { scheduleAutomationRefresh(); }
   $("automationFormCard").classList.add("hidden");
   $("automationHistoryCard").classList.add("hidden");
 }
@@ -1541,15 +1611,17 @@ async function saveScheduledAutomation(){
   setTimeout(()=>$("automationFormCard").classList.add("hidden"),500);
 }
 
-async function showAutomationHistory(id){
+async function showAutomationHistory(id, refresh=false){
+  visibleAutomationHistory=id;
   const item=scheduledAutomations.find(a=>a.id===id);
   $("automationHistoryTitle").textContent=`Historique — ${item?.name||id}`;
-  $("automationHistoryList").innerHTML='<div class="sourceMessage">Chargement…</div>';
+  if(!refresh) $("automationHistoryList").innerHTML='<div class="sourceMessage">Chargement…</div>';
   $("automationHistoryCard").classList.remove("hidden");
-  $("automationHistoryCard").scrollIntoView({behavior:"smooth",block:"start"});
-  const response=await fetch(`api/scheduled-automation/${encodeURIComponent(id)}/history`,{cache:"no-store"});
+  if(!refresh) $("automationHistoryCard").scrollIntoView({behavior:"smooth",block:"start"});
+  const response=await fetch(`api/scheduled-automation/${encodeURIComponent(id)}/history`,{cache:"no-store",signal:AbortSignal.timeout(10000)});
   const data=await response.json();
   if(!response.ok){$("automationHistoryList").innerHTML=`<div class="statusText error">${esc(data.error||"Historique indisponible")}</div>`;return;}
+  if(visibleAutomationHistory!==id) return;
   const history=data.history||[];
   if(!history.length){$("automationHistoryList").innerHTML='<div class="sourceMessage">Aucune exécution enregistrée.</div>';return;}
   $("automationHistoryList").innerHTML=`<div class="automationHistoryTable">${history.map(row=>{
@@ -1566,11 +1638,27 @@ async function showAutomationHistory(id){
 }
 
 async function runScheduledAutomationNow(id){
-  const response=await fetch(`api/scheduled-automation/${encodeURIComponent(id)}/run`,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
-  const data=await response.json();
-  if(!response.ok){alert(data.error||"Lancement impossible");return;}
-  alert(`Job lancé : ${data.job.id}\nStatut : ${data.job.status}`);
-  await loadScheduledAutomations();
+  if(launchingAutomations.has(id)) return;
+  launchingAutomations.add(id);
+  automationLaunchErrors.delete(id);
+  renderScheduledAutomations(scheduledAutomations[0]?.timezone);
+  try {
+    const response=await fetch(`api/scheduled-automation/${encodeURIComponent(id)}/run`,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}",signal:AbortSignal.timeout(15000)});
+    const data=await response.json();
+    if(!response.ok){automationLaunchErrors.set(id,data.error||"Lancement refusé");showToast("Le rapport n’a pas pu être lancé. Consulte les détails de l’automatisation.",true);return;}
+    const item=scheduledAutomations.find(item=>item.id===id);
+    if(item) item.progress=data.job;
+    showToast(data.job?.deduplicated ? "Ce rapport est déjà en cours." : "Rapport lancé");
+    try { await loadScheduledAutomations(); } catch(_) {
+      $("automationRefreshStatus").textContent="Rapport lancé — reconnexion au suivi…";
+    }
+  } catch(_) {
+    showToast("Confirmation indisponible. Le rapport a peut-être démarré ; vérifie son état avant de réessayer.",true);
+  } finally {
+    launchingAutomations.delete(id);
+    renderScheduledAutomations(scheduledAutomations[0]?.timezone);
+    scheduleAutomationRefresh();
+  }
 }
 
 async function deleteScheduledAutomation(id,name){
@@ -1582,6 +1670,7 @@ async function deleteScheduledAutomation(id,name){
 }
 
 function setPage(page, state={}, push=true){
+  clearTimeout(automationPollTimer);
   ["homePage","reportsPage","automationsPage","documentsPage","exportProvidersPage","reportFormPage","reportPreviewPage","deviceAnalysisPage","providersPage","catalogPage","devicePage"].forEach(id => $(id).classList.add("hidden"));
   $(page).classList.remove("hidden");
   $("backButton").classList.toggle("hidden", page === "homePage");

@@ -1725,6 +1725,7 @@ def _record_scheduled_job_terminal(job):
         "filename": (job.get("document") or {}).get("filename") or result.get("filename"),
         "exports": copy.deepcopy(job.get("exports") or {}),
         "ai_status": result.get("ai_status"),
+        "progress": _pipeline_snapshot(job),
     }
     history = automation.get("history") or []
     if not any(item.get("job_id") == job.get("id") for item in history):
@@ -1752,6 +1753,7 @@ def _record_scheduled_job_terminal(job):
         active_job_id=None,
         last_job_id=job.get("id"),
         last_status=status,
+        last_progress=_pipeline_snapshot(job),
         last_finished_at=_job_iso(finished_epoch, timezone),
         last_duration_seconds=duration,
         last_error=job.get("error"),
@@ -1819,6 +1821,28 @@ def _mark_interrupted_automation(automation, now):
     return updated or automation
 
 
+def _set_pipeline_step(job_id, key, state):
+    """Record actual stage outcomes independently of legacy API statuses."""
+    with AUTOMATION_JOBS_LOCK:
+        job = AUTOMATION_JOBS.get(job_id)
+        if job is None:
+            return
+        steps = job.setdefault("steps", {})
+        step = steps.setdefault(key, {})
+        step["state"] = state
+        step["updated_at_epoch"] = time.time()
+        if state == "running":
+            step["started_at_epoch"] = time.time()
+
+
+def _pipeline_snapshot(job):
+    if not job:
+        return None
+    return {key: copy.deepcopy(job.get(key)) for key in (
+        "id", "status", "steps", "started_at_epoch", "finished_at_epoch", "created_at_epoch"
+    )}
+
+
 def _run_automation_job(job_id):
     job = get_automation_job(job_id)
     options = job["options"]
@@ -1833,7 +1857,9 @@ def _run_automation_job(job_id):
         _mark_scheduled_job_running(started_job)
         report = load_report(report_id)
         _safe_home_assistant_event("ha_reporting_report_started", _automation_event_payload(started_job, report))
+        _set_pipeline_step(job_id, "data", "running")
         result = execute_report(report_id)
+        _set_pipeline_step(job_id, "data", "completed")
         _update_automation_job(
             job_id,
             status="data_complete",
@@ -1846,13 +1872,16 @@ def _run_automation_job(job_id):
         ai_option = options.get("ai_analysis")
         run_ai = configured_ai if ai_option is None else bool(ai_option)
         if run_ai:
+            _set_pipeline_step(job_id, "ai", "running")
             _update_automation_job(job_id, status="ai_running", message="Analyse IA en cours")
             analysis = _automation_ai_analysis(report_id, report, job_id)
+            _set_pipeline_step(job_id, "ai", "completed" if analysis.get("status") == "completed" else "warning")
             if analysis.get("status") != "completed":
                 warning = f"Analyse IA: {analysis.get('error') or analysis.get('status') or 'indisponible'}"
                 warnings.append(warning)
                 _update_automation_job(job_id, message=warning)
         else:
+            _set_pipeline_step(job_id, "ai", "skipped")
             cached = _cached_report_result(report_id)
             if cached is not None:
                 cached["ai_analysis"] = {
@@ -1863,8 +1892,10 @@ def _run_automation_job(job_id):
                 _cache_report_result(report_id, cached)
 
         if options.get("generate_pdf"):
+            _set_pipeline_step(job_id, "pdf", "running")
             _update_automation_job(job_id, status="pdf_generating", message="Génération du PDF natif")
             document = generate_report_pdf(report_id, options.get("theme"))
+            _set_pipeline_step(job_id, "pdf", "completed")
             _update_automation_job(
                 job_id,
                 message="PDF natif enregistré localement",
@@ -1879,6 +1910,7 @@ def _run_automation_job(job_id):
 
         destinations = options.get("destinations") or []
         if destinations:
+            _set_pipeline_step(job_id, "export", "running")
             _update_automation_job(job_id, status="exporting", message="Export des destinations configurées")
             for provider_id in destinations:
                 try:
@@ -1893,14 +1925,20 @@ def _run_automation_job(job_id):
                     export_results[provider_id] = {"ok": False, "error": str(exc)}
                     _update_automation_job(job_id, message=warning)
 
+        if destinations:
+            _set_pipeline_step(job_id, "export", "warning" if any(not value["ok"] for value in export_results.values()) else "completed")
+
         notification_result = None
         if (options.get("notification") or {}).get("persistent"):
+            _set_pipeline_step(job_id, "notification", "running")
             try:
                 notification_result = _persistent_notification_for_job(get_automation_job(job_id), report, analysis)
             except Exception as exc:
                 warning = f"Notification persistante: {exc}"
                 warnings.append(warning)
                 _update_automation_job(job_id, message=warning)
+
+            _set_pipeline_step(job_id, "notification", "completed" if notification_result is not None else "warning")
 
         terminal = "completed_with_errors" if warnings else "completed"
         completed_job = _update_automation_job(
@@ -1923,6 +1961,9 @@ def _run_automation_job(job_id):
         _safe_home_assistant_event("ha_reporting_report_completed", _automation_event_payload(completed_job, report))
     except Exception as exc:
         log.exception("Automation report job failed: %s", job_id)
+        for key, step in (get_automation_job(job_id).get("steps") or {}).items():
+            if step.get("state") == "running":
+                _set_pipeline_step(job_id, key, "error")
         failed_job = _update_automation_job(
             job_id,
             status="error",
@@ -1958,6 +1999,12 @@ def start_automation_report_job(payload):
             "id": job_id,
             "report_id": options["report_id"],
             "status": "queued",
+            "steps": {key: {"state": state} for key, state in (
+                ("data", "pending"), ("ai", "pending"),
+                ("pdf", "pending" if options.get("generate_pdf") else "skipped"),
+                ("export", "pending" if options.get("destinations") else "skipped"),
+                ("notification", "pending" if (options.get("notification") or {}).get("persistent") else "skipped"),
+            )},
             "message": "Job mis en file d'attente",
             "created_at_epoch": now,
             "updated_at_epoch": now,
@@ -1992,6 +2039,12 @@ def scheduled_automation_overview():
         retry_dt = _parse_runtime_datetime((item.get("runtime") or {}).get("next_retry_at"), timezone)
         candidates = [value for value in (scheduled_dt, retry_dt) if value is not None]
         next_dt = min(candidates) if candidates else None
+        runtime = item.get("runtime") or {}
+        with AUTOMATION_JOBS_LOCK:
+            live = AUTOMATION_JOBS.get(runtime.get("active_job_id") or runtime.get("last_job_id"))
+            enriched["progress"] = _pipeline_snapshot(live) or copy.deepcopy(runtime.get("last_progress"))
+        if runtime.get("last_status") == "interrupted":
+            enriched["progress"] = None
         enriched["timezone"] = timezone
         enriched["next_scheduled_at"] = scheduled_dt.isoformat() if scheduled_dt else None
         enriched["next_retry_at"] = retry_dt.isoformat() if retry_dt else None
@@ -2424,6 +2477,8 @@ class Handler(BaseHTTPRequestHandler):
             if "/api/catalog/" in path:
                 parts = self.path_parts_after_catalog(path)
                 return self.send_payload(200, {"catalog": catalog_summary(load_catalog(parts[0]))})
+            if path.rsplit("/", 1)[-1] in {"icon.png", "logo.png", "favicon.png"}:
+                return self.send_payload(200, (Path(__file__).parent / path.rsplit("/", 1)[-1]).read_bytes(), "image/png")
             if path.endswith("/app.js"):
                 return self.send_payload(200, Path("/app/app.js").read_bytes(), "application/javascript; charset=utf-8")
             if path.endswith("/style.css"):

@@ -141,17 +141,7 @@ restent disponibles. Les règles de comparaison sont conservées.
 
 ## Installation locale
 
-1. Décompresser l'archive. Elle contient un dossier de dépôt `ha-reporting`.
-2. Copier son sous-dossier `ha-reporting` (celui qui contient `config.yaml` et
-   `Dockerfile`) vers `/addons/ha-reporting` sur Home Assistant OS.
-3. Actualiser le magasin des add-ons, puis installer ou reconstruire l'add-on
-   local HA Reporting selon le mode d'installation existant.
-4. Vérifier la version 0.1.0-beta.14 dans les journaux et relancer les rapports.
-
-Ne pas copier le dossier de dépôt complet à la place du dossier de l'add-on.
-Pour une installation issue d'un dépôt Git, mettre à jour les fichiers du même
-dépôt plutôt que créer une seconde installation locale avec un stockage distinct.
-L'archive contient les sources à construire par Supervisor, pas une image OCI.
+Voir le [README anglais](README.md#installation-on-home-assistant-os) pour l'installation et la mise à jour beta.18. Copier le dossier de l'archive contenant `config.yaml` et `Dockerfile` vers `/addons/ha-reporting`, en conservant la même installation et son stockage.
 
 ## Références techniques
 
@@ -271,3 +261,9 @@ Chaque automatisation conserve les 50 dernières exécutions avec statut, décle
 Le retry est configurable par automatisation (`enabled`, `max_retries`, `delay_minutes`) et ne s’applique qu’aux échecs globaux (`error`). Un job `completed_with_errors` n’est pas relancé afin d’éviter de dupliquer un PDF ou un export déjà réussi. Après redémarrage de l’add-on, un job qui était encore actif est marqué `interrupted` et peut être replanifié selon la même politique de retry.
 
 Les heures sont saisies en format 24 h `HH:MM`. Le scheduler continue d’utiliser le fuseau renvoyé par Home Assistant, y compris pour les changements heure d’été/hiver.
+
+## Beta.18 — Suivi visuel
+
+Les cartes affichent les étapes réellement exécutées : collecte/statistiques (réalisées ensemble par appareil), IA, PDF, export et notification. Une étape désactivée ou en erreur n'est pas présentée comme réussie. Le rafraîchissement est de 3 secondes pendant une exécution, 15 secondes au repos, suspendu lorsque la page est masquée. Les détails terminaux sont persistés avec les automatisations. Les statuts API beta.17 restent inchangés ; `steps` dans les jobs et `progress` dans la liste des automatisations sont des ajouts.
+
+L'installation et sa progression restent gérées par Home Assistant Supervisor.

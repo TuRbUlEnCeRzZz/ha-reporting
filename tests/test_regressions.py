@@ -1213,7 +1213,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.17')
+        self.assertEqual(config['version'],'0.1.0-beta.18')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertTrue(any(item.get('type')=='share' and item.get('read_only') is False and item.get('path')=='/share' for item in config.get('map',[]) if isinstance(item,dict)))

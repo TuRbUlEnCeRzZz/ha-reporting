@@ -1,3 +1,14 @@
+## 0.1.0-beta.23
+
+- Raise the maximum configurable AI Task timeout from 1,800 seconds to 7,200 seconds (2 hours).
+- Keep the 600-second default for backward compatibility and smaller reports.
+- Add report-editor timeout presets from 5 minutes through 2 hours, including 90 minutes for slow local inference.
+- Display configured AI timeouts in minutes/hours instead of raw seconds while analysis is running.
+- Preserve custom persisted timeout values within the supported 60–7,200 second range when editing reports.
+- Keep long AI execution in the existing server-side background job with WebSocket heartbeats.
+- Return timeout errors in the selected report language with human-readable durations.
+- Keep the beta.22 lossless `ha-reporting-ai-context-v3` contract unchanged; beta.23 does not drop report data to reduce AI input.
+
 ## 0.1.0-beta.22
 
 - Add the `ha-reporting-ai-context-v3` lossless normalized semantic context for AI Task calls.

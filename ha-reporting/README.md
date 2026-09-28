@@ -2,7 +2,7 @@
 
 ![HA Reporting](logo.png)
 
-**Current development version: 0.1.0-beta.22**
+**Current development version: 0.1.0-beta.23**
 
 HA Reporting is a reporting engine for **Home Assistant OS**. It turns Home Assistant sensor history stored in VictoriaMetrics into structured reports, period comparisons, optional AI commentary and locally generated PDF documents.
 
@@ -99,20 +99,22 @@ Beta.21 introduces the first HA Reporting internationalization layer.
 
 From beta.21 onward, new and modified maintainer-facing repository content is written in **English**. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-## What is new in beta.22
+## What is new in beta.23
 
-Beta.22 focuses on AI context efficiency for large reports without dropping semantic report data:
+Beta.23 focuses on long-running local AI analysis. It keeps the lossless AI-context normalization introduced in beta.22 and changes timeout handling so slower CPU/RAM inference can finish without HA Reporting abandoning the AI stage too early.
 
-- introduces the `ha-reporting-ai-context-v3` lossless normalized context used for AI Task calls;
-- replaces repeated nested objects with array-index IDs, shared registries and positional rows;
-- keeps **every current-period source and every comparison source**, including partially covered entries;
-- preserves calculated values, coverage, applicable density, warnings, comparison status, wording policy and reconstruction flags;
-- uses **50,000 characters as the preferred operating target** while retaining the existing **60,000-character hard safety limit**;
-- never trims sources to reach the target: if lossless normalization still exceeds the hard limit, the AI stage fails explicitly instead of silently discarding data;
-- exposes AI-context diagnostics including final size, original beta.21 compact-context size, schema/mode and the explicit no-omission guarantee;
-- keeps raw VictoriaMetrics samples, previews and provider traces excluded from AI input because they are outside the semantic reporting contract.
+- raises the backend maximum AI timeout from **1,800 seconds (30 minutes)** to **7,200 seconds (2 hours)**;
+- keeps the existing **600-second (10-minute)** default for backward compatibility and smaller reports;
+- adds practical timeout presets in the report editor: **5, 10, 15, 20, 30 and 45 minutes, then 1 hour, 1 hour 30 minutes and 2 hours**;
+- displays configured long timeouts in minutes/hours instead of raw seconds while an analysis is running;
+- preserves existing custom timeout values within the supported 60–7,200 second range when editing older report definitions;
+- keeps AI execution in the existing server-side background job, so the Ingress page does not need to stay open while a long local model is running;
+- keeps WebSocket heartbeats active during long AI Task generations;
+- formats timeout failures in the selected report language.
 
-The deterministic report result is unchanged. Only the model-facing serialization is normalized so repeated labels and metadata are stored once and referenced by ID.
+For a local model that typically needs around 50 minutes for a large monthly report, **90 minutes (5,400 seconds)** is a sensible starting value. The timeout remains a safety limit rather than an estimate of normal runtime.
+
+The beta.22 lossless AI context contract is unchanged: HA Reporting still does not drop partially covered or comparison sources to shorten AI input.
 
 ## Installation on Home Assistant OS
 
@@ -124,16 +126,16 @@ The deterministic report result is unchanged. Only the model-facing serializatio
 
    `https://github.com/TuRbUlEnCeRzZz/ha-reporting`
 
-4. Refresh the store and verify that the offered version is **0.1.0-beta.22** before installing or updating.
+4. Refresh the store and verify that the offered version is **0.1.0-beta.23** before installing or updating.
 5. Start HA Reporting and open its interface through Home Assistant Ingress.
 
 ### From the ZIP: local installation
 
-1. Extract `ha-reporting-0.1.0-beta.22.zip` on your computer.
+1. Extract `ha-reporting-0.1.0-beta.23.zip` on your computer.
 2. Inside the extracted repository, locate the **`ha-reporting/`** directory containing `config.yaml`, `Dockerfile`, `run.sh` and `app/`.
 3. Copy that directory to **`/addons/ha-reporting`** on Home Assistant OS using your existing file-transfer method. Do not copy the whole repository into `/addons/ha-reporting`.
 4. Refresh the app store and rebuild/reinstall the local add-on.
-5. Start it and confirm **HA Reporting 0.1.0-beta.22** in the add-on log.
+5. Start it and confirm **HA Reporting 0.1.0-beta.23** in the add-on log.
 
 The first build can take some time on a Raspberry Pi 4 because dependencies are installed by Supervisor.
 
@@ -156,7 +158,7 @@ Paths beginning with `/config` in this project refer to **HA Reporting's own per
 
 Configure an AI Task provider in Home Assistant first. In the report settings, enable AI and select the desired entity, or use Home Assistant's preferred AI Task entity where supported.
 
-The default local-AI timeout is designed to accommodate slower CPU/RAM inference workloads and remains configurable by report. Model speed and memory use depend entirely on the selected provider and model.
+The AI timeout is configured per report. Beta.23 keeps a 10-minute default, accepts values from 60 seconds up to 2 hours, and provides presets up to 90 minutes and 2 hours for slow local inference. Model speed and memory use depend entirely on the selected provider and model.
 
 HA Reporting communicates with Home Assistant for AI execution and keeps AI processing separate from the deterministic statistics. A slow or failed model should therefore not erase already calculated report data.
 
@@ -263,7 +265,7 @@ Possible future directions include:
 - additional export and notification destinations;
 - continued PDF/layout improvements and reporting diagnostics;
 - further validation with larger installations and longer histories;
-- optional presets for common reporting use cases. EMHASS data can already be reported through normal sensors, but there is no dedicated EMHASS integration in beta.22.
+- optional presets for common reporting use cases. EMHASS data can already be reported through normal sensors, but there is no dedicated EMHASS integration in beta.23.
 
 These are possible directions, not delivery or maintenance commitments.
 
@@ -271,5 +273,5 @@ These are possible directions, not delivery or maintenance commitments.
 
 - [Technical documentation](DOCS.md)
 - [Changelog](CHANGELOG.md)
-- [beta.22 validation](VALIDATION-beta22.md)
+- [beta.23 validation](VALIDATION-beta23.md)
 - [Contributing](../CONTRIBUTING.md)

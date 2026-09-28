@@ -30,6 +30,28 @@ function esc(value){
   }[c]));
 }
 
+function formatDurationCompact(seconds){
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  if(total < 60) return `${total} s`;
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.round((total % 3600) / 60);
+  if(hours && minutes) return `${hours} h ${minutes} min`;
+  if(hours) return `${hours} h`;
+  return `${Math.round(total / 60)} min`;
+}
+
+function ensureAiTimeoutOption(seconds){
+  const select = $("reportAiTimeout");
+  if(!select) return;
+  const value = String(Math.max(60, Math.min(7200, Math.round(Number(seconds) || 600))));
+  if(![...select.options].some(option => option.value === value)){
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = `${formatDurationCompact(value)} · ${typeof hrT === "function" ? hrT("period.custom") : "Custom"}`;
+    select.appendChild(option);
+  }
+}
+
 function slug(value){
   return String(value || "")
     .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
@@ -626,7 +648,9 @@ async function showReportForm(reportId=null, push=true){
 
   const aiAnalysis = report ? (report.ai_analysis || {}) : {};
   $("reportAiEnabled").checked = Boolean(aiAnalysis.enabled);
-  $("reportAiTimeout").value = String(aiAnalysis.timeout_seconds || 600);
+  const aiTimeoutSeconds = Number(aiAnalysis.timeout_seconds || 600);
+  ensureAiTimeoutOption(aiTimeoutSeconds);
+  $("reportAiTimeout").value = String(aiTimeoutSeconds);
   await populateReportAiEntities(aiAnalysis.entity_id || "");
 
   const output = report ? (report.output || {}) : {};
@@ -1035,7 +1059,7 @@ function renderAiAnalysis(result){
           <div><h3>Analyse IA</h3><div class="muted">Le rapport est terminé ; l’interprétation IA continue séparément.</div></div>
           <span class="badge">${ai.status === "running" ? "en cours" : "en attente"}</span>
         </div>
-        <div class="aiAnalysisText">Analyse locale en cours… Vous pouvez continuer à utiliser HA Reporting.${ai.timeout_seconds ? ` Délai maximal configuré : ${esc(ai.timeout_seconds)} s.` : ""}</div>
+        <div class="aiAnalysisText">${esc(typeof hrT === "function" ? hrT("report.ai_local_running") : "Analyse locale en cours… Vous pouvez continuer à utiliser HA Reporting.")}${ai.timeout_seconds ? ` ${esc(typeof hrT === "function" ? hrT("report.ai_timeout_configured", {duration:formatDurationCompact(ai.timeout_seconds)}) : `Délai maximal configuré : ${formatDurationCompact(ai.timeout_seconds)}.`)}` : ""}</div>
       </section>`;
   }
 

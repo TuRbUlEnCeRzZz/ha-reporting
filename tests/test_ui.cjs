@@ -7,7 +7,7 @@ const i18nSource = fs.readFileSync(path.join(__dirname, '../ha-reporting/app/i18
 const indexSource = fs.readFileSync(path.join(__dirname, '../ha-reporting/app/index.html'), 'utf8');
 const sandbox = {};
 vm.createContext(sandbox);
-for (const name of ['signedValue','esc','formatSeriesNumber','localDateTime','qualityBadge','metricCardData','reportSourceCardData','renderExecutedSource','comparisonStatusLabel','comparisonSourceCard','formatAiContextInfo','renderAiAnalysis','periodTypeLabel','periodModeLabel','comparisonCountLabel']) {
+for (const name of ['signedValue','esc','formatSeriesNumber','localDateTime','qualityBadge','metricCardData','reportSourceCardData','renderExecutedSource','comparisonStatusLabel','comparisonSourceCard','formatAiContextInfo','renderAiAnalysis','periodTypeLabel','periodModeLabel','comparisonCountLabel','formatDurationCompact']) {
   const match = source.match(new RegExp(`^function ${name}\\([^]*?^}`, 'm'));
   assert.ok(match, name);
   vm.runInContext(match[0], sandbox);
@@ -30,6 +30,7 @@ check(() => assert.equal(i18nSandbox.window.hrTranslateValue('Langue du rapport'
 check(() => assert.equal(i18nSandbox.window.hrTranslateValue('Rapport « Test » dupliqué'),'Report “Test” duplicated'));
 check(() => assert.equal(i18nSandbox.window.hrDefaultReportLanguage(),'en'));
 check(() => assert.equal(i18nSandbox.window.hrT('report.ai_context_characters'),'characters'));
+check(() => assert.equal(i18nSandbox.window.hrT('report.ai_timeout_configured',{duration:'1 h 30 min'}),'Configured maximum timeout: 1 h 30 min.'));
 const i18nFrenchSandbox = {
   window: {},
   localStorage: {
@@ -42,6 +43,11 @@ vm.createContext(i18nFrenchSandbox);
 vm.runInContext(i18nSource.replace(/hrInitI18n\(\);\s*$/, ''), i18nFrenchSandbox);
 check(() => assert.equal(i18nFrenchSandbox.window.hrTranslateValue('Languages'),'Langues'));
 check(() => assert.equal(i18nFrenchSandbox.window.hrTranslateValue('Report language'),'Langue du rapport'));
+check(() => assert.equal(sandbox.formatDurationCompact(1200),'20 min'));
+check(() => assert.equal(sandbox.formatDurationCompact(5400),'1 h 30 min'));
+check(() => assert.equal(sandbox.formatDurationCompact(7200),'2 h'));
+check(() => assert.match(indexSource, /<option value="5400">1 h 30 min<\/option>/));
+check(() => assert.match(indexSource, /<option value="7200">2 h<\/option>/));
 const raw = {status:'ok', sensor_key:'compressor', entity_id:'sensor.compressor', metric:'runtime',unit:'h', points:1506,retrieval_mode:'series_fallback',analysis:{quality:{period_coverage_percent:1.3,density_applicable:false,sample_density_percent:null},statistics:{delta:20.152,plausible:true,anomalies_ignored:2,resets_detected:0},validation:{valid:true,warnings:['Diagnostic conservé']}}};
 check(() => assert.match(sandbox.renderExecutedSource(raw,{duration_seconds:86400}), /points bruts/));
 check(() => assert.match(sandbox.renderExecutedSource(raw,{duration_seconds:86400}), /densité n\/a/));

@@ -1,4 +1,4 @@
-/* HA Reporting i18n foundation (beta.22).
+/* HA Reporting i18n foundation (beta.23).
  *
  * The legacy beta.20 UI still contains French source strings in a number of
  * rendering functions.  beta.21 centralizes translations here and translates
@@ -75,6 +75,7 @@ const HR_I18N_MESSAGES = {
   "report.ai_entity": {fr:"Entité AI Task", en:"AI Task entity"},
   "report.ai_preferred": {fr:"Entité AI Task préférée de Home Assistant", en:"Home Assistant preferred AI Task entity"},
   "report.ai_timeout": {fr:"Délai maximal de l'analyse IA", en:"Maximum AI analysis timeout"},
+  "report.ai_timeout_configured": {fr:"Délai maximal configuré : {duration}.", en:"Configured maximum timeout: {duration}."},
   "report.ai_mode_help": {fr:"Le mode de raisonnement est configuré sur l'entité AI Task ; HA Reporting ne le modifie pas à chaque appel.", en:"Reasoning mode is configured on the AI Task entity; HA Reporting does not change it for each call."},
   "report.ai_context": {fr:"Contexte IA", en:"AI context"},
   "report.ai_context_characters": {fr:"caractères", en:"characters"},

@@ -12,9 +12,23 @@ HA_AI_TASK_WS_URL = "ws://supervisor/core/websocket"
 AI_WS_HEARTBEAT_SECONDS = 20
 AI_DEFAULT_TIMEOUT_SECONDS = 600
 AI_MIN_TIMEOUT_SECONDS = 60
-AI_MAX_TIMEOUT_SECONDS = 1800
+AI_MAX_TIMEOUT_SECONDS = 7200
 AI_TARGET_CONTEXT_CHARS = 50000
 AI_MAX_CONTEXT_CHARS = 60000
+
+
+def _format_timeout_duration(seconds: int, language: str = "en") -> str:
+    """Return a compact human-readable duration for AI timeout messages."""
+    total = max(0, int(seconds or 0))
+    if total < 60:
+        return f"{total} s"
+    hours, remainder = divmod(total, 3600)
+    minutes = remainder // 60
+    if hours and minutes:
+        return f"{hours} h {minutes} min"
+    if hours:
+        return f"{hours} h"
+    return f"{minutes} min"
 
 
 def _stat_value(stats: dict[str, Any], key: str) -> Any:
@@ -749,7 +763,10 @@ def analyze_report_with_ai(
         while response_payload is None:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError(f"Analyse IA interrompue après {timeout_seconds} s (délai maximal configuré).")
+                timeout_label = _format_timeout_duration(timeout_seconds, language)
+                if language == "en":
+                    raise TimeoutError(f"AI analysis stopped after {timeout_label} (configured maximum timeout).")
+                raise TimeoutError(f"Analyse IA interrompue après {timeout_label} (délai maximal configuré).")
 
             ws.settimeout(min(AI_WS_HEARTBEAT_SECONDS, max(1, remaining)))
             try:

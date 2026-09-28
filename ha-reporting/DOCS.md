@@ -1,5 +1,23 @@
 # HA Reporting technical documentation
 
+## beta.23 — Long-running local AI analysis
+
+Beta.23 extends the per-report AI Task timeout range for slow local inference without changing the deterministic statistics pipeline or the beta.22 lossless AI context.
+
+- `AI_DEFAULT_TIMEOUT_SECONDS = 600` (10 minutes).
+- `AI_MIN_TIMEOUT_SECONDS = 60`.
+- `AI_MAX_TIMEOUT_SECONDS = 7200` (2 hours).
+- The report editor offers 5, 10, 15, 20, 30 and 45 minutes, then 1 hour, 1 hour 30 minutes and 2 hours.
+- Persisted custom values inside the supported range remain valid and are reinserted into the selector when a report is edited.
+- The browser polling guard uses the configured timeout plus a small 30-second margin.
+- The server-side AI worker remains independent of the Ingress page and keeps WebSocket heartbeat traffic active every 20 seconds while waiting for the Home Assistant AI Task response.
+- Timeout messages use human-readable durations and the selected report language.
+
+A timeout only limits how long HA Reporting waits for the AI Task response. HA Reporting closes its WebSocket connection when the timeout is reached, but a downstream provider such as Ollama may continue processing if Home Assistant/provider cancellation does not propagate. For long local jobs, choose a timeout with enough headroom instead of relying on repeated timeout/retry cycles.
+
+The `ha-reporting-ai-context-v3` serialization introduced in beta.22 remains lossless at the semantic report level: partial-coverage sources and comparisons are retained.
+
+
 ## beta.22 — Lossless AI context normalization
 
 Beta.22 uses the `ha-reporting-ai-context-v3` semantic schema for AI Task input. The deterministic report result is unchanged; only the model-facing representation is normalized. Raw VictoriaMetrics samples, previews, provider traces and renderer-only data remain outside the AI contract.
@@ -263,7 +281,7 @@ L’action Home Assistant `ai_task.generate_data` ne permet pas de changer ce pa
 
 ### Délai IA configurable
 
-Chaque rapport peut définir `ai_analysis.timeout_seconds`. La valeur par défaut est **600 s**. L’interface propose 300, 600, 900 et 1200 s ; le backend valide toute valeur comprise entre 60 et 1800 s. Ce délai est appliqué à l’appel `ai_task.generate_data`, au garde-fou serveur et au garde-fou navigateur avec une petite marge technique. Le calcul statistique du rapport reste indépendant et disponible immédiatement.
+Each report can define `ai_analysis.timeout_seconds`. The default remains **600 s**. Beta.23 validates values from 60 to 7,200 seconds and exposes practical presets from 5 minutes through 2 hours. The configured value applies to the Home Assistant `ai_task.generate_data` wait guard and to the browser-side monitoring deadline with a small technical margin. The deterministic report calculation remains independent and available before AI finishes.
 
 
 ### beta.6 — AI Task WebSocket

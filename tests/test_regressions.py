@@ -26,7 +26,7 @@ from rendering.html_report import render_report_html
 from analysis.ai_report import (
     compact_report_context, build_budgeted_ai_context, AI_TARGET_CONTEXT_CHARS, AI_MAX_CONTEXT_CHARS,
     _extract_service_response, _extract_ai_task_payload, _instructions,
-    _sanitize_ai_text, analyze_report_with_ai,
+    _sanitize_ai_text, analyze_report_with_ai, _format_timeout_duration,
 )
 from document_store import validate_output_config, render_filename
 from exporters.base import ExportProviderError
@@ -654,9 +654,9 @@ class AiAnalysisTests(unittest.TestCase):
             def close(self): pass
         fake=FakeWS()
         with patch('analysis.ai_report.websocket.create_connection',return_value=fake):
-            result=analyze_report_with_ai(self.sample(),{'enabled':True,'timeout_seconds':900},token='token')
+            result=analyze_report_with_ai(self.sample(),{'enabled':True,'timeout_seconds':5400},token='token')
         self.assertEqual(result['status'],'completed')
-        self.assertEqual(result['timeout_seconds'],900)
+        self.assertEqual(result['timeout_seconds'],5400)
         self.assertTrue(fake.timeouts)
         self.assertLessEqual(max(fake.timeouts),20)
 
@@ -683,15 +683,22 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertEqual(result['heartbeat_count'],1)
         self.assertIn({'id':2,'type':'ping'},fake.sent)
 
+    def test_ai_timeout_duration_formatting(self):
+        self.assertEqual(_format_timeout_duration(1200, 'fr'), '20 min')
+        self.assertEqual(_format_timeout_duration(5400, 'fr'), '1 h 30 min')
+        self.assertEqual(_format_timeout_duration(7200, 'en'), '2 h')
+
     def test_report_ai_timeout_validation_and_default(self):
         default=main._validated_ai_analysis({'ai_analysis':{'enabled':True}})
         self.assertEqual(default['timeout_seconds'],600)
-        custom=main._validated_ai_analysis({'ai_analysis':{'enabled':True,'timeout_seconds':1200}})
-        self.assertEqual(custom['timeout_seconds'],1200)
+        custom=main._validated_ai_analysis({'ai_analysis':{'enabled':True,'timeout_seconds':5400}})
+        self.assertEqual(custom['timeout_seconds'],5400)
+        maximum=main._validated_ai_analysis({'ai_analysis':{'enabled':True,'timeout_seconds':7200}})
+        self.assertEqual(maximum['timeout_seconds'],7200)
         with self.assertRaises(ValueError):
             main._validated_ai_analysis({'ai_analysis':{'enabled':True,'timeout_seconds':59}})
         with self.assertRaises(ValueError):
-            main._validated_ai_analysis({'ai_analysis':{'enabled':True,'timeout_seconds':1801}})
+            main._validated_ai_analysis({'ai_analysis':{'enabled':True,'timeout_seconds':7201}})
 
 
 class HtmlRendererTests(unittest.TestCase):
@@ -865,7 +872,7 @@ class Beta12ExportProviderTests(unittest.TestCase):
         self.assertTrue(status['reachable'])
         self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
         self.assertEqual(seen['auth'],'Token secret')
-        self.assertIn('beta.22',seen['ua'])
+        self.assertIn('beta.23',seen['ua'])
 
     def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
         import tempfile
@@ -1209,7 +1216,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.22')
+        self.assertEqual(config['version'],'0.1.0-beta.23')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertTrue(config['hassio_api'])

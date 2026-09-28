@@ -1,3 +1,21 @@
+# HA Reporting technical documentation
+
+## beta.21 — Internationalization and HTTP reliability
+
+Beta.21 introduces an i18n compatibility layer in `app/i18n.js`. It contains stable message IDs with French and English values, translates the existing beta.20 DOM (including dynamically inserted nodes), and exposes `hrT(messageId)` for new UI work. New features should use message IDs instead of adding hard-coded user-facing strings.
+
+The interface language is resolved in this order: a locally stored HA Reporting preference, the Home Assistant parent document language when it is readable through Ingress, then the browser language. Only `fr` and `en` are currently supported. The default report language is stored independently, and each report persists its own `language` field. Legacy reports without this field use `fr`.
+
+English report generation is deliberately scoped to renderer-owned text. `rendering/html_report.py` translates report headings, quality labels, period descriptions and technical footer labels while preserving device names, entity IDs and measured values. `analysis/ai_report.py` selects French or English AI instructions from the report language and normalizes the expected section headings accordingly.
+
+Native PDF downloads now build `Content-Disposition` with an ASCII-safe `filename=` fallback plus an RFC 5987 `filename*=UTF-8''...` value. This prevents `http.server` from raising `UnicodeEncodeError` on filenames containing characters outside Latin-1.
+
+Timezone discovery no longer depends exclusively on Home Assistant Core `/api/config`. The add-on requests Supervisor information first, validates the returned timezone with `zoneinfo`, caches a successful result for one hour, and falls back to Core configuration and finally `TZ`/UTC. A last-resort fallback is cached for five minutes to prevent log storms while still allowing automatic recovery. The add-on declares `hassio_api: true` with `hassio_role: default`.
+
+From beta.21 onward, newly added or modified maintainer-facing comments, changelog entries, validation files and technical documentation are written in English. Historical documentation is kept unchanged where it documents earlier releases.
+
+---
+
 # Nouveautés beta.20
 
 ## Données et rapports

@@ -3,6 +3,8 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../ha-reporting/app/app.js'), 'utf8');
+const i18nSource = fs.readFileSync(path.join(__dirname, '../ha-reporting/app/i18n.js'), 'utf8');
+const indexSource = fs.readFileSync(path.join(__dirname, '../ha-reporting/app/index.html'), 'utf8');
 const sandbox = {};
 vm.createContext(sandbox);
 for (const name of ['signedValue','esc','formatSeriesNumber','localDateTime','qualityBadge','metricCardData','reportSourceCardData','renderExecutedSource','comparisonStatusLabel','comparisonSourceCard','renderAiAnalysis','periodTypeLabel','periodModeLabel','comparisonCountLabel']) {
@@ -12,6 +14,33 @@ for (const name of ['signedValue','esc','formatSeriesNumber','localDateTime','qu
 }
 let checks = 0;
 function check(fn) { fn(); checks++; }
+
+const i18nSandbox = {
+  window: {},
+  localStorage: {
+    getItem(key) { return key === 'ha_reporting_language' ? 'en' : null; },
+    setItem() {}
+  },
+  navigator: {language:'fr-CH'}
+};
+vm.createContext(i18nSandbox);
+vm.runInContext(i18nSource.replace(/hrInitI18n\(\);\s*$/, ''), i18nSandbox);
+check(() => assert.equal(i18nSandbox.window.hrTranslateValue('Paramètres'),'Settings'));
+check(() => assert.equal(i18nSandbox.window.hrTranslateValue('Langue du rapport'),'Report language'));
+check(() => assert.equal(i18nSandbox.window.hrTranslateValue('Rapport « Test » dupliqué'),'Report “Test” duplicated'));
+check(() => assert.equal(i18nSandbox.window.hrDefaultReportLanguage(),'en'));
+const i18nFrenchSandbox = {
+  window: {},
+  localStorage: {
+    getItem(key) { return key === 'ha_reporting_language' ? 'fr' : null; },
+    setItem() {}
+  },
+  navigator: {language:'en-GB'}
+};
+vm.createContext(i18nFrenchSandbox);
+vm.runInContext(i18nSource.replace(/hrInitI18n\(\);\s*$/, ''), i18nFrenchSandbox);
+check(() => assert.equal(i18nFrenchSandbox.window.hrTranslateValue('Languages'),'Langues'));
+check(() => assert.equal(i18nFrenchSandbox.window.hrTranslateValue('Report language'),'Langue du rapport'));
 const raw = {status:'ok', sensor_key:'compressor', entity_id:'sensor.compressor', metric:'runtime',unit:'h', points:1506,retrieval_mode:'series_fallback',analysis:{quality:{period_coverage_percent:1.3,density_applicable:false,sample_density_percent:null},statistics:{delta:20.152,plausible:true,anomalies_ignored:2,resets_detected:0},validation:{valid:true,warnings:['Diagnostic conservé']}}};
 check(() => assert.match(sandbox.renderExecutedSource(raw,{duration_seconds:86400}), /points bruts/));
 check(() => assert.match(sandbox.renderExecutedSource(raw,{duration_seconds:86400}), /densité n\/a/));
@@ -73,4 +102,14 @@ check(() => assert.match(source, /--hr-page-background-image/));
 check(() => assert.match(source, /automationNotifyEntity/));
 check(() => assert.match(source, /automationTtsEntity/));
 check(() => assert.match(source, /automationMediaPlayer/));
+check(() => assert.match(source, /reportLanguage/));
+check(() => assert.match(source, /hrDefaultReportLanguage/));
+check(() => assert.match(indexSource, /id="uiLanguage"/));
+check(() => assert.match(indexSource, /id="defaultReportLanguage"/));
+check(() => assert.match(indexSource, /id="reportLanguage"/));
+check(() => assert.match(indexSource, /<script src="i18n\.js"><\/script>[\s\S]*<script src="app\.js"><\/script>/));
+check(() => assert.match(i18nSource, /"nav\.settings"/));
+check(() => assert.match(i18nSource, /function hrDetectLanguage\(/));
+check(() => assert.match(i18nSource, /function hrDefaultReportLanguage\(/));
+check(() => assert.match(i18nSource, /MutationObserver/));
 console.log(`${checks} JavaScript UI checks passed`);

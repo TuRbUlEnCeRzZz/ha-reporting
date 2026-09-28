@@ -3,8 +3,109 @@ from __future__ import annotations
 from datetime import datetime
 from html import escape
 from math import isfinite
+import re
 from typing import Any
 from zoneinfo import ZoneInfo
+
+
+def _translate_report_html_to_english(html: str) -> str:
+    """Translate renderer-owned report labels while leaving user data untouched."""
+    replacements = {
+        '<html lang="fr">': '<html lang="en">',
+        '>Imprimer / enregistrer en PDF<': '>Print / save as PDF<',
+        '>Fuseau ': '>Timezone ',
+        '>Généré le ': '>Generated on ',
+        '>Appareils<': '>Devices<',
+        '>Sans données<': '>No data<',
+        '>Erreurs / invalides<': '>Errors / invalid<',
+        '>Runtimes vérifiés<': '>Verified runtimes<',
+        '>Comparaisons N / N-x<': '>N / N-x comparisons<',
+        '>Comparaison · ': '>Comparison · ',
+        '>Comparables<': '>Comparable<',
+        '>Partielles<': '>Partial<',
+        '>Reconstruites<': '>Reconstructed<',
+        '>Indisponibles<': '>Unavailable<',
+        '>Analyse IA<': '>AI analysis<',
+        '>Interprétation automatique des statistiques. Les données, graphiques et indicateurs ci-dessous constituent la référence et permettent de vérifier, nuancer ou contester cette analyse.<': '>Automatic interpretation of the statistics. The data, charts and indicators below remain the reference for checking, qualifying or challenging this analysis.<',
+        '>Le rapport statistique est disponible ; l’interprétation IA est traitée séparément.<': '>The statistical report is available; AI interpretation is processed separately.<',
+        '>Analyse locale en cours…<': '>Local analysis in progress…<',
+        '>Interprétation indisponible<': '>Interpretation unavailable<',
+        'entité AI Task préférée': 'preferred AI Task entity',
+        '>Analyse IA indisponible<': '>AI analysis unavailable<',
+        '>erreur<': '>error<',
+        '>en cours<': '>running<',
+        '>en attente<': '>pending<',
+        '>Réf.<': '>Ref.<',
+        '>État<': '>Status<',
+        '>Indisponible<': '>Unavailable<',
+        '>Pic<': '>Peak<',
+        '>Moyenne<': '>Average<',
+        '>Variation période<': '>Period change<',
+        '>Fin compteur<': '>Counter end<',
+        '>Premier<': '>First<',
+        '>Dernier<': '>Last<',
+        'runtime vérifié': 'verified runtime',
+        'fallback détaillé': 'detailed fallback',
+        'Aucune valeur comparable.': 'No comparable value.',
+        'Source : ': 'Source: ',
+        ' · durée ': ' · duration ',
+        ' · les séries brutes ne sont pas transmises au modèle.': ' · raw series are not sent to the model.',
+        ' · moteur ': ' · engine ',
+        ' · calcul ': ' · calculation ',
+        ' · sémantique ': ' · semantics ',
+        ' sources OK': ' sources OK',
+        'Jour en cours · ': 'Current day · ',
+        'Semaine en cours · ': 'Current week · ',
+        'Mois en cours · ': 'Current month · ',
+        'Trimestre en cours · ': 'Current quarter · ',
+        'Semestre en cours · ': 'Current half-year · ',
+        'Année en cours · ': 'Current year · ',
+        'Jour précédent complet · ': 'Previous complete day · ',
+        'Semaine précédente complète · ': 'Previous complete week · ',
+        'Mois précédent complet · ': 'Previous complete month · ',
+        'Trimestre précédent complet · ': 'Previous complete quarter · ',
+        'Semestre précédent complet · ': 'Previous complete half-year · ',
+        'Année précédente complète · ': 'Previous complete year · ',
+        '>Jour en cours<': '>Current day<',
+        '>Semaine en cours<': '>Current week<',
+        '>Mois en cours<': '>Current month<',
+        '>Trimestre en cours<': '>Current quarter<',
+        '>Semestre en cours<': '>Current half-year<',
+        '>Année en cours<': '>Current year<',
+        '>Jour précédent complet<': '>Previous complete day<',
+        '>Semaine précédente complète<': '>Previous complete week<',
+        '>Mois précédent complet<': '>Previous complete month<',
+        '>Trimestre précédent complet<': '>Previous complete quarter<',
+        '>Semestre précédent complet<': '>Previous complete half-year<',
+        '>Année précédente complète<': '>Previous complete year<',
+        'Source absente de la période de référence.': 'Source missing from the reference period.',
+        'La période N ne fournit pas une valeur comparable.': 'Period N does not provide a comparable value.',
+        'La période de référence ne fournit pas une valeur comparable.': 'The reference period does not provide a comparable value.',
+        'Aucune statistique commune comparable.': 'No common comparable statistic.',
+        'Référence: compteur reconstruit après reset.': 'Reference: counter reconstructed after reset.',
+        'N: compteur reconstruit après reset.': 'N: counter reconstructed after reset.',
+        'Référence: couverture de période ': 'Reference: period coverage ',
+        'N: couverture de période ': 'N: period coverage ',
+        "Référence: densité d'échantillonnage ": 'Reference: sample density ',
+        "N: densité d'échantillonnage ": 'N: sample density ',
+    }
+    for source, target in replacements.items():
+        html = html.replace(source, target)
+
+    # Translate calculated quality text only inside renderer-owned quality blocks.
+    def translate_quality(match: re.Match[str]) -> str:
+        content = match.group(2)
+        content = content.replace("couverture ", "coverage ")
+        content = content.replace("densité ", "density ")
+        content = content.replace("runtime vérifié", "verified runtime")
+        content = content.replace("fallback détaillé", "detailed fallback")
+        return f"{match.group(1)}{content}{match.group(3)}"
+
+    html = re.sub(r'(<div class="quality">)(.*?)(</div>)', translate_quality, html, flags=re.DOTALL)
+    html = re.sub(r'(aria-label="N [^"]*), référence ', r'\1, reference ', html)
+    html = re.sub(r'(?<=>)N-(\d+) périodes?(?= ·|<)', lambda match: f"N-{match.group(1)} period" + ("s" if match.group(1) != "1" else ""), html)
+    html = re.sub(r'(?<=>)N-(\d+) ans?(?= ·|<)', lambda match: f"N-{match.group(1)} year" + ("s" if match.group(1) != "1" else ""), html)
+    return html
 
 
 def _e(value: Any) -> str:
@@ -363,4 +464,6 @@ footer{{border-top:1px solid var(--line);margin-top:28px;padding-top:12px;color:
 {_comparisons(result)}
 <footer>HA Reporting · moteur {_e(execution.get('analysis_mode'))} · calcul {_num(execution.get('data_total_duration_seconds') or execution.get('duration_seconds'), 's')}{(' · IA ' + _num(execution.get('ai_analysis_duration_seconds'), 's')) if (execution.get('ai_analysis_duration_seconds') or 0) > 0 else ''} · sémantique {_e(period.get('semantics'))}</footer>
 </main></body></html>"""
+    if str(report.get("language") or "fr").lower() == "en":
+        html = _translate_report_html_to_english(html)
     return html

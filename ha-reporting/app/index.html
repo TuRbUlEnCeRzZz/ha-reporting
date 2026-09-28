@@ -18,7 +18,7 @@
   </button>
   <div>
     <h1>HA Reporting</h1>
-    <div class="subtitle">0.1.0-beta.20</div>
+    <div class="subtitle">0.1.0-beta.21</div>
   </div>
 </header>
 
@@ -366,7 +366,13 @@
 
       <h3>Sortie du rapport</h3>
       <p class="muted">Le PDF natif est toujours généré et conservé localement. Le nom peut utiliser des variables pour préparer de futurs workflows d'export.</p>
-      <div class="grid two">
+      <div class="grid three">
+        <label>Report language
+          <select id="reportLanguage">
+            <option value="fr">Français</option>
+            <option value="en">English</option>
+          </select>
+        </label>
         <label>Modèle de nom de fichier
           <input id="reportFilenameTemplate" placeholder="{report_id}_{period_start}_{period_end}">
         </label>
@@ -439,6 +445,30 @@
     <div class="card">
       <h2>Paramètres</h2>
       <p class="muted">Configuration globale de HA Reporting.</p>
+
+      <div class="providerCard">
+        <div class="providerHeading">
+          <div>
+            <h3>Languages</h3>
+            <p class="muted">Choose the interface language and the default language proposed for new reports.</p>
+          </div>
+        </div>
+        <div class="grid two">
+          <label>Interface language
+            <select id="uiLanguage">
+              <option value="fr">Français</option>
+              <option value="en">English</option>
+            </select>
+          </label>
+          <label>Default report language
+            <select id="defaultReportLanguage">
+              <option value="fr">Français</option>
+              <option value="en">English</option>
+            </select>
+          </label>
+        </div>
+        <p class="muted">The interface language is detected from Home Assistant on first launch and then stored locally. Each report can use its own language.</p>
+      </div>
 
       <div class="settingsSection">
         <div>
@@ -613,6 +643,7 @@
   </div>
 </div>
 
+<script src="i18n.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

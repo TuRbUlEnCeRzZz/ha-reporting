@@ -39,7 +39,7 @@ def _loaded_client(hass: HomeAssistant) -> HaReportingClient:
         if entry and entry.state is ConfigEntryState.LOADED:
             return client
     raise ServiceValidationError(
-        "HA Reporting n'est pas configuré ou l'intégration n'est pas chargée"
+        "HA Reporting is not configured or the integration is not loaded"
     )
 
 

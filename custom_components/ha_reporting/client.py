@@ -28,7 +28,7 @@ class HaReportingClient:
         except Exception as exc:
             raise HaReportingApiError(str(exc)) from exc
         if not isinstance(payload, dict) or "jobs" not in payload:
-            raise HaReportingApiError("Réponse inattendue de HA Reporting")
+            raise HaReportingApiError("Unexpected response from HA Reporting")
 
     async def async_run_report(self, data: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -47,5 +47,5 @@ class HaReportingClient:
             raise HaReportingApiError(str(exc)) from exc
         job = payload.get("job") if isinstance(payload, dict) else None
         if not isinstance(job, dict) or not job.get("id"):
-            raise HaReportingApiError("HA Reporting n'a pas renvoyé de job valide")
+            raise HaReportingApiError("HA Reporting did not return a valid job")
         return job

@@ -1,3 +1,16 @@
+## 0.1.0-beta.21
+
+- Add the first HA Reporting internationalization layer with French and English interface support.
+- Detect the initial interface language from Home Assistant when available and persist the user's override locally.
+- Add separate default-report and per-report language settings so the interface and generated reports can use different languages.
+- Translate renderer-owned HTML/PDF labels to English when a report uses `language: en`.
+- Generate AI Task instructions and normalized AI section headings in the selected report language.
+- Keep backward compatibility with existing report definitions by defaulting missing language values to French.
+- Fix native PDF downloads with Unicode filenames by emitting an ASCII fallback plus RFC 5987 UTF-8 `filename*` metadata.
+- Prefer the Supervisor information endpoint for Home Assistant OS timezone discovery, cache the resolved timezone, retain the Core configuration endpoint as a fallback, and avoid repeated 502 log storms.
+- Add Supervisor API access with the default role, limited to the information needed by HA Reporting.
+- Establish English as the language for new maintainer-facing code comments, release notes, validation notes and technical documentation.
+
 ## 0.1.0-beta.20
 
 - statistiques de puissance précises : pics calculés sur les échantillons bruts VictoriaMetrics pour les périodes détaillées ;

@@ -232,11 +232,18 @@ def _websocket_error_message(message: dict[str, Any]) -> str:
         return str(text or code or error)
     return str(error or "Erreur WebSocket Home Assistant")
 
-def _sanitize_ai_text(text: str) -> str:
-    """Remove internally contradictory boilerplate without rewriting AI meaning."""
+def _sanitize_ai_text(text: str, language: str = "fr") -> str:
+    """Remove contradictory boilerplate without rewriting the AI meaning."""
+    language = "en" if str(language).lower() == "en" else "fr"
+    heading = "RECOMMENDATIONS" if language == "en" else "RECOMMANDATIONS"
+    empty_recommendation = (
+        "- no specific recommendation."
+        if language == "en"
+        else "- aucune recommandation particulière."
+    )
     lines = str(text or "").splitlines()
     recommendation_index = next(
-        (i for i, line in enumerate(lines) if line.strip().upper() == "RECOMMANDATIONS"),
+        (i for i, line in enumerate(lines) if line.strip().upper() == heading),
         None,
     )
     if recommendation_index is None:
@@ -247,7 +254,7 @@ def _sanitize_ai_text(text: str) -> str:
         line
         for line in recommendation_lines
         if line.strip().startswith("-")
-        and line.strip().lower() != "- aucune recommandation particulière."
+        and line.strip().lower() != empty_recommendation
     ]
     if substantive_bullets:
         lines = [
@@ -255,13 +262,48 @@ def _sanitize_ai_text(text: str) -> str:
             for i, line in enumerate(lines)
             if not (
                 i > recommendation_index
-                and line.strip().lower() == "- aucune recommandation particulière."
+                and line.strip().lower() == empty_recommendation
             )
         ]
     return "\n".join(lines).strip()
 
 
-def _instructions(context_json: str) -> str:
+def _instructions(context_json: str, language: str = "fr") -> str:
+    language = "en" if str(language).lower() == "en" else "fr"
+    if language == "en":
+        return f"""You are analyzing a home-automation report calculated by HA Reporting.
+Answer directly and concisely in English without exposing internal reasoning.
+Do not invent or recalculate values: use only the supplied statistics.
+Clearly distinguish calculated facts from interpretation. Ignore technical identifiers when a readable name is available.
+Do not turn internal engine diagnostics into attention points. In particular, never mention that a value was not reconstructed, that no reset occurred, or that no fallback was used. Mention a reset/reconstruction only when it actually occurred and materially affects reliability or interpretation.
+
+Mandatory rules for N/N-x comparisons:
+- An `unavailable` source does not support any conclusion about change.
+- Read `interpretation.wording_policy` first for each compared source.
+- If `wording_policy` is `descriptive_gap_only`, or if `interpretation.full_period_change_supported` is false, do NOT state that a quantity increased, decreased, went up, went down, or use equivalent wording that presents the gap as a real full-period trend.
+- Instead use wording such as: “for the available data, the calculated gap is ...” or “the calculated value is higher/lower by ...”, then explain why the gap cannot be interpreted as a complete-period trend.
+- Forbidden example: “consumption increased by 182%”. Expected style: “for the available data, the calculated gap is +182%, but it does not support a conclusion that annual consumption rose by that amount because the reference covers only 34.8% of the period”.
+- Forbidden example: “average power is down 8.6% from the previous year”. Expected style: “for the available data, calculated average power is 8.6% lower, but the comparison remains partial”.
+- Never use a relative percentage from an incomplete comparison to assert drift, overconsumption, or improvement.
+- Keep reconstruction and coverage strictly separate: `base_quality.counter_mode=provider_reconstructed` means N was reconstructed after one or more resets; `reference_quality.period_coverage_percent` independently describes N-x reference coverage. Never merge these concepts into wording such as “partial reconstruction”.
+- If `interpretation.base_reconstructed` is true, mention reconstruction only if useful to reliability. If false, do not discuss resets or reconstruction. If `interpretation.reference_coverage_limited` is true, separately state that the historical reference is partial and include its coverage. Do not claim the reference is reconstructed unless `interpretation.reference_reconstructed` is true.
+- Recommendations based only on a partial/reconstructed comparison must remain proportionate: prefer monitoring, continuing data collection, or checking again once coverage is sufficient. Do not ask the user to investigate causes unless current-period data independently supports a concrete anomaly.
+
+Produce exactly these three plain-text sections:
+SUMMARY
+2 to 4 sentences on the main facts of the period. Current-period facts may be stated directly; incomplete comparisons must follow the rules above.
+
+ATTENTION POINTS
+0 to 5 bullets beginning with "- ". Mention only items supported by the data, including coverage limitations when they affect interpretation. Write "- No notable attention point." when appropriate.
+
+RECOMMENDATIONS
+0 to 4 bullets beginning with "- ". Stay cautious and concrete. Do not invent a fault diagnosis.
+Write "- No specific recommendation." only when there is no other recommendation. Never combine that sentence with other bullets.
+
+Validated structured data from HA Reporting:
+{context_json}
+"""
+
     return f"""Tu analyses un rapport domotique calculé par HA Reporting.
 Réponds directement et brièvement en français, sans afficher de raisonnement interne.
 N'invente aucun chiffre et ne recalcule pas les données : utilise exclusivement les statistiques fournies.
@@ -296,13 +338,13 @@ Données structurées validées par HA Reporting :
 """
 
 
-
 def analyze_report_with_ai(
     result: dict[str, Any],
     config: dict[str, Any] | None,
     token: str | None = None,
 ) -> dict[str, Any]:
     config = config or {}
+    language = "en" if str((result.get("report") or {}).get("language") or "fr").lower() == "en" else "fr"
     if not bool(config.get("enabled")):
         return {"enabled": False, "status": "disabled"}
 
@@ -346,7 +388,7 @@ def analyze_report_with_ai(
 
         service_data: dict[str, Any] = {
             "task_name": f"HA Reporting · {(result.get('report') or {}).get('name') or 'rapport'}",
-            "instructions": _instructions(context_json),
+            "instructions": _instructions(context_json, language),
         }
         if entity_id:
             service_data["entity_id"] = entity_id
@@ -426,7 +468,7 @@ def analyze_report_with_ai(
             text = str(data or "").strip()
         if not text:
             raise RuntimeError("AI Task a retourné un texte vide")
-        text = _sanitize_ai_text(text)
+        text = _sanitize_ai_text(text, language)
 
         finished = time.time()
         return {

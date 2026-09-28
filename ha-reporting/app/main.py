@@ -12,7 +12,7 @@ import urllib.request
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse, unquote
+from urllib.parse import quote, urlparse, unquote
 from zoneinfo import ZoneInfo
 
 import yaml
@@ -60,6 +60,7 @@ PORT = 8099
 TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 HA_STATES_URL = "http://supervisor/core/api/states"
 HA_CONFIG_URL = "http://supervisor/core/api/config"
+SUPERVISOR_INFO_URL = "http://supervisor/supervisor/info"
 HA_EVENTS_URL = "http://supervisor/core/api/events"
 HA_SERVICES_URL = "http://supervisor/core/api/services"
 CATALOG_DIR = Path("/config/catalogs")
@@ -84,6 +85,10 @@ AUTOMATION_MAX_JOBS = 100
 AUTOMATION_TERMINAL_STATES = {"completed", "completed_with_errors", "error"}
 AUTOMATION_ACTIVE_STATES = {"queued", "running", "data_complete", "ai_running", "pdf_generating", "exporting"}
 SCHEDULER_POLL_SECONDS = 15
+TIMEZONE_CACHE_TTL_SECONDS = 3600
+TIMEZONE_FALLBACK_CACHE_TTL_SECONDS = 300
+_TIMEZONE_CACHE = {"value": None, "expires_at": 0.0}
+_TIMEZONE_CACHE_LOCK = threading.Lock()
 
 DEFAULT_CATEGORIES = [
     {"id": "refrigeration", "name": "Réfrigération"},
@@ -181,12 +186,82 @@ def home_assistant_config():
         return json.loads(response.read())
 
 
-def home_assistant_timezone():
+def _validated_timezone_name(value):
+    """Return a valid IANA timezone name or None."""
+    value = str(value or "").strip()
+    if not value:
+        return None
     try:
-        return str(home_assistant_config().get("time_zone") or "UTC")
+        ZoneInfo(value)
+    except Exception:
+        return None
+    return value
+
+
+def supervisor_timezone():
+    """Read the host timezone from the Supervisor info endpoint."""
+    if not TOKEN:
+        raise RuntimeError("SUPERVISOR_TOKEN unavailable")
+
+    request = urllib.request.Request(
+        SUPERVISOR_INFO_URL,
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        payload = json.loads(response.read())
+
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        raise RuntimeError("Invalid Supervisor info response")
+    timezone_name = _validated_timezone_name(data.get("timezone"))
+    if not timezone_name:
+        raise RuntimeError("Supervisor did not return a valid timezone")
+    return timezone_name
+
+
+def home_assistant_timezone(force_refresh=False):
+    """Resolve and cache the Home Assistant timezone without repeated Core API calls.
+
+    Supervisor info is preferred because the timezone belongs to the HA OS host
+    and remains available even when the Core API proxy briefly returns 502.
+    The Core `/api/config` endpoint is retained as a compatibility fallback.
+    """
+    now = time.monotonic()
+    with _TIMEZONE_CACHE_LOCK:
+        cached = _TIMEZONE_CACHE.get("value")
+        if not force_refresh and cached and now < float(_TIMEZONE_CACHE.get("expires_at") or 0):
+            return cached
+
+    errors = []
+    timezone_name = None
+    try:
+        timezone_name = supervisor_timezone()
     except Exception as exc:
-        log.warning("Unable to read Home Assistant timezone: %s", exc)
-        return "UTC"
+        errors.append(f"Supervisor info: {exc}")
+
+    if not timezone_name:
+        try:
+            timezone_name = _validated_timezone_name(home_assistant_config().get("time_zone"))
+            if not timezone_name:
+                raise RuntimeError("Home Assistant did not return a valid timezone")
+        except Exception as exc:
+            errors.append(f"Core config: {exc}")
+
+    fallback_used = False
+    if not timezone_name:
+        fallback_used = True
+        timezone_name = _validated_timezone_name(os.environ.get("TZ")) or "UTC"
+        log.warning(
+            "Unable to refresh Home Assistant timezone; using %s (%s)",
+            timezone_name,
+            "; ".join(errors),
+        )
+
+    ttl = TIMEZONE_FALLBACK_CACHE_TTL_SECONDS if fallback_used else TIMEZONE_CACHE_TTL_SECONDS
+    with _TIMEZONE_CACHE_LOCK:
+        _TIMEZONE_CACHE["value"] = timezone_name
+        _TIMEZONE_CACHE["expires_at"] = now + ttl
+    return timezone_name
 
 
 def home_assistant_fire_event(event_type, event_data):
@@ -245,10 +320,15 @@ def home_assistant_call_service(domain, service, service_data):
 
 
 def _notification_message(job, report, analysis):
-    report_name = str((report or {}).get("name") or (job or {}).get("report_id") or "Rapport HA Reporting")
+    language = _validated_report_language((report or {}).get("language", "fr"))
+    fallback_title = "HA Reporting report" if language == "en" else "Rapport HA Reporting"
+    report_name = str((report or {}).get("name") or (job or {}).get("report_id") or fallback_title)
     ai_text = (analysis or {}).get("text") if (analysis or {}).get("status") == "completed" else None
     if ai_text:
         message = ai_text
+    elif language == "en":
+        status = str((analysis or {}).get("status") or "disabled")
+        message = f"Report generated successfully. AI analysis: {status}."
     else:
         status = str((analysis or {}).get("status") or "désactivée")
         message = f"Rapport généré avec succès. Analyse IA : {status}."
@@ -887,6 +967,13 @@ def _validated_ai_analysis(payload):
     }
 
 
+def _validated_report_language(value):
+    language = str(value or "fr").strip().lower()
+    if language not in {"fr", "en"}:
+        raise ValueError("Report language must be 'fr' or 'en'")
+    return language
+
+
 def _validated_output(payload):
     return validate_output_config(payload.get("output") or {})
 
@@ -903,6 +990,7 @@ def report_summary(data):
     return {
         "id": data.get("id"),
         "name": data.get("name", data.get("id")),
+        "language": _validated_report_language(data.get("language", "fr")),
         "catalogs": catalog_ids,
         "catalog_names": catalog_names,
         "period": data.get("period") or {},
@@ -956,6 +1044,7 @@ def create_report(payload):
         "report_version": 1,
         "id": report_id,
         "name": name,
+        "language": _validated_report_language(payload.get("language", "fr")),
         "catalogs": _validate_report_catalogs(payload.get("catalogs")),
         "period": _validated_period_spec(payload),
         "comparisons": _validated_comparisons(payload),
@@ -975,6 +1064,9 @@ def update_report(report_id, payload):
         if not name:
             raise ValueError("Nom du rapport requis")
         data["name"] = name
+
+    if "language" in payload:
+        data["language"] = _validated_report_language(payload.get("language"))
 
     if "catalogs" in payload:
         data["catalogs"] = _validate_report_catalogs(payload.get("catalogs"))
@@ -2452,6 +2544,16 @@ def export_document(document_id: str, provider_id: str) -> dict:
         raise
 
 
+def content_disposition_attachment(filename):
+    """Build an RFC 5987-compatible attachment header for Unicode filenames."""
+    original = str(filename or "download.pdf").replace("\r", "_").replace("\n", "_")
+    ascii_source = original.translate(str.maketrans({"—": "-", "–": "-", "−": "-"}))
+    ascii_name = unicodedata.normalize("NFKD", ascii_source).encode("ascii", "ignore").decode("ascii")
+    ascii_name = re.sub(r'[\x00-\x1f\x7f"\\/]', "_", ascii_name).strip() or "download.pdf"
+    encoded = quote(original, safe="!#$&+-.^_`|~")
+    return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded}'
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         pass
@@ -2489,7 +2591,7 @@ class Handler(BaseHTTPRequestHandler):
         body = Path(path).read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Disposition", f'attachment; filename="{str(filename).replace(chr(34), "_")}"')
+        self.send_header("Content-Disposition", content_disposition_attachment(filename))
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -2550,6 +2652,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_payload(200, {"catalog": catalog_summary(load_catalog(parts[0]))})
             if path.rsplit("/", 1)[-1] in {"icon.png", "logo.png", "favicon.png"}:
                 return self.send_payload(200, (Path(__file__).parent / path.rsplit("/", 1)[-1]).read_bytes(), "image/png")
+            if path.endswith("/i18n.js"):
+                return self.send_payload(200, Path("/app/i18n.js").read_bytes(), "application/javascript; charset=utf-8")
             if path.endswith("/app.js"):
                 return self.send_payload(200, Path("/app/app.js").read_bytes(), "application/javascript; charset=utf-8")
             if path.endswith("/style.css"):
@@ -2668,12 +2772,13 @@ def main():
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     DOCUMENT_DIR.mkdir(parents=True, exist_ok=True)
     log.info("Starting HA Reporting catalog manager on port %d", PORT)
-    scheduler_thread = threading.Thread(target=_scheduler_loop, daemon=True, name="ha-reporting-scheduler")
-    scheduler_thread.start()
     try:
         log.info("Home Assistant API connection successful: %d entities", len(home_assistant_states()))
+        log.info("Home Assistant timezone: %s", home_assistant_timezone(force_refresh=True))
     except Exception as exc:
         log.error("Home Assistant API initial check failed: %s", exc)
+    scheduler_thread = threading.Thread(target=_scheduler_loop, daemon=True, name="ha-reporting-scheduler")
+    scheduler_thread.start()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 

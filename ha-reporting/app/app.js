@@ -242,7 +242,8 @@ function formatSeriesNumber(value, unit=""){
 
 function localDateTime(timestamp){
   if(timestamp === null || timestamp === undefined) return "—";
-  return new Date(Number(timestamp) * 1000).toLocaleString();
+  const locale=(typeof window!=="undefined" && window.hrCurrentLanguage && window.hrCurrentLanguage()==="en") ? "en-GB" : "fr-CH";
+  return new Date(Number(timestamp) * 1000).toLocaleString(locale);
 }
 
 function renderSeriesResult(result){
@@ -477,6 +478,7 @@ function renderReports(){
             <span class="reportPeriodPill">${custom}</span>
             ${comparisonLabels.length ? `<span class="reportPeriodPill">${esc(comparisonLabels.join(" · "))}</span>` : ""}
             ${(report.ai_analysis || {}).enabled ? `<span class="reportPeriodPill">Analyse IA · no-thinking</span>` : ""}
+            <span class="reportPeriodPill">${(report.language || "fr").toUpperCase()}</span>
             <span class="reportPeriodPill">PDF natif local</span>
           </div>
           <div class="reportActions">
@@ -498,11 +500,13 @@ async function duplicateReportDefinition(reportId){
     report=reports.find(item=>item.id===reportId);
   }
   if(!report){ alert("Rapport introuvable"); return; }
-  const proposed=`${report.name} — copie`;
+  const copyWord=window.hrT ? window.hrT("common.copy_word") : "copie";
+  const proposed=`${report.name} — ${copyWord}`;
   const name=prompt("Nom du rapport dupliqué :", proposed);
   if(!name) return;
   const payload={
     name:name.trim(),
+    language:report.language || "fr",
     catalogs:[...(report.catalogs||[])],
     period:{...(report.period||{})},
     comparisons:{...(report.comparisons||{})},
@@ -573,8 +577,9 @@ function localFilenamePreview(){
   const yyyy = String(now.getFullYear()).padStart(4,"0");
   const mm = String(now.getMonth()+1).padStart(2,"0");
   const dd = String(now.getDate()).padStart(2,"0");
-  const reportName = $("reportName")?.value || "rapport";
-  const reportId = editingReportId || slug(reportName) || "rapport";
+  const fallbackReportName=window.hrT ? window.hrT("common.report_filename") : "rapport";
+  const reportName = $("reportName")?.value || fallbackReportName;
+  const reportId = editingReportId || slug(reportName) || fallbackReportName;
   const replacements = {
     report_id:reportId, report_name:reportName, year:yyyy, month:mm, day:dd,
     period_start:`${yyyy}-${mm}-${dd}`, period_end:`${yyyy}-${mm}-${dd}`,
@@ -584,7 +589,7 @@ function localFilenamePreview(){
     comparison:"none"
   };
   let name = template.replace(/\{([a-zA-Z0-9_]+)\}/g, (_m,key) => Object.prototype.hasOwnProperty.call(replacements,key) ? replacements[key] : `{${key}}`);
-  name = name.replace(/[<>:"/\\|?*\x00-\x1f]/g,"_").replace(/\s+/g,"_").replace(/_+/g,"_").replace(/^[ ._]+|[ ._]+$/g,"") || "rapport";
+  name = name.replace(/[<>:"/\\|?*\x00-\x1f]/g,"_").replace(/\s+/g,"_").replace(/_+/g,"_").replace(/^[ ._]+|[ ._]+$/g,"") || fallbackReportName;
   if(!name.toLowerCase().endsWith(".pdf")) name += ".pdf";
   if($("reportFilenamePreview")) $("reportFilenamePreview").textContent = name;
 }
@@ -625,6 +630,7 @@ async function showReportForm(reportId=null, push=true){
   await populateReportAiEntities(aiAnalysis.entity_id || "");
 
   const output = report ? (report.output || {}) : {};
+  $("reportLanguage").value = report ? (report.language || "fr") : (window.hrDefaultReportLanguage ? window.hrDefaultReportLanguage() : "fr");
   $("reportFilenameTemplate").value = output.filename_template || "{report_id}_{period_start}_{period_end}";
   $("reportDuplicatePolicy").value = output.duplicate_policy || "version";
 
@@ -654,6 +660,7 @@ function reportPayloadFromForm(){
 
   return {
     name:$("reportName").value,
+    language:$("reportLanguage")?.value || "fr",
     catalogs:catalogIds,
     period,
     comparisons:{
@@ -1444,7 +1451,8 @@ function automationAiLabel(value){
 
 function formatAutomationDate(value){
   if(!value) return "—";
-  try{return new Date(value).toLocaleString("fr-CH",{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});}catch(_){return String(value);}
+  const locale=(typeof window!=="undefined" && window.hrCurrentLanguage && window.hrCurrentLanguage()==="en") ? "en-GB" : "fr-CH";
+  try{return new Date(value).toLocaleString(locale,{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});}catch(_){return String(value);}
 }
 
 function formatAutomationDuration(value){

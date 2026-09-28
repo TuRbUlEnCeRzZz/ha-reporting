@@ -763,7 +763,7 @@ class Beta12ExportProviderTests(unittest.TestCase):
         self.assertTrue(status['reachable'])
         self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
         self.assertEqual(seen['auth'],'Token secret')
-        self.assertIn('beta.20',seen['ua'])
+        self.assertIn('beta.21',seen['ua'])
 
     def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
         import tempfile
@@ -1010,6 +1010,96 @@ class Beta20NotificationTests(unittest.TestCase):
         self.assertIn(('tts','speak'),domains_services)
 
 
+class Beta21InternationalizationAndHttpTests(unittest.TestCase):
+    def setUp(self):
+        main._TIMEZONE_CACHE['value']=None
+        main._TIMEZONE_CACHE['expires_at']=0.0
+
+    def test_unicode_download_header_is_latin1_safe_and_keeps_utf8_filename(self):
+        filename='rapport quotidien — énergie.pdf'
+        header=main.content_disposition_attachment(filename)
+        header.encode('latin-1','strict')
+        self.assertIn('filename="rapport quotidien - energie.pdf"',header)
+        self.assertIn("filename*=UTF-8''rapport%20quotidien%20%E2%80%94%20%C3%A9nergie.pdf",header)
+
+    def test_supervisor_timezone_reads_info_endpoint(self):
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self,*args): return False
+            def read(self): return b'{"data":{"timezone":"Europe/Zurich"}}'
+        seen={}
+        def fake_urlopen(request, timeout=0):
+            seen['url']=request.full_url
+            seen['auth']=request.headers.get('Authorization')
+            return Response()
+        with patch.object(main,'TOKEN','token'), patch('urllib.request.urlopen',side_effect=fake_urlopen):
+            self.assertEqual(main.supervisor_timezone(),'Europe/Zurich')
+        self.assertEqual(seen['url'],'http://supervisor/supervisor/info')
+        self.assertEqual(seen['auth'],'Bearer token')
+
+    def test_timezone_prefers_supervisor_and_is_cached(self):
+        with patch.object(main,'supervisor_timezone',return_value='Europe/Zurich') as supervisor, patch.object(main,'home_assistant_config') as core:
+            self.assertEqual(main.home_assistant_timezone(force_refresh=True),'Europe/Zurich')
+            self.assertEqual(main.home_assistant_timezone(),'Europe/Zurich')
+        supervisor.assert_called_once()
+        core.assert_not_called()
+
+    def test_timezone_falls_back_to_core_config(self):
+        with patch.object(main,'supervisor_timezone',side_effect=RuntimeError('down')), patch.object(main,'home_assistant_config',return_value={'time_zone':'Europe/Zurich'}):
+            self.assertEqual(main.home_assistant_timezone(force_refresh=True),'Europe/Zurich')
+
+    def test_report_language_defaults_to_french_and_accepts_english(self):
+        self.assertEqual(main._validated_report_language(None),'fr')
+        self.assertEqual(main._validated_report_language('en'),'en')
+        with self.assertRaises(ValueError):
+            main._validated_report_language('de')
+
+    def test_english_report_renderer_translates_owned_labels(self):
+        result={
+            'report':{'name':'Energy report','language':'en'},
+            'resolved_period':{'label':'Jour précédent complet · 27.09.2026 05:30 → 28.09.2026 05:30','timezone':'Europe/Zurich','semantics':'[start, end)'},
+            'execution':{},
+            'summary':{'devices_total':0,'sources_ok':0,'sources_total':0,'sources_no_data':0,'sources_error':0,'sources_invalid':0,'sources_runtime_verified':0,'sources_fallback':0},
+            'catalogs':[],
+            'comparisons':{'enabled':False},
+            'ai_analysis':{'enabled':False},
+        }
+        html=render_report_html(result)
+        self.assertIn('<html lang="en">',html)
+        self.assertIn('Previous complete day',html)
+        self.assertIn('Generated on',html)
+        self.assertIn('Devices',html)
+        self.assertNotIn('Appareils',html)
+
+    def test_english_renderer_preserves_user_owned_names(self):
+        result={
+            'report':{'name':'Rapport période couverture','language':'en'},
+            'resolved_period':{'label':'Mois en cours','timezone':'Europe/Zurich','semantics':'[start, end)'},
+            'execution':{},
+            'summary':{'devices_total':1,'sources_ok':1,'sources_total':1,'sources_no_data':0,'sources_error':0,'sources_invalid':0,'sources_runtime_verified':0,'sources_fallback':0},
+            'catalogs':[{'name':'Couverture période','devices':[{'device':{'name':'Référence salon','category':'custom'},'summary':{'sources_ok':1,'sources_total':1},'sources':[{
+                'sensor_key':'power','entity_id':'sensor.power','metric':'power','unit':'W','status':'ok',
+                'analysis':{'quality':{'period_coverage_percent':100,'density_applicable':True,'sample_density_percent':100},'statistics':{'max':{'value':10},'p95':9,'mean':8}}
+            }]}]}],
+            'comparisons':{'enabled':False},
+            'ai_analysis':{'enabled':False},
+        }
+        html=render_report_html(result)
+        self.assertIn('Rapport période couverture',html)
+        self.assertIn('Couverture période',html)
+        self.assertIn('Référence salon',html)
+        self.assertIn('coverage 100 %',html)
+        self.assertIn('density 100 %',html)
+
+    def test_english_ai_prompt_uses_english_sections(self):
+        prompt=_instructions('{}','en')
+        self.assertIn('SUMMARY',prompt)
+        self.assertIn('ATTENTION POINTS',prompt)
+        self.assertIn('RECOMMENDATIONS',prompt)
+        self.assertNotIn('SYNTHÈSE',prompt)
+
+
+
 class PackageTests(unittest.TestCase):
     def test_yaml_and_installation_layout(self):
         import yaml
@@ -1017,13 +1107,15 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.20')
+        self.assertEqual(config['version'],'0.1.0-beta.21')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
+        self.assertTrue(config['hassio_api'])
+        self.assertEqual(config['hassio_role'],'default')
         self.assertTrue(any(item.get('type')=='share' and item.get('read_only') is False and item.get('path')=='/share' for item in config.get('map',[]) if isinstance(item,dict)))
         self.assertIn('py3-websocket-client',(addon/'Dockerfile').read_text())
         self.assertIn('weasyprint',(addon/'Dockerfile').read_text())
-        for name in ['Dockerfile','run.sh','app/main.py','app/app.js','app/index.html','app/rendering/html_report.py','app/analysis/ai_report.py','app/exporters/base.py','app/exporters/paperless.py','app/exporters/config.py']:
+        for name in ['Dockerfile','run.sh','app/main.py','app/app.js','app/i18n.js','app/index.html','app/rendering/html_report.py','app/analysis/ai_report.py','app/exporters/base.py','app/exporters/paperless.py','app/exporters/config.py']:
             self.assertTrue((addon/name).is_file(),name)
         index=(addon/'app/index.html').read_text()
         self.assertIn('reportHtmlButton', index)

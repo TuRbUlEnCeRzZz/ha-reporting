@@ -368,8 +368,24 @@ function periodTypeLabel(type){
   })[type] || type;
 }
 
-function periodModeLabel(mode){
-  return mode === "previous" ? "précédente complète" : mode === "custom" ? "" : "en cours";
+function periodModeLabel(type, mode){
+  if(mode === "custom") return "";
+  if(mode !== "previous") return "en cours";
+  return ({
+    day:"précédent complet",
+    week:"précédente complète",
+    month:"précédent complet",
+    quarter:"précédent complet",
+    semester:"précédent complet",
+    year:"précédente complète"
+  })[type] || "précédente complète";
+}
+
+function comparisonCountLabel(count, unit){
+  const n = Number(count || 0);
+  if(!n) return "";
+  if(unit === "year") return n === 1 ? "1 année précédente" : `${n} années précédentes`;
+  return n === 1 ? "1 période précédente" : `${n} périodes précédentes`;
 }
 
 async function showReports(push=true){
@@ -398,12 +414,14 @@ function renderReports(){
     const period = report.period || {};
     const custom = period.type === "custom"
       ? `${esc(period.start || "")} → ${esc(period.end || "")}`
-      : `${periodTypeLabel(period.type)} ${periodModeLabel(period.mode)}`;
+      : `${periodTypeLabel(period.type)} ${periodModeLabel(period.type, period.mode)}${period.type === "day" && (period.boundary_time || "00:00") !== "00:00" ? ` · début ${esc(period.boundary_time)}` : ""}`;
 
     const comparisons = report.comparisons || {};
     const comparisonLabels = [];
-    if(Number(comparisons.previous_periods || 0) > 0) comparisonLabels.push(`N-1…N-${comparisons.previous_periods} période(s)`);
-    if(Number(comparisons.previous_years || 0) > 0) comparisonLabels.push(`N-1…N-${comparisons.previous_years} an(s)`);
+    const previousPeriodsLabel = comparisonCountLabel(comparisons.previous_periods, "period");
+    const previousYearsLabel = comparisonCountLabel(comparisons.previous_years, "year");
+    if(previousPeriodsLabel) comparisonLabels.push(previousPeriodsLabel);
+    if(previousYearsLabel) comparisonLabels.push(previousYearsLabel);
 
     return `
       <div class="reportCard">
@@ -427,9 +445,11 @@ function renderReports(){
 }
 
 function updateReportPeriodFields(){
-  const custom = $("reportPeriodType").value === "custom";
+  const type = $("reportPeriodType").value;
+  const custom = type === "custom";
   $("customPeriodFields").classList.toggle("hidden", !custom);
   $("reportPeriodModeLabel").classList.toggle("hidden", custom);
+  $("reportDayBoundaryFields").classList.toggle("hidden", custom || type !== "day");
 }
 
 function renderReportCatalogChoices(selectedIds=[]){
@@ -519,6 +539,7 @@ async function showReportForm(reportId=null, push=true){
   const period = report ? (report.period || {}) : {type:"month",mode:"current"};
   $("reportPeriodType").value = period.type || "month";
   $("reportPeriodMode").value = period.mode === "previous" ? "previous" : "current";
+  $("reportDayBoundary").value = period.boundary_time || "00:00";
   $("reportCustomStart").value = period.start || "";
   $("reportCustomEnd").value = period.end || "";
 
@@ -555,7 +576,8 @@ function reportPayloadFromForm(){
       }
     : {
         type:periodType,
-        mode:$("reportPeriodMode").value
+        mode:$("reportPeriodMode").value,
+        ...(periodType === "day" ? {boundary_time:$("reportDayBoundary").value || "00:00"} : {})
       };
 
   return {
@@ -1669,12 +1691,46 @@ async function deleteScheduledAutomation(id,name){
   await loadScheduledAutomations();
 }
 
+const PRIMARY_PAGES = new Set(["homePage","reportsPage","documentsPage","automationsPage","providersPage"]);
+const PAGE_TAB = {
+  homePage:"tabCatalogues", catalogPage:"tabCatalogues", devicePage:"tabCatalogues", deviceAnalysisPage:"tabCatalogues",
+  reportsPage:"tabReports", reportFormPage:"tabReports", reportPreviewPage:"tabReports",
+  documentsPage:"tabDocuments", exportProvidersPage:"tabDocuments",
+  automationsPage:"tabAutomations",
+  providersPage:"tabSettings"
+};
+
+function updatePrimaryTabs(page){
+  const activeId = PAGE_TAB[page];
+  document.querySelectorAll(".primaryTab").forEach(tab => {
+    const active = tab.id === activeId;
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-current", active ? "page" : "false");
+  });
+}
+
+const PAGE_PARENT = {
+  catalogPage:"homePage", devicePage:"homePage", deviceAnalysisPage:"homePage",
+  reportFormPage:"reportsPage", reportPreviewPage:"reportsPage",
+  exportProvidersPage:"documentsPage"
+};
+
 function setPage(page, state={}, push=true){
   clearTimeout(automationPollTimer);
   ["homePage","reportsPage","automationsPage","documentsPage","exportProvidersPage","reportFormPage","reportPreviewPage","deviceAnalysisPage","providersPage","catalogPage","devicePage"].forEach(id => $(id).classList.add("hidden"));
   $(page).classList.remove("hidden");
-  $("backButton").classList.toggle("hidden", page === "homePage");
-  if(push) history.pushState({page, ...state}, "", "");
+  const primary = PRIMARY_PAGES.has(page);
+  $("backButton").classList.toggle("hidden", primary);
+  updatePrimaryTabs(page);
+  if(push) history.replaceState({haReporting:true,page, ...state}, "", "");
+}
+
+async function showParentPage(){
+  const page = history.state?.page;
+  const parent = PAGE_PARENT[page] || "homePage";
+  if(parent === "reportsPage") return showReports();
+  if(parent === "documentsPage") return showDocuments();
+  return showHome();
 }
 
 function showHome(push=true){
@@ -1710,10 +1766,13 @@ async function addDeviceTo(id, name, push=true){
   await loadEntities();
 }
 
-$("backButton").addEventListener("click", () => history.back());
+$("backButton").addEventListener("click", showParentPage);
 $("newCatalogButton").addEventListener("click", () => showNewCatalog());
-$("reportsButton").addEventListener("click", () => showReports());
-$("automationsButton").addEventListener("click", () => showAutomations());
+$("tabCatalogues").addEventListener("click", () => showHome());
+$("tabReports").addEventListener("click", () => showReports());
+$("tabDocuments").addEventListener("click", () => showDocuments());
+$("tabAutomations").addEventListener("click", () => showAutomations());
+$("tabSettings").addEventListener("click", () => showProviders());
 $("refreshAutomationsButton").addEventListener("click", () => loadScheduledAutomations());
 $("newAutomationButton").addEventListener("click", () => showAutomationForm());
 $("automationScheduleType").addEventListener("change", updateAutomationScheduleFields);
@@ -1725,7 +1784,6 @@ $("automationRetryEnabled").addEventListener("change", () => {
   $("automationMaxRetries").disabled=!enabled;
   $("automationRetryDelay").disabled=!enabled;
 });
-$("documentsButton").addEventListener("click", () => showDocuments());
 $("refreshDocumentsButton").addEventListener("click", () => loadDocuments());
 $("exportProvidersButton").addEventListener("click", () => showExportProviders());
 $("paperlessMode").addEventListener("change", updatePaperlessModeFields);
@@ -1734,6 +1792,7 @@ $("paperlessSaveButton").addEventListener("click", savePaperless);
 $("newReportButton").addEventListener("click", () => showReportForm());
 $("saveReportButton").addEventListener("click", saveReportDefinition);
 $("reportPeriodType").addEventListener("change", () => { updateReportPeriodFields(); localFilenamePreview(); });
+$("reportDayBoundary").addEventListener("change", localFilenamePreview);
 $("reportFilenameTemplate").addEventListener("input", localFilenamePreview);
 $("reportAiEnabled").addEventListener("change", updateReportAiFields);
 $("reportName").addEventListener("input", () => {
@@ -1751,7 +1810,6 @@ $("reportHtmlButton").addEventListener("click", () => {
   window.open(`api/report/${encodeURIComponent(previewReportId)}/html`, "_blank", "noopener");
 });
 $("reportPdfButton").addEventListener("click", generateNativePdf);
-$("providersButton").addEventListener("click", () => showProviders());
 $("seriesCatalog").addEventListener("change", populateSeriesDevices);
 $("seriesDevice").addEventListener("change", populateSeriesSensors);
 $("seriesTestButton").addEventListener("click", testCatalogSeries);
@@ -1802,7 +1860,8 @@ $("vmSaveButton").addEventListener("click", async () => {
   }
 });
 window.addEventListener("popstate", async event => {
-  const state = event.state || {page:"homePage"};
+  const state = event.state;
+  if(!state?.haReporting) return;
   if(state.page === "reportPreviewPage") await previewReport(state.reportId, false);
   else if(state.page === "reportFormPage") await showReportForm(state.reportId || null, false);
   else if(state.page === "reportsPage") await showReports(false);
@@ -2582,7 +2641,7 @@ $("modalSave").addEventListener("click", async () => {
 });
 
 syncHomeAssistantTheme();
-history.replaceState({page:"homePage"}, "", "");
+history.replaceState({haReporting:true,page:"homePage"}, "", "");
 showHome(false);
 loadCategories();
 loadEntities();

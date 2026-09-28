@@ -30,17 +30,7 @@ class HaReportingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 await self.async_set_unique_id("ha_reporting_local")
                 self._abort_if_unique_id_configured()
-                return self.async_create_entry(
-                    title="HA Reporting",
-                    data={CONF_BASE_URL: base_url},
-                )
+                return self.async_create_entry(title="HA Reporting", data={CONF_BASE_URL: base_url})
 
-        schema = vol.Schema(
-            {
-                vol.Required(
-                    CONF_BASE_URL,
-                    default=(user_input or {}).get(CONF_BASE_URL, DEFAULT_BASE_URL),
-                ): str
-            }
-        )
+        schema = vol.Schema({vol.Required(CONF_BASE_URL, default=(user_input or {}).get(CONF_BASE_URL, DEFAULT_BASE_URL)): str})
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)

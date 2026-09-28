@@ -783,6 +783,11 @@ def _validated_period_spec(payload):
         spec["end"] = str(raw.get("end") or "").strip()
     else:
         spec["mode"] = mode
+        if period_type == "day":
+            boundary_hour, boundary_minute = PeriodEngine._parse_boundary_time(
+                raw.get("boundary_time", "00:00")
+            )
+            spec["boundary_time"] = f"{boundary_hour:02d}:{boundary_minute:02d}"
 
     # Resolve once at save time for validation only.
     PeriodEngine(home_assistant_timezone()).resolve(spec)

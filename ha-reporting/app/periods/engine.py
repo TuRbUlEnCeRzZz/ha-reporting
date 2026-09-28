@@ -68,7 +68,15 @@ class PeriodEngine:
         else:
             ref = ref.astimezone(self.tz)
 
-        current_start = self._floor(ref, period_type)
+        if period_type == "day":
+            boundary_hour, boundary_minute = self._parse_boundary_time(
+                spec.get("boundary_time", "00:00")
+            )
+            current_start = self._day_boundary_for_reference(
+                ref, boundary_hour, boundary_minute
+            )
+        else:
+            current_start = self._floor(ref, period_type)
 
         if mode == "current":
             start = current_start
@@ -87,6 +95,34 @@ class PeriodEngine:
             start=start,
             end=end,
             label=self._label(period_type, mode, start, end),
+        )
+
+    @staticmethod
+    def _parse_boundary_time(raw: Any) -> tuple[int, int]:
+        value = str(raw or "00:00").strip()
+        parts = value.split(":")
+        if len(parts) != 2 or not all(part.isdigit() for part in parts):
+            raise ValueError("Heure de début de journée invalide, format attendu HH:MM")
+        hour, minute = (int(part) for part in parts)
+        if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+            raise ValueError("Heure de début de journée invalide")
+        return hour, minute
+
+    def _local_wall_time(self, year: int, month: int, day: int, hour: int, minute: int) -> datetime:
+        naive = datetime(year, month, day, hour, minute)
+        local = naive.replace(tzinfo=self.tz)
+        roundtrip = datetime.fromtimestamp(local.timestamp(), self.tz).replace(tzinfo=None)
+        if roundtrip != naive:
+            raise ValueError("Heure de début de journée inexistante lors du passage à l'heure d'été")
+        return local
+
+    def _day_boundary_for_reference(self, ref: datetime, hour: int, minute: int) -> datetime:
+        today = self._local_wall_time(ref.year, ref.month, ref.day, hour, minute)
+        if ref.timestamp() >= today.timestamp():
+            return today
+        previous_date = ref.date() - timedelta(days=1)
+        return self._local_wall_time(
+            previous_date.year, previous_date.month, previous_date.day, hour, minute
         )
 
     def _resolve_custom(self, spec: dict[str, Any]) -> ResolvedPeriod:
@@ -148,7 +184,10 @@ class PeriodEngine:
 
     def _shift(self, dt: datetime, period_type: str, amount: int) -> datetime:
         if period_type == "day":
-            return dt + timedelta(days=amount)
+            target = dt.date() + timedelta(days=amount)
+            return self._local_wall_time(
+                target.year, target.month, target.day, dt.hour, dt.minute
+            ).replace(second=dt.second, microsecond=dt.microsecond)
 
         if period_type == "week":
             return dt + timedelta(weeks=amount)
@@ -270,7 +309,10 @@ class PeriodEngine:
         amount: int,
     ) -> datetime:
         if period_type == "day":
-            return dt + timedelta(days=amount)
+            target = dt.date() + timedelta(days=amount)
+            return self._local_wall_time(
+                target.year, target.month, target.day, dt.hour, dt.minute
+            ).replace(second=dt.second, microsecond=dt.microsecond)
         if period_type == "week":
             return dt + timedelta(weeks=amount)
         if period_type == "month":
@@ -308,12 +350,12 @@ class PeriodEngine:
             "year": "Année en cours",
         }
         previous_labels = {
-            "day": "Jour précédent",
-            "week": "Semaine précédente",
-            "month": "Mois précédent",
-            "quarter": "Trimestre précédent",
-            "semester": "Semestre précédent",
-            "year": "Année précédente",
+            "day": "Jour précédent complet",
+            "week": "Semaine précédente complète",
+            "month": "Mois précédent complet",
+            "quarter": "Trimestre précédent complet",
+            "semester": "Semestre précédent complet",
+            "year": "Année précédente complète",
         }
         label = current_labels[period_type] if mode == "current" else previous_labels[period_type]
         return f"{label} · {start:%d.%m.%Y %H:%M} → {end:%d.%m.%Y %H:%M}"

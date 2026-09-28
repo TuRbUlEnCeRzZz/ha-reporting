@@ -1,48 +1,16 @@
-# 0.1.0-beta.18 — Product polish
+## 0.1.0-beta.19
 
-- Replace the manual-run technical alert with a short, accessible toast and prevent repeated launch clicks.
-- Show real pipeline stage outcomes and elapsed duration on automation cards, including skipped, warning and failed stages.
-- Refresh cards and open history automatically; pause while hidden and retry after network interruptions without resubmitting a job.
-- Preserve terminal stage outcomes in existing automation storage. Keep beta.17 API statuses, retry rules and calculation behavior.
-- Add matching Home Assistant icon/logo, interface icon, favicon and editable SVG sources.
-- Show report names and move card error diagnostics behind expandable details.
-- Add an English README covering installation, AI Tasks, Paperless, privacy, experimental status and irregular/non-guaranteed maintenance with substantial ChatGPT assistance.
-- No EMHASS-specific development and no PDF template redesign.
+- Remplace la navigation principale par cinq onglets persistants : Catalogues, Rapports, Documents, Automatisations et Paramètres.
+- N’empile plus les sections principales dans l’historique du navigateur ; le bouton Retour devient contextuel aux écrans de détail.
+- Simplifie l’en-tête à `HA Reporting` et au numéro de version.
+- Corrige les accords : Jour/Mois/Trimestre/Semestre précédent complet, Semaine/Année précédente complète.
+- Remplace les badges techniques `N-1…N-x` par des libellés lisibles.
+- Ajoute `period.boundary_time` pour définir le début d’une journée métier (par exemple `05:30`).
+- Conserve `00:00` par défaut pour tous les rapports existants.
+- Préserve l’heure locale lors des décalages quotidiens et des comparaisons autour des changements DST.
 
-See VALIDATION-beta18.md for checks and remaining on-device validation.
+## 0.1.0-beta.13
 
-## 0.1.0-beta.17
-
-- Ajoute un historique persistant borné aux 50 dernières exécutions par automatisation.
-- Affiche dernier/prochain lancement, durée, déclencheur, PDF, export Paperless, avertissements et erreurs dans l’onglet **Automatisations**.
-- Ajoute une vue **Historique** par automatisation et l’endpoint `GET /api/scheduled-automation/{id}/history`.
-- Ajoute un retry contrôlé et configurable pour les échecs globaux du pipeline, sans relancer les rapports terminés avec avertissements.
-- Détecte les jobs interrompus par un redémarrage de l’add-on et les marque explicitement `interrupted`, avec retry éventuel.
-- Renforce la prévention des doubles lancements : réservation du créneau planifié et déduplication indépendante du type de déclenchement.
-- Force la saisie des heures en format 24 h `HH:MM` tout en conservant le fuseau horaire Home Assistant.
-- Le Companion reste facultatif et compatible ; aucune dépendance supplémentaire n’est ajoutée.
-
-## 0.1.0-beta.16
-
-- Add a persistent internal scheduler and an **Automatisations** page in HA Reporting.
-- Schedule hourly, daily, weekly, monthly or yearly report pipelines in the Home Assistant timezone.
-- Configure per-schedule AI inheritance/override, native PDF generation, theme and export destinations.
-- Add optional persistent Home Assistant notifications containing the completed AI analysis.
-- Persist schedule configuration and last-run metadata under add-on storage.
-- Prevent duplicate execution of the same schedule slot and reuse the existing asynchronous job engine.
-- Keep the beta.15 Companion integration optional rather than required for scheduled reporting.
-
-# 0.1.0-beta.15
-
-- Add Home Assistant completion events for automation jobs: `ha_reporting_report_started`, `ha_reporting_report_completed`, `ha_reporting_report_failed`.
-- Expose compact AI analysis text, document metadata, export results and duration in terminal events and job results.
-- Add the companion Home Assistant custom integration with native `ha_reporting.run_report` action and optional response data containing the `job_id`.
-- Keep report execution fully asynchronous; event delivery failures never invalidate a completed local report.
-
-## 0.1.0-beta.14
-
-- Corrige la sérialisation publique des jobs asynchrones : les objets runtime privés (notamment `threading.Thread`) sont retirés avant copie profonde, ce qui évite l'erreur `cannot pickle '_contextvars.Context' object`.
-- Conserve l’API d’automatisation asynchrone introduite dans la beta.13 et son pipeline complet calcul → IA → PDF → exports.
 - Ajoute une API d’automatisation asynchrone pour lancer le pipeline complet d’un rapport sans bloquer la requête HTTP.
 - `POST /api/automation/report-jobs` accepte `report_id`, `ai_analysis`, `generate_pdf`, `theme` et `destinations`.
 - Ajoute le suivi par `job_id` avec les états `queued`, `running`, `data_complete`, `ai_running`, `pdf_generating`, `exporting`, `completed`, `completed_with_errors` et `error`.

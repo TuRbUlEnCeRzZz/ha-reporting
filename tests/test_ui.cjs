@@ -5,7 +5,7 @@ const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../ha-reporting/app/app.js'), 'utf8');
 const sandbox = {};
 vm.createContext(sandbox);
-for (const name of ['signedValue','esc','formatSeriesNumber','localDateTime','qualityBadge','metricCardData','reportSourceCardData','renderExecutedSource','comparisonStatusLabel','comparisonSourceCard','renderAiAnalysis']) {
+for (const name of ['signedValue','esc','formatSeriesNumber','localDateTime','qualityBadge','metricCardData','reportSourceCardData','renderExecutedSource','comparisonStatusLabel','comparisonSourceCard','renderAiAnalysis','periodTypeLabel','periodModeLabel','comparisonCountLabel']) {
   const match = source.match(new RegExp(`^function ${name}\\([^]*?^}`, 'm'));
   assert.ok(match, name);
   vm.runInContext(match[0], sandbox);
@@ -53,11 +53,18 @@ check(() => assert.match(source, /consume_folder/));
 check(() => assert.match(source, /Tester le dossier consume/));
 check(() => assert.match(source, /\/export\/\$\{encodeURIComponent\(providerId\)\}/));
 check(() => assert.match(source, /Réessayer \$\{provider\.name\}/));
-check(() => assert.match(source, /function showAutomations\(/));
-check(() => assert.match(source, /api\/scheduled-automations/));
-check(() => assert.match(source, /function saveScheduledAutomation\(/));
-check(() => assert.match(source, /function runScheduledAutomationNow\(/));
-check(() => assert.match(source, /automationPersistentNotification/));
-check(() => assert.match(source, /IA selon le rapport/));
 
+check(() => assert.equal(sandbox.periodModeLabel('day','previous'),'précédent complet'));
+check(() => assert.equal(sandbox.periodModeLabel('month','previous'),'précédent complet'));
+check(() => assert.equal(sandbox.periodModeLabel('week','previous'),'précédente complète'));
+check(() => assert.equal(sandbox.periodModeLabel('year','previous'),'précédente complète'));
+check(() => assert.equal(sandbox.comparisonCountLabel(1,'period'),'1 période précédente'));
+check(() => assert.equal(sandbox.comparisonCountLabel(2,'period'),'2 périodes précédentes'));
+check(() => assert.equal(sandbox.comparisonCountLabel(1,'year'),'1 année précédente'));
+check(() => assert.match(source, /const PRIMARY_PAGES = new Set/));
+check(() => assert.match(source, /history\.replaceState\(\{haReporting:true,page/));
+check(() => assert.doesNotMatch(source, /history\.pushState/));
+check(() => assert.match(source, /function showParentPage\(/));
+check(() => assert.match(source, /reportDayBoundary/));
+check(() => assert.doesNotMatch(source, /N-1…N-\$\{comparisons\.previous_periods\} période\(s\)/));
 console.log(`${checks} JavaScript UI checks passed`);

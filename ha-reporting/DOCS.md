@@ -1,9 +1,22 @@
-# HA Reporting — 0.1.0-beta.14
+# Nouveautés beta.19
 
-Bêta 0.1.0-beta.14 pour Home Assistant OS, notamment sur Raspberry Pi 4 (aarch64).
+Pour les rapports quotidiens, `period.boundary_time` permet de définir une journée métier. Exemple :
+
+```yaml
+period:
+  type: day
+  mode: previous
+  boundary_time: "05:30"
+```
+
+Sans ce champ, la journée commence à `00:00` comme dans les versions précédentes. La navigation principale utilise désormais des onglets persistants.
+
+# HA Reporting — 0.1.0-beta.13
+
+Bêta 0.1.0-beta.13 pour Home Assistant OS, notamment sur Raspberry Pi 4 (aarch64).
 Le moteur statistique, les comparaisons N/N-x, la vérification runtime et l'analyse IA restent inchangés. Beta.13 ajoute l'orchestration asynchrone du pipeline complet.
 
-## API d’automatisation beta.14
+## API d’automatisation beta.13
 
 HA Reporting peut désormais lancer un rapport complet via une requête courte et retourner immédiatement un `job_id`. Le travail se poursuit côté add-on : calcul, analyse IA éventuelle, PDF natif, stockage local et exports.
 
@@ -141,7 +154,17 @@ restent disponibles. Les règles de comparaison sont conservées.
 
 ## Installation locale
 
-Voir le [README anglais](README.md#installation-on-home-assistant-os) pour l'installation et la mise à jour beta.18. Copier le dossier de l'archive contenant `config.yaml` et `Dockerfile` vers `/addons/ha-reporting`, en conservant la même installation et son stockage.
+1. Décompresser l'archive. Elle contient un dossier de dépôt `ha-reporting`.
+2. Copier son sous-dossier `ha-reporting` (celui qui contient `config.yaml` et
+   `Dockerfile`) vers `/addons/ha-reporting` sur Home Assistant OS.
+3. Actualiser le magasin des add-ons, puis installer ou reconstruire l'add-on
+   local HA Reporting selon le mode d'installation existant.
+4. Vérifier la version 0.1.0-beta.13 dans les journaux et relancer les rapports.
+
+Ne pas copier le dossier de dépôt complet à la place du dossier de l'add-on.
+Pour une installation issue d'un dépôt Git, mettre à jour les fichiers du même
+dépôt plutôt que créer une seconde installation locale avec un stockage distinct.
+L'archive contient les sources à construire par Supervisor, pas une image OCI.
 
 ## Références techniques
 
@@ -235,35 +258,3 @@ L’export Paperless est manuel dans cette version. Chaque document local peut �
 Le modèle de nom Paperless est optionnel. Vide, Paperless reçoit le même nom que le PDF local. Lorsqu’un modèle est défini, les mêmes variables que pour le nom local sont disponibles, ce qui permet de préparer des workflows basés sur le nom du document.
 
 Beta.12 n’ajoute pas encore de planification d’export, de retry automatique ni de rétention automatique.
-
-
-### beta.15 — intégration compagnon et événements Home Assistant
-
-L’API asynchrone de beta.14 reste la source de vérité. Beta.15 ajoute des événements Home Assistant compacts aux transitions principales du pipeline et fournit une intégration compagnon (`custom_components/ha_reporting`) qui expose l’action native `ha_reporting.run_report`. L’action démarre le job et retourne immédiatement ; les automatisations réagissent ensuite à `ha_reporting_report_completed` ou `ha_reporting_report_failed`.
-
-## Automatisations internes (beta.16)
-
-L’onglet **Automatisations** permet de planifier le pipeline complet sans YAML Home Assistant ni Companion :
-
-`rapport → IA → PDF → Documents → exports → notification`
-
-Le fuseau horaire est lu depuis Home Assistant. Les définitions sont persistées dans `/config/automations.json` (stockage `addon_config`).
-
-L’option Analyse IA possède trois états : suivre la configuration du rapport, forcer activée, forcer désactivée. La notification persistante réutilise le texte final de l’analyse IA lorsqu’il est disponible.
-
-Le bouton **Exécuter maintenant** utilise le même moteur de jobs asynchrones que l’API externe et n’attend donc pas la fin de l’analyse IA dans la requête HTTP.
-
-
-## Fiabilité des automatisations (beta.17)
-
-Chaque automatisation conserve les 50 dernières exécutions avec statut, déclencheur, durée, erreurs, avertissements, PDF et résultat des exports. L’interface affiche également le prochain lancement et une éventuelle tentative de retry.
-
-Le retry est configurable par automatisation (`enabled`, `max_retries`, `delay_minutes`) et ne s’applique qu’aux échecs globaux (`error`). Un job `completed_with_errors` n’est pas relancé afin d’éviter de dupliquer un PDF ou un export déjà réussi. Après redémarrage de l’add-on, un job qui était encore actif est marqué `interrupted` et peut être replanifié selon la même politique de retry.
-
-Les heures sont saisies en format 24 h `HH:MM`. Le scheduler continue d’utiliser le fuseau renvoyé par Home Assistant, y compris pour les changements heure d’été/hiver.
-
-## Beta.18 — Suivi visuel
-
-Les cartes affichent les étapes réellement exécutées : collecte/statistiques (réalisées ensemble par appareil), IA, PDF, export et notification. Une étape désactivée ou en erreur n'est pas présentée comme réussie. Le rafraîchissement est de 3 secondes pendant une exécution, 15 secondes au repos, suspendu lorsque la page est masquée. Les détails terminaux sont persistés avec les automatisations. Les statuts API beta.17 restent inchangés ; `steps` dans les jobs et `progress` dans la liste des automatisations sont des ajouts.
-
-L'installation et sa progression restent gérées par Home Assistant Supervisor.

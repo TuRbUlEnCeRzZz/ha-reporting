@@ -18,9 +18,17 @@
   </button>
   <div>
     <h1>HA Reporting</h1>
-    <div class="subtitle">0.1.0-beta.18 · Rapports, analyses et automatisations</div>
+    <div class="subtitle">0.1.0-beta.19</div>
   </div>
 </header>
+
+<nav id="primaryTabs" class="primaryTabs" aria-label="Navigation principale">
+  <button id="tabCatalogues" class="primaryTab" type="button">Catalogues</button>
+  <button id="tabReports" class="primaryTab" type="button">Rapports</button>
+  <button id="tabDocuments" class="primaryTab" type="button">Documents</button>
+  <button id="tabAutomations" class="primaryTab" type="button">Automatisations</button>
+  <button id="tabSettings" class="primaryTab" type="button">Paramètres</button>
+</nav>
 
 <main>
   <section id="homePage">
@@ -30,9 +38,6 @@
         <p class="muted">Les catalogues regroupent des appareils et leurs sources de données.</p>
       </div>
       <div class="toolbarButtons">
-        <button id="reportsButton">Rapports</button>
-        <button id="automationsButton">Automatisations</button>
-        <button id="providersButton">Sources de données</button>
         <button class="primary" id="newCatalogButton">+ Nouveau catalogue</button>
       </div>
     </div>
@@ -46,7 +51,6 @@
         <p class="muted">Les rapports associent un ou plusieurs catalogues à une définition de période.</p>
       </div>
       <div class="toolbarButtons">
-        <button id="documentsButton">Documents</button>
         <button class="primary" id="newReportButton">+ Nouveau rapport</button>
       </div>
     </div>
@@ -282,6 +286,13 @@
         </label>
       </div>
 
+      <div id="reportDayBoundaryFields" class="grid two hidden">
+        <label>Début de la journée
+          <input id="reportDayBoundary" type="time" step="60" value="00:00">
+          <span class="fieldHelp">Heure locale Home Assistant. Par défaut : 00:00.</span>
+        </label>
+      </div>
+
       <div id="customPeriodFields" class="grid two hidden">
         <label>Début
           <input id="reportCustomStart" type="datetime-local">
@@ -411,7 +422,9 @@
 
   <section id="providersPage" class="hidden">
     <div class="card">
-      <h2>Sources de données</h2>
+      <h2>Paramètres</h2>
+      <p class="muted">Configuration globale de HA Reporting.</p>
+      <h3>Sources de données</h3>
       <p class="muted">Les providers fournissent les séries temporelles au moteur de reporting. Les catalogues restent indépendants de leur implémentation.</p>
 
       <div class="providerCard">

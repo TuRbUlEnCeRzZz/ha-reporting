@@ -1,20 +1,8 @@
 {
   "title": "HA Reporting",
   "config": {
-    "step": {
-      "user": {
-        "title": "Connecter HA Reporting",
-        "description": "Adresse locale de l'API de l'add-on HA Reporting.",
-        "data": {
-          "base_url": "URL locale de HA Reporting"
-        }
-      }
-    },
-    "error": {
-      "cannot_connect": "Impossible de joindre HA Reporting. Vérifiez l'URL et que l'add-on est démarré."
-    },
-    "abort": {
-      "already_configured": "HA Reporting est déjà configuré."
-    }
+    "step": {"user": {"title": "Connecter HA Reporting", "description": "Adresse locale de l'API de l'add-on HA Reporting.", "data": {"base_url": "URL locale de HA Reporting"}}},
+    "error": {"cannot_connect": "Impossible de joindre HA Reporting. Vérifiez l'URL et que l'add-on est démarré."},
+    "abort": {"already_configured": "HA Reporting est déjà configuré."}
   }
 }

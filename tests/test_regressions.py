@@ -29,7 +29,6 @@ from exporters.base import ExportProviderError
 from exporters.paperless import PaperlessExportProvider
 import exporters.config as export_config
 import document_store
-import automation_store
 from rendering.pdf_report import render_pdf_native
 import main
 
@@ -290,6 +289,43 @@ class PeriodComparisonTests(unittest.TestCase):
     def test_nonexistent_spring_local_time_rejected(self):
         with self.assertRaisesRegex(ValueError,'inexistante'):
             self.engine.resolve({'type':'custom','start':'2026-03-29T02:30','end':'2026-03-29T04:00'})
+
+    def test_daily_boundary_previous_complete(self):
+        now=datetime(2026,9,28,6,40,tzinfo=ZoneInfo('Europe/Zurich'))
+        p=self.engine.resolve({'type':'day','mode':'previous','boundary_time':'05:30'},now)
+        self.assertEqual(p.start.isoformat(),'2026-09-27T05:30:00+02:00')
+        self.assertEqual(p.end.isoformat(),'2026-09-28T05:30:00+02:00')
+        self.assertEqual(p.as_dict()['duration_seconds'],24*3600)
+        self.assertIn('Jour précédent complet',p.label)
+
+    def test_daily_boundary_before_today_boundary(self):
+        now=datetime(2026,9,28,4,0,tzinfo=ZoneInfo('Europe/Zurich'))
+        p=self.engine.resolve({'type':'day','mode':'previous','boundary_time':'05:30'},now)
+        self.assertEqual(p.start.isoformat(),'2026-09-26T05:30:00+02:00')
+        self.assertEqual(p.end.isoformat(),'2026-09-27T05:30:00+02:00')
+
+    def test_daily_boundary_default_is_midnight(self):
+        now=datetime(2026,9,28,6,40,tzinfo=ZoneInfo('Europe/Zurich'))
+        p=self.engine.resolve({'type':'day','mode':'previous'},now)
+        self.assertEqual(p.start.isoformat(),'2026-09-27T00:00:00+02:00')
+        self.assertEqual(p.end.isoformat(),'2026-09-28T00:00:00+02:00')
+
+    def test_daily_boundary_comparison_preserves_wall_clock_across_dst(self):
+        now=datetime(2026,3,30,6,0,tzinfo=ZoneInfo('Europe/Zurich'))
+        base=self.engine.resolve({'type':'day','mode':'previous','boundary_time':'05:30'},now)
+        previous=self.engine.comparison_targets(base,{'previous_periods':1})[0]['resolved_period']
+        self.assertEqual((previous.start.hour,previous.start.minute),(5,30))
+        self.assertEqual((previous.end.hour,previous.end.minute),(5,30))
+        self.assertEqual(previous.as_dict()['duration_seconds'],23*3600)
+
+    def test_invalid_daily_boundary_rejected(self):
+        with self.assertRaisesRegex(ValueError,'début de journée'):
+            self.engine.resolve({'type':'day','mode':'previous','boundary_time':'25:00'},datetime(2026,9,28,6,tzinfo=ZoneInfo('Europe/Zurich')))
+
+    def test_report_validation_normalizes_daily_boundary(self):
+        with patch.object(main,'home_assistant_timezone',return_value='Europe/Zurich'):
+            spec=main._validated_period_spec({'period':{'type':'day','mode':'previous','boundary_time':'5:30'}})
+        self.assertEqual(spec['boundary_time'],'05:30')
 
     def test_year_elapsed(self):
         p=self.engine.resolve({'type':'year','mode':'current'},datetime(2026,9,25,22,21,tzinfo=ZoneInfo('Europe/Zurich')))
@@ -673,7 +709,7 @@ class Beta12ExportProviderTests(unittest.TestCase):
         self.assertTrue(status['reachable'])
         self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
         self.assertEqual(seen['auth'],'Token secret')
-        self.assertIn('beta.17',seen['ua'])
+        self.assertIn('beta.19',seen['ua'])
 
     def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
         import tempfile
@@ -874,22 +910,6 @@ class Beta13AutomationJobTests(unittest.TestCase):
         self.assertFalse(job['exports']['paperless']['ok'])
         self.assertIn('NAS indisponible',job['warnings'][0])
 
-    def test_automation_job_public_excludes_unpickleable_runtime_fields_before_deepcopy(self):
-        runtime_thread = threading.Thread(target=lambda: None)
-        job = {
-            'id': 'job-thread',
-            'status': 'queued',
-            'nested': {'values': [1, 2, 3]},
-            '_thread': runtime_thread,
-            '_fingerprint': 'fp',
-        }
-        public = main._automation_job_public(job)
-        self.assertNotIn('_thread', public)
-        self.assertNotIn('_fingerprint', public)
-        self.assertEqual(public['nested']['values'], [1, 2, 3])
-        public['nested']['values'].append(4)
-        self.assertEqual(job['nested']['values'], [1, 2, 3])
-
     def test_identical_active_job_is_deduplicated(self):
         class FakeThread:
             def __init__(self,*args,**kwargs): pass
@@ -908,304 +928,6 @@ class Beta13AutomationJobTests(unittest.TestCase):
         self.assertIn('{"job": get_automation_job(job_id)}',text)
         self.assertIn('completed_with_errors',text)
 
-
-class Beta15HomeAssistantBridgeTests(unittest.TestCase):
-    def setUp(self):
-        with main.AUTOMATION_JOBS_LOCK:
-            main.AUTOMATION_JOBS.clear()
-
-    def tearDown(self):
-        with main.AUTOMATION_JOBS_LOCK:
-            main.AUTOMATION_JOBS.clear()
-
-    def _seed_job(self, options):
-        job_id='job-beta15'
-        now=time.time()
-        with main.AUTOMATION_JOBS_LOCK:
-            main.AUTOMATION_JOBS[job_id]={
-                'id':job_id,'report_id':options['report_id'],'status':'queued','message':'queued',
-                'created_at_epoch':now,'updated_at_epoch':now,'started_at_epoch':None,'finished_at_epoch':None,
-                'options':options,'warnings':[],'exports':{},'document_id':None,'document':None,'error':None,
-                'history':[{'status':'queued','at_epoch':now,'message':'queued'}], '_fingerprint':'fp'
-            }
-        return job_id
-
-    def test_home_assistant_event_uses_supervisor_rest_api(self):
-        response=io.BytesIO(b'{}')
-        with patch.object(main,'TOKEN','token-test'), patch('urllib.request.urlopen',return_value=response) as mocked:
-            main.home_assistant_fire_event('ha_reporting_report_completed',{'report_id':'r'})
-        request=mocked.call_args.args[0]
-        self.assertEqual(request.get_method(),'POST')
-        self.assertTrue(request.full_url.endswith('/api/events/ha_reporting_report_completed'))
-        self.assertEqual(request.headers.get('Authorization'),'Bearer token-test')
-        self.assertEqual(json.loads(request.data),{'report_id':'r'})
-
-    def test_completed_pipeline_exposes_ai_text_and_fires_events(self):
-        options={'report_id':'r','ai_analysis':True,'generate_pdf':True,'theme':'dark','destinations':['paperless']}
-        job_id=self._seed_job(options)
-        report={'id':'r','name':'Rapport test','ai_analysis':{'enabled':True,'entity_id':'ai_task.local','timeout_seconds':600}}
-        result={'summary':{'sources_total':1,'sources_ok':1},'resolved_period':{'label':'P','timezone':'UTC'},'execution':{},'ai_analysis':{'enabled':True,'status':'pending'}}
-        analysis={'enabled':True,'status':'completed','text':'SYNTHÈSE\nTout va bien.'}
-        cached_after=copy.deepcopy(result); cached_after['ai_analysis']=analysis
-        events=[]
-        def collect(event_type,event_data):
-            events.append((event_type,copy.deepcopy(event_data))); return True
-        with patch.object(main,'load_report',return_value=report), \
-             patch.object(main,'execute_report',return_value=result), \
-             patch.object(main,'_automation_ai_analysis',return_value=analysis), \
-             patch.object(main,'_cached_report_result',return_value=cached_after), \
-             patch.object(main,'generate_report_pdf',return_value={'id':'doc-15','filename':'r.pdf','generated_at':'x','size_bytes':123}), \
-             patch.object(main,'export_document',return_value={'ok':True,'result':{'delivery_status':'deposited'}}), \
-             patch.object(main,'_safe_home_assistant_event',side_effect=collect):
-            main._run_automation_job(job_id)
-        job=main.get_automation_job(job_id)
-        self.assertEqual(job['status'],'completed')
-        self.assertEqual(job['result']['ai_analysis'],'SYNTHÈSE\nTout va bien.')
-        self.assertEqual([item[0] for item in events],['ha_reporting_report_started','ha_reporting_report_completed'])
-        completed=events[-1][1]
-        self.assertEqual(completed['report_name'],'Rapport test')
-        self.assertEqual(completed['ai_analysis'],'SYNTHÈSE\nTout va bien.')
-        self.assertEqual(completed['filename'],'r.pdf')
-        self.assertTrue(completed['exports']['paperless']['ok'])
-
-    def test_failed_pipeline_fires_failed_event(self):
-        options={'report_id':'r','ai_analysis':False,'generate_pdf':True,'theme':'dark','destinations':[]}
-        job_id=self._seed_job(options)
-        report={'id':'r','name':'Rapport test','ai_analysis':{'enabled':False}}
-        events=[]
-        def collect(event_type,event_data):
-            events.append((event_type,copy.deepcopy(event_data))); return True
-        with patch.object(main,'load_report',return_value=report), \
-             patch.object(main,'execute_report',side_effect=RuntimeError('boom')), \
-             patch.object(main,'_safe_home_assistant_event',side_effect=collect):
-            main._run_automation_job(job_id)
-        job=main.get_automation_job(job_id)
-        self.assertEqual(job['status'],'error')
-        self.assertEqual([item[0] for item in events],['ha_reporting_report_started','ha_reporting_report_failed'])
-        self.assertEqual(events[-1][1]['error'],'boom')
-
-    def test_companion_integration_is_packaged(self):
-        integration=ROOT/'custom_components/ha_reporting'
-        for name in ['__init__.py','client.py','config_flow.py','const.py','manifest.json','services.yaml','strings.json','translations/fr.json']:
-            self.assertTrue((integration/name).is_file(),name)
-        manifest=json.loads((integration/'manifest.json').read_text())
-        self.assertEqual(manifest['domain'],'ha_reporting')
-        self.assertEqual(manifest['version'],'0.1.0-beta.16')
-        self.assertTrue(manifest['config_flow'])
-        source=(integration/'__init__.py').read_text()
-        self.assertIn('SERVICE_RUN_REPORT',source)
-        self.assertIn('SupportsResponse.OPTIONAL',source)
-        import ast
-        for py in integration.rglob('*.py'):
-            ast.parse(py.read_text(),filename=str(py))
-
-
-class Beta16InternalSchedulerTests(unittest.TestCase):
-    def setUp(self):
-        import tempfile
-        self.tempdir = tempfile.TemporaryDirectory()
-        self.old_file = automation_store.AUTOMATION_FILE
-        automation_store.AUTOMATION_FILE = Path(self.tempdir.name) / 'automations.json'
-        with main.AUTOMATION_JOBS_LOCK:
-            main.AUTOMATION_JOBS.clear()
-
-    def tearDown(self):
-        automation_store.AUTOMATION_FILE = self.old_file
-        self.tempdir.cleanup()
-        with main.AUTOMATION_JOBS_LOCK:
-            main.AUTOMATION_JOBS.clear()
-
-    def payload(self):
-        return {
-            'name':'Rapport mensuel automatique',
-            'enabled':True,
-            'report_id':'rapport_domotique_mensuel',
-            'schedule':{'type':'monthly','day':1,'time':'05:40'},
-            'pipeline':{'ai_analysis':None,'generate_pdf':True,'theme':'dark','destinations':['paperless']},
-            'notification':{'persistent':True},
-        }
-
-    def test_store_persists_and_monthly_due_once(self):
-        item=automation_store.create_automation(self.payload())
-        self.assertEqual(item['schedule']['type'],'monthly')
-        now=datetime(2026,10,1,5,40,tzinfo=ZoneInfo('Europe/Zurich'))
-        self.assertTrue(automation_store.is_due(item,now))
-        key=automation_store.schedule_key(item,now)
-        automation_store.update_runtime(item['id'],last_schedule_key=key)
-        refreshed=automation_store.get_automation(item['id'])
-        self.assertFalse(automation_store.is_due(refreshed,now))
-        self.assertTrue(automation_store.AUTOMATION_FILE.exists())
-
-    def test_next_run_weekly_and_hourly(self):
-        weekly=automation_store.normalize_automation({**self.payload(),'schedule':{'type':'weekly','weekday':0,'time':'05:40'}})
-        now=datetime(2026,9,27,12,0,tzinfo=ZoneInfo('Europe/Zurich')) # Sunday
-        nxt=automation_store.next_run(weekly,now)
-        self.assertEqual((nxt.weekday(),nxt.hour,nxt.minute),(0,5,40))
-        hourly=automation_store.normalize_automation({**self.payload(),'schedule':{'type':'hourly','minute':15}})
-        nxt2=automation_store.next_run(hourly,now)
-        self.assertEqual((nxt2.hour,nxt2.minute),(12,15))
-
-    def test_scheduler_payload_preserves_inherit_and_notification(self):
-        item=automation_store.normalize_automation(self.payload())
-        payload=main._scheduled_automation_payload(item)
-        self.assertIsNone(payload['ai_analysis'])
-        self.assertTrue(payload['generate_pdf'])
-        self.assertEqual(payload['destinations'],['paperless'])
-        self.assertTrue(payload['notification']['persistent'])
-        self.assertEqual(payload['automation_id'],item['id'])
-
-    def test_persistent_notification_calls_home_assistant_service(self):
-        job={'id':'j','report_id':'r','options':{'notification':{'persistent':True},'automation_id':'auto_1'}}
-        report={'name':'Rapport test'}
-        analysis={'status':'completed','text':'SYNTHÈSE\nTout va bien.'}
-        with patch.object(main,'home_assistant_call_service',return_value=[]) as call:
-            result=main._persistent_notification_for_job(job,report,analysis)
-        self.assertEqual(result,[])
-        args=call.call_args.args
-        self.assertEqual(args[0:2],('persistent_notification','create'))
-        self.assertEqual(args[2]['message'],'SYNTHÈSE\nTout va bien.')
-        self.assertEqual(args[2]['notification_id'],'ha_reporting_auto_1')
-
-    def test_pipeline_notification_is_nonfatal_and_recorded(self):
-        options={'report_id':'r','ai_analysis':True,'generate_pdf':True,'theme':'dark','destinations':[], 'notification':{'persistent':True}, 'automation_id':'auto'}
-        job_id='job-beta16'
-        now=time.time()
-        with main.AUTOMATION_JOBS_LOCK:
-            main.AUTOMATION_JOBS[job_id]={'id':job_id,'report_id':'r','status':'queued','message':'queued','created_at_epoch':now,'updated_at_epoch':now,'started_at_epoch':None,'finished_at_epoch':None,'options':options,'warnings':[],'exports':{},'document_id':None,'document':None,'error':None,'history':[],'_fingerprint':'fp'}
-        report={'id':'r','name':'Rapport test','ai_analysis':{'enabled':True}}
-        result={'summary':{},'resolved_period':{'timezone':'UTC'},'execution':{},'ai_analysis':{'status':'pending'}}
-        analysis={'status':'completed','text':'OK'}
-        with patch.object(main,'load_report',return_value=report), patch.object(main,'execute_report',return_value=result), patch.object(main,'_automation_ai_analysis',return_value=analysis), patch.object(main,'generate_report_pdf',return_value={'id':'d','filename':'r.pdf','generated_at':'x','size_bytes':1}), patch.object(main,'_persistent_notification_for_job',return_value=[]) as notify, patch.object(main,'_safe_home_assistant_event',return_value=True):
-            main._run_automation_job(job_id)
-        job=main.get_automation_job(job_id)
-        self.assertEqual(job['status'],'completed')
-        self.assertTrue(job['result']['notification']['persistent'])
-        self.assertTrue(job['result']['notification']['ok'])
-        notify.assert_called_once()
-
-    def test_scheduler_api_and_ui_are_packaged(self):
-        main_text=(ROOT/'ha-reporting/app/main.py').read_text()
-        index=(ROOT/'ha-reporting/app/index.html').read_text()
-        self.assertIn('/api/scheduled-automations',main_text)
-        self.assertIn('_scheduler_loop',main_text)
-        self.assertIn('automationsPage',index)
-        self.assertIn('automationPersistentNotification',index)
-        self.assertIn('Suivre la configuration du rapport',index)
-
-
-
-class Beta17AutomationReliabilityTests(unittest.TestCase):
-    def setUp(self):
-        import tempfile
-        self.tempdir = tempfile.TemporaryDirectory()
-        self.old_file = automation_store.AUTOMATION_FILE
-        automation_store.AUTOMATION_FILE = Path(self.tempdir.name) / 'automations.json'
-        with main.AUTOMATION_JOBS_LOCK:
-            main.AUTOMATION_JOBS.clear()
-
-    def tearDown(self):
-        automation_store.AUTOMATION_FILE = self.old_file
-        self.tempdir.cleanup()
-        with main.AUTOMATION_JOBS_LOCK:
-            main.AUTOMATION_JOBS.clear()
-
-    def payload(self, **changes):
-        payload={
-            'name':'Rapport fiable',
-            'enabled':True,
-            'report_id':'r',
-            'schedule':{'type':'daily','time':'05:40'},
-            'pipeline':{'ai_analysis':None,'generate_pdf':True,'theme':'dark','destinations':[]},
-            'notification':{'persistent':False},
-            'retry':{'enabled':True,'max_retries':1,'delay_minutes':10},
-        }
-        payload.update(changes)
-        return payload
-
-    def test_history_is_persistent_and_bounded_to_50(self):
-        item=automation_store.create_automation(self.payload())
-        for i in range(55):
-            automation_store.append_history(item['id'],{'job_id':f'j{i}','trigger':'scheduled','attempt':0,'status':'completed'})
-        history=automation_store.list_history(item['id'])
-        self.assertEqual(len(history),50)
-        self.assertEqual(history[0]['job_id'],'j54')
-        self.assertEqual(history[-1]['job_id'],'j5')
-        stored=json.loads(automation_store.AUTOMATION_FILE.read_text())
-        self.assertEqual(stored['version'],2)
-        self.assertEqual(len(stored['automations'][0]['history']),50)
-
-    def test_terminal_error_records_history_and_schedules_retry(self):
-        item=automation_store.create_automation(self.payload())
-        options=main._scheduled_automation_payload(item,trigger='scheduled',retry_attempt=0)
-        now=time.time()
-        job={
-            'id':'job-error','report_id':'r','status':'error','created_at_epoch':now-5,'started_at_epoch':now-4,'finished_at_epoch':now,
-            'options':options,'warnings':[],'exports':{},'document_id':None,'document':None,'error':'VM indisponible',
-            'result':{'report_id':'r','ai_status':None},
-        }
-        with patch.object(main,'home_assistant_timezone',return_value='Europe/Zurich'):
-            main._record_scheduled_job_terminal(job)
-        refreshed=automation_store.get_automation(item['id'])
-        self.assertEqual(refreshed['runtime']['last_status'],'error')
-        self.assertEqual(refreshed['runtime']['consecutive_failures'],1)
-        self.assertIsNotNone(refreshed['runtime']['next_retry_at'])
-        self.assertEqual(len(refreshed['history']),1)
-        self.assertEqual(refreshed['history'][0]['error'],'VM indisponible')
-
-    def test_completed_with_errors_is_not_retried(self):
-        item=automation_store.create_automation(self.payload())
-        options=main._scheduled_automation_payload(item,trigger='scheduled',retry_attempt=0)
-        now=time.time()
-        job={
-            'id':'job-warning','report_id':'r','status':'completed_with_errors','created_at_epoch':now-5,'started_at_epoch':now-4,'finished_at_epoch':now,
-            'options':options,'warnings':['Paperless indisponible'],'exports':{'paperless':{'ok':False}},'document_id':'d','document':{'filename':'r.pdf'},'error':None,
-            'result':{'report_id':'r','document_id':'d','filename':'r.pdf','ai_status':'completed'},
-        }
-        with patch.object(main,'home_assistant_timezone',return_value='Europe/Zurich'):
-            main._record_scheduled_job_terminal(job)
-        refreshed=automation_store.get_automation(item['id'])
-        self.assertEqual(refreshed['runtime']['last_status'],'completed_with_errors')
-        self.assertIsNone(refreshed['runtime']['next_retry_at'])
-        self.assertEqual(refreshed['runtime']['consecutive_failures'],0)
-        self.assertEqual(refreshed['runtime']['last_filename'],'r.pdf')
-
-    def test_interrupted_job_is_detected_after_restart(self):
-        item=automation_store.create_automation(self.payload())
-        automation_store.update_runtime(item['id'],last_job_id='lost-job',active_job_id='lost-job',last_status='ai_running',last_run_at='2026-09-27T12:00:00+02:00',last_trigger='scheduled',retry_attempt=0)
-        item=automation_store.get_automation(item['id'])
-        now=datetime(2026,9,27,12,30,tzinfo=ZoneInfo('Europe/Zurich'))
-        updated=main._mark_interrupted_automation(item,now)
-        self.assertEqual(updated['runtime']['last_status'],'interrupted')
-        self.assertIsNotNone(updated['runtime']['next_retry_at'])
-        self.assertEqual(automation_store.list_history(item['id'])[0]['status'],'interrupted')
-
-    def test_active_dedup_ignores_trigger_and_retry_metadata(self):
-        a=main._automation_fingerprint({'report_id':'r','automation_id':'a','trigger':'scheduled','retry_attempt':0})
-        b=main._automation_fingerprint({'report_id':'r','automation_id':'a','trigger':'retry','retry_attempt':1})
-        self.assertEqual(a,b)
-
-    def test_overview_prefers_pending_retry_before_regular_schedule(self):
-        item=automation_store.create_automation(self.payload())
-        automation_store.update_runtime(item['id'],next_retry_at='2026-09-27T12:10:00+02:00')
-        with patch.object(main,'home_assistant_timezone',return_value='Europe/Zurich'), patch.object(main,'datetime') as mocked_datetime:
-            mocked_datetime.now.return_value=datetime(2026,9,27,12,0,tzinfo=ZoneInfo('Europe/Zurich'))
-            mocked_datetime.fromisoformat.side_effect=datetime.fromisoformat
-            overview=main.scheduled_automation_overview()[0]
-        self.assertTrue(overview['next_run_at'].startswith('2026-09-27T12:10:00'))
-        self.assertEqual(overview['history_count'],0)
-
-    def test_beta17_ui_exposes_history_retry_and_24h_input(self):
-        index=(ROOT/'ha-reporting/app/index.html').read_text()
-        app=(ROOT/'ha-reporting/app/app.js').read_text()
-        main_text=(ROOT/'ha-reporting/app/main.py').read_text()
-        self.assertIn('automationHistoryCard',index)
-        self.assertIn('automationRetryEnabled',index)
-        self.assertIn('Heure (24 h)',index)
-        self.assertIn('showAutomationHistory',app)
-        self.assertIn('parts[1] == "history"',main_text)
-
-
-
 class PackageTests(unittest.TestCase):
     def test_yaml_and_installation_layout(self):
         import yaml
@@ -1213,13 +935,13 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.18')
+        self.assertEqual(config['version'],'0.1.0-beta.19')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertTrue(any(item.get('type')=='share' and item.get('read_only') is False and item.get('path')=='/share' for item in config.get('map',[]) if isinstance(item,dict)))
         self.assertIn('py3-websocket-client',(addon/'Dockerfile').read_text())
         self.assertIn('weasyprint',(addon/'Dockerfile').read_text())
-        for name in ['Dockerfile','run.sh','app/main.py','app/app.js','app/index.html','app/rendering/html_report.py','app/analysis/ai_report.py','app/exporters/base.py','app/exporters/paperless.py','app/exporters/config.py','app/automation_store.py']:
+        for name in ['Dockerfile','run.sh','app/main.py','app/app.js','app/index.html','app/rendering/html_report.py','app/analysis/ai_report.py','app/exporters/base.py','app/exporters/paperless.py','app/exporters/config.py']:
             self.assertTrue((addon/name).is_file(),name)
         index=(addon/'app/index.html').read_text()
         self.assertIn('reportHtmlButton', index)

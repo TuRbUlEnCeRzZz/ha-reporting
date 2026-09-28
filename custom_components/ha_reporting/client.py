@@ -25,7 +25,7 @@ class HaReportingClient:
             ) as response:
                 response.raise_for_status()
                 payload = await response.json()
-        except Exception as exc:  # aiohttp exposes several transport subclasses
+        except Exception as exc:
             raise HaReportingApiError(str(exc)) from exc
         if not isinstance(payload, dict) or "jobs" not in payload:
             raise HaReportingApiError("Réponse inattendue de HA Reporting")

@@ -985,6 +985,27 @@ function renderComparisonTarget(target){
     </section>`;
 }
 
+function formatAiContextInfo(ai){
+  const input = (ai || {}).input || {};
+  const chars = Number(input.context_characters || 0);
+  if(!chars) return "";
+  const limit = Number(input.context_limit_characters || 60000);
+  const original = Number(input.context_original_characters || chars);
+  const omitted = Number(input.omitted_current_sources || 0) + Number(input.omitted_comparison_sources || 0);
+  const t = (id, fallback) => (typeof window !== "undefined" && window.hrT) ? window.hrT(id) : fallback;
+  const k = value => `${(Number(value || 0) / 1000).toFixed(1)} k`;
+  let text = `${t("report.ai_context", "Contexte IA")} : ${k(chars)} / ${k(limit)} ${t("report.ai_context_characters", "caractères")}`;
+  if(original > chars + 100){
+    text += ` · ${t("report.ai_context_compacted_from", "normalisé depuis")} ${k(original)}`;
+  }
+  if(input.context_lossless === true || input.context_mode === "lossless_normalized"){
+    text += ` · ${t("report.ai_context_no_omission", "aucune source omise")}`;
+  }else if(omitted > 0){
+    text += ` · ${omitted} ${t("report.ai_context_sources_omitted", "sources routinières omises")}`;
+  }
+  return text;
+}
+
 function renderAiAnalysis(result){
   const ai = result.ai_analysis || {};
   if(!ai.enabled) return "";
@@ -1003,6 +1024,7 @@ function renderAiAnalysis(result){
         </div>
         <div class="aiAnalysisText">${esc(ai.text || "")}</div>
         <div class="muted">${esc(entity)} · ${duration} s · aucune série brute transmise au modèle</div>
+        ${formatAiContextInfo(ai) ? `<div class="muted">${esc(formatAiContextInfo(ai))}</div>` : ""}
       </section>`;
   }
 

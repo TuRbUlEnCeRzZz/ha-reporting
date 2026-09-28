@@ -1,3 +1,14 @@
+## 0.1.0-beta.22
+
+- Add the `ha-reporting-ai-context-v3` lossless normalized semantic context for AI Task calls.
+- Replace repeated nested metadata with array-index registries and positional rows.
+- Preserve every current-period and comparison source, including partial-coverage entries; beta.22 no longer trims routine sources to meet the preferred target.
+- Keep calculated values, coverage, applicable density, warnings, comparison status/policy and reconstruction flags in the normalized AI contract.
+- Keep the 50,000-character preferred target and 60,000-character hard safety limit; contexts above the hard limit now fail explicitly rather than discarding data.
+- Record schema, lossless mode, final/original sizes and current/comparison source counts in AI result metadata.
+- Show the no-source-omitted diagnostic in the Ingress report card and generated HTML/PDF reports.
+- Keep raw VictoriaMetrics samples and previews excluded from AI input.
+
 ## 0.1.0-beta.21
 
 - Add the first HA Reporting internationalization layer with French and English interface support.

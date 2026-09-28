@@ -1,4 +1,4 @@
-/* HA Reporting i18n foundation (beta.21).
+/* HA Reporting i18n foundation (beta.22).
  *
  * The legacy beta.20 UI still contains French source strings in a number of
  * rendering functions.  beta.21 centralizes translations here and translates
@@ -76,6 +76,11 @@ const HR_I18N_MESSAGES = {
   "report.ai_preferred": {fr:"Entité AI Task préférée de Home Assistant", en:"Home Assistant preferred AI Task entity"},
   "report.ai_timeout": {fr:"Délai maximal de l'analyse IA", en:"Maximum AI analysis timeout"},
   "report.ai_mode_help": {fr:"Le mode de raisonnement est configuré sur l'entité AI Task ; HA Reporting ne le modifie pas à chaque appel.", en:"Reasoning mode is configured on the AI Task entity; HA Reporting does not change it for each call."},
+  "report.ai_context": {fr:"Contexte IA", en:"AI context"},
+  "report.ai_context_characters": {fr:"caractères", en:"characters"},
+  "report.ai_context_compacted_from": {fr:"normalisé depuis", en:"normalized from"},
+  "report.ai_context_sources_omitted": {fr:"sources routinières omises", en:"routine sources omitted"},
+  "report.ai_context_no_omission": {fr:"aucune source omise", en:"no source omitted"},
   "report.output": {fr:"Sortie du rapport", en:"Report output"},
   "report.output_help": {fr:"Le PDF natif est toujours généré et conservé localement. Le nom peut utiliser des variables pour préparer de futurs workflows d'export.", en:"The native PDF is always generated and stored locally. The filename can use variables for future export workflows."},
   "report.language": {fr:"Langue du rapport", en:"Report language"},

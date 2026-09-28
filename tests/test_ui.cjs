@@ -7,7 +7,7 @@ const i18nSource = fs.readFileSync(path.join(__dirname, '../ha-reporting/app/i18
 const indexSource = fs.readFileSync(path.join(__dirname, '../ha-reporting/app/index.html'), 'utf8');
 const sandbox = {};
 vm.createContext(sandbox);
-for (const name of ['signedValue','esc','formatSeriesNumber','localDateTime','qualityBadge','metricCardData','reportSourceCardData','renderExecutedSource','comparisonStatusLabel','comparisonSourceCard','renderAiAnalysis','periodTypeLabel','periodModeLabel','comparisonCountLabel']) {
+for (const name of ['signedValue','esc','formatSeriesNumber','localDateTime','qualityBadge','metricCardData','reportSourceCardData','renderExecutedSource','comparisonStatusLabel','comparisonSourceCard','formatAiContextInfo','renderAiAnalysis','periodTypeLabel','periodModeLabel','comparisonCountLabel']) {
   const match = source.match(new RegExp(`^function ${name}\\([^]*?^}`, 'm'));
   assert.ok(match, name);
   vm.runInContext(match[0], sandbox);
@@ -29,6 +29,7 @@ check(() => assert.equal(i18nSandbox.window.hrTranslateValue('Paramètres'),'Set
 check(() => assert.equal(i18nSandbox.window.hrTranslateValue('Langue du rapport'),'Report language'));
 check(() => assert.equal(i18nSandbox.window.hrTranslateValue('Rapport « Test » dupliqué'),'Report “Test” duplicated'));
 check(() => assert.equal(i18nSandbox.window.hrDefaultReportLanguage(),'en'));
+check(() => assert.equal(i18nSandbox.window.hrT('report.ai_context_characters'),'characters'));
 const i18nFrenchSandbox = {
   window: {},
   localStorage: {
@@ -58,6 +59,9 @@ check(() => assert.equal(sandbox.metricCardData({...raw,analysis:{statistics:{pl
 check(() => assert.doesNotMatch(sandbox.comparisonSourceCard({metric:'temperature',comparison_status:'comparable',values:[{label:'Moyenne',base:25,reference:20,absolute_change:5,relative_change_percent:null,relative_change_applicable:false}]}), /comparisonMiniLabel">%/));
 
 check(() => assert.match(sandbox.renderAiAnalysis({ai_analysis:{enabled:true,status:'completed',entity_id:'ai_task.local',duration_seconds:1.23,text:'SYNTHÈSE\nOK'}}), /Analyse IA/));
+check(() => assert.match(sandbox.formatAiContextInfo({input:{context_characters:47300,context_limit_characters:60000,context_original_characters:106724,omitted_current_sources:3,omitted_comparison_sources:2}}), /47\.3 k \/ 60\.0 k caractères/));
+check(() => assert.match(sandbox.formatAiContextInfo({input:{context_characters:47300,context_limit_characters:60000,context_original_characters:106724,context_lossless:true,context_mode:'lossless_normalized',omitted_current_sources:0,omitted_comparison_sources:0}}), /normalisé depuis 106\.7 k/));
+check(() => assert.match(sandbox.formatAiContextInfo({input:{context_characters:47300,context_limit_characters:60000,context_original_characters:106724,context_lossless:true,context_mode:'lossless_normalized'}}), /aucune source omise/));
 check(() => assert.match(sandbox.renderAiAnalysis({ai_analysis:{enabled:true,status:'completed',entity_id:'ai_task.local',duration_seconds:1.23,text:'OK'}}), /nuancer ou contester/));
 check(() => assert.match(sandbox.renderAiAnalysis({ai_analysis:{enabled:true,status:'completed',entity_id:'ai_task.local',duration_seconds:1.23,text:'<script>x<\/script>'}}), /&lt;script&gt;/));
 check(() => assert.match(sandbox.renderAiAnalysis({ai_analysis:{enabled:true,status:'error',error:'boom'}}), /boom/));

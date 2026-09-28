@@ -23,7 +23,11 @@ from providers.victoriametrics import VictoriaMetricsProvider as VM
 from periods.engine import PeriodEngine
 from comparisons.engine import ComparisonEngine
 from rendering.html_report import render_report_html
-from analysis.ai_report import compact_report_context, _extract_service_response, _extract_ai_task_payload, _instructions, _sanitize_ai_text, analyze_report_with_ai
+from analysis.ai_report import (
+    compact_report_context, build_budgeted_ai_context, AI_TARGET_CONTEXT_CHARS, AI_MAX_CONTEXT_CHARS,
+    _extract_service_response, _extract_ai_task_payload, _instructions,
+    _sanitize_ai_text, analyze_report_with_ai,
+)
 from document_store import validate_output_config, render_filename
 from exporters.base import ExportProviderError
 from exporters.paperless import PaperlessExportProvider
@@ -491,10 +495,87 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertIn("sur les données disponibles, l'écart calculé est de",prompt)
         self.assertIn('la consommation a augmenté de 182 %',prompt)
         self.assertIn('reconstruction partielle',prompt)
-        self.assertIn('base_quality.counter_mode=provider_reconstructed',prompt)
-        self.assertIn('reference_quality.period_coverage_percent',prompt)
+        self.assertIn('base_reconstructed=true',prompt)
+        self.assertIn('reference_coverage_pct',prompt)
+        self.assertIn('ha-reporting-ai-context-v3',prompt)
         self.assertIn('poursuivre la collecte',prompt)
         self.assertIn("uniquement s'il n'y a aucune autre recommandation",prompt)
+
+    def test_beta22_lossless_normalization_keeps_large_report_sources(self):
+        sample=self.sample()
+        devices=[]
+        comparison_devices=[]
+        for index in range(420):
+            source={
+                'sensor_key':f'device_{index}_power','entity_id':f'sensor.device_{index}_power',
+                'metric':'power','unit':'W','status':'ok',
+                'analysis':{'quality':{'period_coverage_percent':100,'sample_density_percent':100,'density_applicable':True},
+                            'statistics':{'max':{'value':500+index},'p95':300+index,'mean':100+index},
+                            'validation':{'warnings':[]}}
+            }
+            devices.append({'device':{'name':f'Device {index}','category':'test'},'sources':[source]})
+            comparison_devices.append({'name':f'Device {index}','sources':[{
+                'sensor_key':f'device_{index}_power','metric':'power','unit':'W','comparison_status':'comparable',
+                'reasons':[],
+                'base_quality':{'availability':'available','period_coverage_percent':100,'sample_density_percent':100,'counter_mode':None},
+                'reference_quality':{'availability':'available','period_coverage_percent':100,'sample_density_percent':100,'counter_mode':None},
+                'values':[{'key':'mean','label':'Moyenne','base':100+index,'reference':95+index,'absolute_change':5,'relative_change_percent':5.0,'relative_change_applicable':True}],
+            }]})
+        devices.append({'device':{'name':'Critical device','category':'test'},'sources':[{
+            'sensor_key':'critical_power','entity_id':'sensor.critical_power','metric':'power','unit':'W','status':'ok',
+            'analysis':{'quality':{'period_coverage_percent':40,'sample_density_percent':40,'density_applicable':True},
+                        'statistics':{'max':{'value':2500},'p95':2200,'mean':1700},
+                        'validation':{'warnings':['Low coverage']}}
+        }]})
+        sample['catalogs']=[{'name':'Large catalog','devices':devices}]
+        sample['summary']={'sources_total':421,'sources_ok':421}
+        sample['comparisons']={'enabled':True,'target_count':1,'targets':[{
+            'label':'N-1','resolved_period':{'label':'Previous period'},
+            'summary':{'sources_total':420,'sources_comparable':420},
+            'catalogs':[{'name':'Large catalog','devices':comparison_devices}],
+        }]}
+        context_json,meta=build_budgeted_ai_context(sample)
+        context=json.loads(context_json)
+        self.assertLessEqual(len(context_json),AI_MAX_CONTEXT_CHARS)
+        self.assertGreater(meta['legacy_characters'],meta['characters'])
+        self.assertEqual(meta['mode'],'lossless_normalized')
+        self.assertTrue(meta['lossless'])
+        self.assertEqual(meta['omitted_current_sources'],0)
+        self.assertEqual(meta['omitted_comparison_sources'],0)
+        self.assertEqual(len(context['current']),421)
+        self.assertEqual(len(context['comparisons']),420)
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v3')
+        encoded=json.dumps(context,ensure_ascii=False)
+        self.assertIn('critical_power',encoded)
+        self.assertIn('Low coverage',encoded)
+        self.assertNotIn('entity_id',encoded)
+
+    def test_beta22_context_keeps_small_report_without_source_omission(self):
+        context_json,meta=build_budgeted_ai_context(self.sample())
+        context=json.loads(context_json)
+        self.assertLessEqual(len(context_json),AI_TARGET_CONTEXT_CHARS)
+        self.assertEqual(meta['mode'],'lossless_normalized')
+        self.assertTrue(meta['lossless'])
+        self.assertEqual(meta['omitted_current_sources'],0)
+        self.assertEqual(meta['omitted_comparison_sources'],0)
+        self.assertEqual(len(context['current']),1)
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v3')
+        self.assertNotIn('preview',context_json)
+
+    def test_beta22_partial_sources_are_preserved_losslessly(self):
+        sample=self.sample()
+        source=sample['catalogs'][0]['devices'][0]['sources'][0]
+        source['status']='partial'
+        source['analysis']['quality']['period_coverage_percent']=34.8
+        source['analysis']['quality']['sample_density_percent']=None
+        source['analysis']['validation']['warnings']=['Partial period']
+        context_json,meta=build_budgeted_ai_context(sample)
+        context=json.loads(context_json)
+        self.assertEqual(len(context['current']),1)
+        self.assertEqual(meta['omitted_current_sources'],0)
+        self.assertIn('partial',context['statuses'])
+        self.assertIn('Partial period',context['warnings'])
+        self.assertIn('34.8',context_json)
 
     def test_ai_sanitizer_removes_contradictory_no_recommendation(self):
         text="SYNTHÈSE\nOK\n\nPOINTS D'ATTENTION\n- Aucun point d'attention notable.\n\nRECOMMANDATIONS\n- Surveiller la tendance.\n- Aucune recommandation particulière."
@@ -554,6 +635,10 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertTrue(call['return_response'])
         self.assertEqual(call['service_data']['entity_id'],'ai_task.local')
         self.assertIn('sans afficher de raisonnement interne',call['service_data']['instructions'])
+        self.assertIn('ha-reporting-ai-context-v3',call['service_data']['instructions'])
+        self.assertEqual(result['input']['context_mode'],'lossless_normalized')
+        self.assertTrue(result['input']['context_lossless'])
+        self.assertLessEqual(result['input']['context_characters'],AI_TARGET_CONTEXT_CHARS)
 
     def test_ai_task_call_uses_configured_timeout(self):
         class FakeWS:
@@ -662,6 +747,23 @@ class HtmlRendererTests(unittest.TestCase):
         self.assertLess(html.index('Analyse IA'), html.index('Comparaisons N / N-x'))
         self.assertIn('permettent de vérifier, nuancer ou contester cette analyse', html)
 
+    def test_beta22_ai_context_diagnostics_render_in_french_and_english(self):
+        sample=self.sample_result()
+        sample['ai_analysis']['input']={
+            'context_characters':47300,
+            'context_limit_characters':60000,
+            'context_original_characters':106724,
+            'omitted_current_sources':0,
+            'omitted_comparison_sources':0,
+        }
+        html=render_report_html(sample)
+        self.assertIn('Contexte IA : 47.3 k / 60.0 k caractères',html)
+        self.assertIn('normalisé depuis 106.7 k',html)
+        sample['report']['language']='en'
+        html=render_report_html(sample)
+        self.assertIn('AI context: 47.3 k / 60.0 k characters',html)
+        self.assertIn('normalized from 106.7 k',html)
+
     def test_pdf_identifiers_wrap_at_home_assistant_separators(self):
         sample=self.sample_result()
         sample['catalogs'][0]['devices'][0]['sources'][0]['sensor_key']='armoire_combinee_compresseur_cuisine_time_noreset'
@@ -763,7 +865,7 @@ class Beta12ExportProviderTests(unittest.TestCase):
         self.assertTrue(status['reachable'])
         self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
         self.assertEqual(seen['auth'],'Token secret')
-        self.assertIn('beta.21',seen['ua'])
+        self.assertIn('beta.22',seen['ua'])
 
     def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
         import tempfile
@@ -1107,7 +1209,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.21')
+        self.assertEqual(config['version'],'0.1.0-beta.22')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertTrue(config['hassio_api'])

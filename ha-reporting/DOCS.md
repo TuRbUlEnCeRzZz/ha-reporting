@@ -1,5 +1,36 @@
 # HA Reporting technical documentation
 
+## beta.22 — Lossless AI context normalization
+
+Beta.22 uses the `ha-reporting-ai-context-v3` semantic schema for AI Task input. The deterministic report result is unchanged; only the model-facing representation is normalized. Raw VictoriaMetrics samples, previews, provider traces and renderer-only data remain outside the AI contract.
+
+The AI path keeps two thresholds:
+
+- `AI_TARGET_CONTEXT_CHARS = 50000`: preferred operating size;
+- `AI_MAX_CONTEXT_CHARS = 60000`: hard safety guard before the AI Task call.
+
+Unlike the earlier beta.22 draft, the final beta.22 path does **not** trim sources to reach the preferred target. Every current-period source and every comparison source is serialized, including partial-coverage entries. If the lossless normalized context is still above the hard limit, the AI stage returns an explicit error instead of dropping data.
+
+### v3 representation
+
+The v3 schema reduces repetition structurally:
+
+- catalogues, devices and sources are declared once and referenced by their array index;
+- categories, metrics, units, statuses, policies, statistic names, warnings and reasons use shared registries;
+- current-period rows use positional columns declared by `legend.current`;
+- comparison rows use positional columns declared by `legend.comparison`;
+- metric-specific current values use `legend.value_schemas`;
+- optional trailing fields are omitted only when their documented default applies; this changes serialization size, not semantic content;
+- a compact flag string records runtime verification, non-applicable density and base/reference reconstruction.
+
+The context sets `lossless: true`. Here, lossless means that HA Reporting does not omit semantic source/comparison entries or the values/quality fields represented by the AI schema. It does not mean raw time-series samples are sent to the model.
+
+A completed AI result includes diagnostic fields under `ai_analysis.input`: final context characters, preferred/hard limits, beta.21 compact-context size, v3 schema, normalization mode, `context_lossless`, current-source count and comparison-source count. The Ingress and HTML/PDF renderers display the final size and the no-omission guarantee.
+
+The implementation deliberately stays with one AI Task call. If a future installation produces a lossless v3 context above 60,000 characters, multi-call chunking can be evaluated separately rather than silently reintroducing source omission.
+
+---
+
 ## beta.21 — Internationalization and HTTP reliability
 
 Beta.21 introduces an i18n compatibility layer in `app/i18n.js`. It contains stable message IDs with French and English values, translates the existing beta.20 DOM (including dynamically inserted nodes), and exposes `hrT(messageId)` for new UI work. New features should use message IDs instead of adding hard-coded user-facing strings.

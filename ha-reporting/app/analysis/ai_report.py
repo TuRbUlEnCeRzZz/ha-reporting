@@ -13,6 +13,7 @@ AI_WS_HEARTBEAT_SECONDS = 20
 AI_DEFAULT_TIMEOUT_SECONDS = 600
 AI_MIN_TIMEOUT_SECONDS = 60
 AI_MAX_TIMEOUT_SECONDS = 1800
+AI_TARGET_CONTEXT_CHARS = 50000
 AI_MAX_CONTEXT_CHARS = 60000
 
 
@@ -190,6 +191,314 @@ def compact_report_context(result: dict[str, Any]) -> dict[str, Any]:
     return output
 
 
+
+def _compact_comparison_values(values: Any) -> list[dict[str, Any]]:
+    """Keep only comparison values that are useful to the language model."""
+    output: list[dict[str, Any]] = []
+    for item in values or []:
+        if not isinstance(item, dict):
+            continue
+        compact: dict[str, Any] = {
+            "stat": item.get("key") or item.get("label"),
+            "base": item.get("base"),
+            "reference": item.get("reference"),
+            "gap": item.get("absolute_change"),
+        }
+        if item.get("relative_change_applicable") and item.get("relative_change_percent") is not None:
+            compact["gap_pct"] = item.get("relative_change_percent")
+        output.append({key: value for key, value in compact.items() if value is not None})
+    return output
+
+
+def _pool_value(context: dict[str, Any], indexes: dict[str, dict[str, int]], key: str, value: Any) -> int | None:
+    """Store a repeated semantic value once and return its array index.
+
+    Values are keyed by their canonical JSON representation so strings, lists and
+    dictionaries keep their original JSON value instead of being coerced to text.
+    """
+    if value is None:
+        return None
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    index = indexes.setdefault(key, {})
+    if encoded not in index:
+        index[encoded] = len(context[key])
+        context[key].append(value)
+    return index[encoded]
+
+
+def _trim_trailing_none(row: list[Any]) -> list[Any]:
+    """Remove only optional trailing nulls; positional meaning is preserved by the legend."""
+    while row and row[-1] is None:
+        row.pop()
+    return row
+
+
+def _current_value_vector(metric: Any, stats: dict[str, Any]) -> list[Any]:
+    """Return deterministic statistics in the metric-specific v3 column order."""
+    if metric == "power":
+        return [_stat_value(stats, "max"), stats.get("p95"), stats.get("mean")]
+    if metric == "temperature":
+        return [_stat_value(stats, "min"), stats.get("mean"), _stat_value(stats, "max")]
+    if metric in {"energy_total", "runtime", "cycles"}:
+        return [stats.get("delta"), _stat_value(stats, "last"), int(stats.get("resets_detected", 0) or 0)]
+    return [_stat_value(stats, "first"), _stat_value(stats, "last"), stats.get("mean")]
+
+
+def _lossless_ai_context_v3(result: dict[str, Any]) -> dict[str, Any]:
+    """Build the beta.22 lossless normalized semantic context.
+
+    The representation removes structural repetition by using array-index IDs,
+    registries and positional rows. It does not remove current-period sources or
+    comparison sources, including entries with partial coverage. Raw samples,
+    previews and provider traces remain intentionally outside the AI contract.
+    """
+    context: dict[str, Any] = {
+        "schema": "ha-reporting-ai-context-v3",
+        "lossless": True,
+        "legend": {
+            "ids": "array indexes",
+            "device": ["catalog_id", "name", "category_id"],
+            "source": ["device_id", "name", "metric_id", "unit_id"],
+            "current": ["source_id", "values", "coverage_pct", "density_pct", "status_id?", "flags?", "warning_ids?"],
+            "comparison": ["target_id", "source_id", "base_coverage_pct", "reference_coverage_pct", "values", "status_id?", "policy_id?", "flags?", "reason_ids?"],
+            "comparison_value": ["stat_id", "base", "reference", "absolute_change", "relative_change_percent?", "relative_change_applicable_override?"],
+            "value_schemas": {
+                "power": ["max", "p95", "mean"],
+                "temperature": ["min", "mean", "max"],
+                "counter": ["delta", "last", "resets_detected"],
+                "generic": ["first", "last", "mean"],
+            },
+            "metric_value_schema": {
+                "power": "power",
+                "temperature": "temperature",
+                "energy_total": "counter",
+                "runtime": "counter",
+                "cycles": "counter",
+                "*": "generic",
+            },
+            "flags": {
+                "v": "runtime_verified",
+                "n": "density_not_applicable",
+                "b": "base_reconstructed",
+                "r": "reference_reconstructed",
+            },
+            "defaults": {
+                "current_status": "ok",
+                "comparison_status": "comparable",
+                "comparison_policy": "full_period_change_allowed",
+                "relative_change_applicable": "false when percent is absent; true when percent is present; optional override 0/1 preserves exceptional cases",
+            },
+        },
+        "report": [
+            (result.get("report") or {}).get("name"),
+            (result.get("resolved_period") or {}).get("label"),
+            (result.get("resolved_period") or {}).get("timezone"),
+        ],
+        "summary": result.get("summary") or {},
+        "catalogs": [],
+        "categories": [],
+        "metrics": [],
+        "units": [],
+        "statuses": [],
+        "policies": [],
+        "stats": [],
+        "devices": [],
+        "sources": [],
+        "warnings": [],
+        "reasons": [],
+        "targets": [],
+        "current": [],
+        "comparisons": [],
+    }
+
+    pools: dict[str, dict[str, int]] = {}
+    catalog_ids: dict[str, int] = {}
+    device_ids: dict[tuple[int, str], int] = {}
+    source_ids: dict[tuple[int, str, str, str], int] = {}
+
+    def catalog_id(name: Any) -> int:
+        key = json.dumps(name, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if key not in catalog_ids:
+            catalog_ids[key] = len(context["catalogs"])
+            context["catalogs"].append(name)
+        return catalog_ids[key]
+
+    def device_id(catalog: int, name: Any, category: Any = None) -> int:
+        name_key = json.dumps(name, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        key = (catalog, name_key)
+        if key not in device_ids:
+            device_ids[key] = len(context["devices"])
+            context["devices"].append([
+                catalog,
+                name,
+                _pool_value(context, pools, "categories", category),
+            ])
+        elif category is not None and context["devices"][device_ids[key]][2] is None:
+            context["devices"][device_ids[key]][2] = _pool_value(context, pools, "categories", category)
+        return device_ids[key]
+
+    def source_id(device: int, name: Any, metric: Any, unit: Any) -> int:
+        key = (
+            device,
+            json.dumps(name, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            json.dumps(metric, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            json.dumps(unit, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        )
+        if key not in source_ids:
+            source_ids[key] = len(context["sources"])
+            context["sources"].append([
+                device,
+                name,
+                _pool_value(context, pools, "metrics", metric),
+                _pool_value(context, pools, "units", unit),
+            ])
+        return source_ids[key]
+
+    for catalog in result.get("catalogs") or []:
+        cid = catalog_id(catalog.get("name"))
+        for device in catalog.get("devices") or []:
+            info = device.get("device") or {}
+            did = device_id(cid, info.get("name"), info.get("category"))
+            for source in device.get("sources") or []:
+                sid = source_id(
+                    did,
+                    source.get("sensor_key") or source.get("entity_id"),
+                    source.get("metric"),
+                    source.get("unit"),
+                )
+                analysis = source.get("analysis") or {}
+                stats = analysis.get("statistics") or {}
+                quality = analysis.get("quality") or {}
+                validation = analysis.get("validation") or {}
+
+                density_applicable = bool(quality.get("density_applicable"))
+                row: list[Any] = [
+                    sid,
+                    _current_value_vector(source.get("metric"), stats),
+                    quality.get("period_coverage_percent"),
+                    quality.get("sample_density_percent") if density_applicable else None,
+                ]
+
+                status = source.get("status")
+                status_id = None if not status or status == "ok" else _pool_value(context, pools, "statuses", status)
+                flags = ""
+                if source.get("verification"):
+                    flags += "v"
+                if not density_applicable:
+                    flags += "n"
+                warning_ids = [
+                    _pool_value(context, pools, "warnings", warning)
+                    for warning in (validation.get("warnings") or [])
+                ]
+                row.extend([status_id, flags or None, warning_ids or None])
+                context["current"].append(_trim_trailing_none(row))
+
+    comparisons = result.get("comparisons") or {}
+    for target in comparisons.get("targets") or []:
+        tid = len(context["targets"])
+        context["targets"].append([
+            target.get("label"),
+            (target.get("resolved_period") or {}).get("label"),
+            target.get("summary") or {},
+        ])
+        for catalog in target.get("catalogs") or []:
+            cid = catalog_id(catalog.get("name"))
+            for device in catalog.get("devices") or []:
+                did = device_id(cid, device.get("name"))
+                for source in device.get("sources") or []:
+                    sid = source_id(
+                        did,
+                        source.get("sensor_key") or source.get("entity_id"),
+                        source.get("metric"),
+                        source.get("unit"),
+                    )
+                    interpretation = _comparison_interpretation(source)
+                    base_quality = source.get("base_quality") or {}
+                    reference_quality = source.get("reference_quality") or {}
+                    values: list[list[Any]] = []
+                    for item in source.get("values") or []:
+                        if not isinstance(item, dict):
+                            continue
+                        relative_applicable = bool(item.get("relative_change_applicable"))
+                        relative_percent = item.get("relative_change_percent")
+                        value_row: list[Any] = [
+                            _pool_value(context, pools, "stats", item.get("key") or item.get("label")),
+                            item.get("base"),
+                            item.get("reference"),
+                            item.get("absolute_change"),
+                        ]
+                        if relative_percent is not None:
+                            value_row.append(relative_percent)
+                            if not relative_applicable:
+                                value_row.append(0)
+                        elif relative_applicable:
+                            value_row.extend([None, 1])
+                        values.append(value_row)
+
+                    comparison_status = source.get("comparison_status")
+                    policy = interpretation.get("wording_policy")
+                    status_id = None if comparison_status == "comparable" else _pool_value(context, pools, "statuses", comparison_status)
+                    policy_id = None if policy == "full_period_change_allowed" else _pool_value(context, pools, "policies", policy)
+                    flags = ""
+                    if interpretation.get("base_reconstructed"):
+                        flags += "b"
+                    if interpretation.get("reference_reconstructed"):
+                        flags += "r"
+                    reason_ids = [
+                        _pool_value(context, pools, "reasons", reason)
+                        for reason in (source.get("reasons") or [])
+                    ]
+                    row = [
+                        tid,
+                        sid,
+                        base_quality.get("period_coverage_percent"),
+                        reference_quality.get("period_coverage_percent"),
+                        values,
+                        status_id,
+                        policy_id,
+                        flags or None,
+                        reason_ids or None,
+                    ]
+                    context["comparisons"].append(_trim_trailing_none(row))
+
+    return context
+
+
+def _encoded_context(context: dict[str, Any]) -> str:
+    return json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+
+
+def build_budgeted_ai_context(
+    result: dict[str, Any],
+    target_chars: int = AI_TARGET_CONTEXT_CHARS,
+) -> tuple[str, dict[str, Any]]:
+    """Return the complete semantic AI context using lossless normalization.
+
+    The 50k target remains a preferred operating size, but beta.22 no longer drops
+    sources to reach it. Every current-period and comparison source is retained,
+    including partial entries. The 60k hard limit is enforced by the caller; when
+    lossless normalization cannot fit under that limit, AI analysis fails explicitly
+    instead of silently omitting data.
+    """
+    legacy_json = _encoded_context(compact_report_context(result))
+    context = _lossless_ai_context_v3(result)
+    context_json = _encoded_context(context)
+    metadata = {
+        "schema": context.get("schema"),
+        "mode": "lossless_normalized",
+        "lossless": True,
+        "characters": len(context_json),
+        "target_characters": target_chars,
+        "limit_characters": AI_MAX_CONTEXT_CHARS,
+        "legacy_characters": len(legacy_json),
+        "full_compact_characters": len(context_json),
+        "omitted_current_sources": 0,
+        "omitted_comparison_sources": 0,
+        "current_sources": len(context.get("current") or []),
+        "comparison_sources": len(context.get("comparisons") or []),
+    }
+    return context_json, metadata
+
 def _extract_ai_task_payload(payload: Any) -> tuple[Any, str | None]:
     """Extract ai_task.generate_data data from direct or entity-namespaced payloads."""
     if not isinstance(payload, dict):
@@ -279,14 +588,15 @@ Do not turn internal engine diagnostics into attention points. In particular, ne
 
 Mandatory rules for N/N-x comparisons:
 - An `unavailable` source does not support any conclusion about change.
-- Read `interpretation.wording_policy` first for each compared source.
-- If `wording_policy` is `descriptive_gap_only`, or if `interpretation.full_period_change_supported` is false, do NOT state that a quantity increased, decreased, went up, went down, or use equivalent wording that presents the gap as a real full-period trend.
+- Read `policy` first for each compared source.
+- If `policy` is `descriptive_gap_only` or `no_change_claim`, do NOT state that a quantity increased, decreased, went up, went down, or use equivalent wording that presents the gap as a real full-period trend.
 - Instead use wording such as: “for the available data, the calculated gap is ...” or “the calculated value is higher/lower by ...”, then explain why the gap cannot be interpreted as a complete-period trend.
 - Forbidden example: “consumption increased by 182%”. Expected style: “for the available data, the calculated gap is +182%, but it does not support a conclusion that annual consumption rose by that amount because the reference covers only 34.8% of the period”.
 - Forbidden example: “average power is down 8.6% from the previous year”. Expected style: “for the available data, calculated average power is 8.6% lower, but the comparison remains partial”.
 - Never use a relative percentage from an incomplete comparison to assert drift, overconsumption, or improvement.
-- Keep reconstruction and coverage strictly separate: `base_quality.counter_mode=provider_reconstructed` means N was reconstructed after one or more resets; `reference_quality.period_coverage_percent` independently describes N-x reference coverage. Never merge these concepts into wording such as “partial reconstruction”.
-- If `interpretation.base_reconstructed` is true, mention reconstruction only if useful to reliability. If false, do not discuss resets or reconstruction. If `interpretation.reference_coverage_limited` is true, separately state that the historical reference is partial and include its coverage. Do not claim the reference is reconstructed unless `interpretation.reference_reconstructed` is true.
+- Keep reconstruction and coverage strictly separate: `base_reconstructed=true` means N was reconstructed after one or more resets; `reference_coverage_pct` independently describes N-x reference coverage. Never merge these concepts into wording such as “partial reconstruction”.
+- If `base_reconstructed` is true, mention reconstruction only if useful to reliability. If absent/false, do not discuss resets or reconstruction. If `reference_coverage_pct` is below 80, separately state that the historical reference is partial and include its coverage. Do not claim the reference is reconstructed unless `reference_reconstructed` is true.
+- `ha-reporting-ai-context-v3` is a lossless normalized representation: IDs are array indexes described by `legend`; no current or comparison source is omitted, including partially covered sources.
 - Recommendations based only on a partial/reconstructed comparison must remain proportionate: prefer monitoring, continuing data collection, or checking again once coverage is sufficient. Do not ask the user to investigate causes unless current-period data independently supports a concrete anomaly.
 
 Produce exactly these three plain-text sections:
@@ -312,14 +622,15 @@ Ne transforme pas les diagnostics internes du moteur en points d'attention. En p
 
 Règles impératives pour les comparaisons N/N-x :
 - Une source `unavailable` ne permet aucune conclusion d'évolution.
-- Lis d'abord `interpretation.wording_policy` pour chaque source comparée.
-- Si `wording_policy` vaut `descriptive_gap_only` ou si `interpretation.full_period_change_supported` vaut false, il est INTERDIT d'écrire qu'une grandeur « a augmenté », « a diminué », « est en hausse », « est en baisse » ou toute formulation équivalente qui présente l'écart comme une évolution réelle de la période complète.
+- Lis d'abord `policy` pour chaque source comparée.
+- Si `policy` vaut `descriptive_gap_only` ou `no_change_claim`, il est INTERDIT d'écrire qu'une grandeur « a augmenté », « a diminué », « est en hausse », « est en baisse » ou toute formulation équivalente qui présente l'écart comme une évolution réelle de la période complète.
 - Dans ce cas, écris plutôt : « sur les données disponibles, l'écart calculé est de ... », « la valeur calculée est supérieure/inférieure de ... », puis précise pourquoi cet écart n'est pas directement interprétable comme une évolution complète.
 - Exemple interdit : « la consommation a augmenté de 182 % ». Exemple attendu : « sur les données disponibles, l'écart calculé est de +182 %, mais il ne permet pas de conclure à une hausse annuelle de cette ampleur car la référence ne couvre que 34,8 % de la période ».
 - Exemple interdit : « la puissance moyenne est en baisse de 8,6 % par rapport à l'année précédente ». Exemple attendu : « sur les données disponibles, la puissance moyenne calculée est inférieure de 8,6 %, mais la comparaison reste partielle ».
 - N'utilise jamais un pourcentage relatif issu d'une comparaison incomplète pour affirmer une dérive, une surconsommation ou une amélioration.
-- Distingue strictement reconstruction et couverture : `base_quality.counter_mode=provider_reconstructed` signifie que la valeur N a été reconstruite après un ou plusieurs resets ; `reference_quality.period_coverage_percent` décrit séparément la couverture de la référence N-x. Ne fusionne jamais ces deux notions dans une expression comme « reconstruction partielle ».
-- Si `interpretation.base_reconstructed` vaut true, tu peux signaler la reconstruction uniquement si elle est utile à la fiabilité de l'analyse. Si cette valeur est false, ne parle jamais de reset ou de reconstruction. Si `interpretation.reference_coverage_limited` vaut true, dis séparément « la référence historique est partielle » avec sa couverture. N'affirme pas que la référence est reconstruite sauf si `interpretation.reference_reconstructed` vaut true.
+- Distingue strictement reconstruction et couverture : `base_reconstructed=true` signifie que la valeur N a été reconstruite après un ou plusieurs resets ; `reference_coverage_pct` décrit séparément la couverture de la référence N-x. Ne fusionne jamais ces deux notions dans une expression comme « reconstruction partielle ».
+- Si `base_reconstructed` vaut true, tu peux signaler la reconstruction uniquement si elle est utile à la fiabilité de l'analyse. Si elle est absente/false, ne parle jamais de reset ou de reconstruction. Si `reference_coverage_pct` est inférieur à 80, dis séparément « la référence historique est partielle » avec sa couverture. N'affirme pas que la référence est reconstruite sauf si `reference_reconstructed` vaut true.
+- `ha-reporting-ai-context-v3` est une représentation normalisée sans omission : les IDs sont des index de tableaux décrits par `legend` ; aucune source courante ou comparée n'est retirée, y compris lorsqu'elle ne couvre qu'une partie de la période.
 - Une recommandation fondée seulement sur une comparaison partielle/reconstruite doit rester proportionnée : privilégie « surveiller », « poursuivre la collecte » ou « recontrôler quand la couverture sera suffisante ». Ne demande pas d'en rechercher les causes sauf si les données de la période courante montrent, indépendamment de la comparaison, une anomalie étayée.
 
 Produis exactement ces trois sections, en texte simple :
@@ -379,12 +690,13 @@ def analyze_report_with_ai(
 
     ws = None
     try:
-        context = compact_report_context(result)
-        context_json = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+        context_json, context_meta = build_budgeted_ai_context(result)
         if len(context_json) > AI_MAX_CONTEXT_CHARS:
-            raise RuntimeError(
-                f"Contexte IA trop volumineux ({len(context_json)} caractères, limite {AI_MAX_CONTEXT_CHARS})"
-            )
+            if language == "en":
+                message = f"Lossless AI context remains too large after normalization ({len(context_json)} characters, limit {AI_MAX_CONTEXT_CHARS})"
+            else:
+                message = f"Contexte IA sans omission encore trop volumineux après normalisation ({len(context_json)} caractères, limite {AI_MAX_CONTEXT_CHARS})"
+            raise RuntimeError(message)
 
         service_data: dict[str, Any] = {
             "task_name": f"HA Reporting · {(result.get('report') or {}).get('name') or 'rapport'}",
@@ -480,7 +792,18 @@ def analyze_report_with_ai(
             "heartbeat_count": heartbeat_count,
             "text": text,
             "input": {
-                "context_characters": len(context_json),
+                "context_characters": context_meta["characters"],
+                "context_target_characters": context_meta["target_characters"],
+                "context_limit_characters": context_meta["limit_characters"],
+                "context_original_characters": context_meta["legacy_characters"],
+                "context_full_compact_characters": context_meta["full_compact_characters"],
+                "context_mode": context_meta["mode"],
+                "context_schema": context_meta["schema"],
+                "context_lossless": context_meta["lossless"],
+                "context_current_sources": context_meta["current_sources"],
+                "context_comparison_sources": context_meta["comparison_sources"],
+                "omitted_current_sources": context_meta["omitted_current_sources"],
+                "omitted_comparison_sources": context_meta["omitted_comparison_sources"],
                 "sources": (result.get("summary") or {}).get("sources_total", 0),
                 "comparison_targets": (result.get("comparisons") or {}).get("target_count", 0),
             },

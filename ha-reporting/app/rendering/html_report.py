@@ -305,13 +305,54 @@ def _comparisons(result: dict[str, Any]) -> str:
 
 
 
+def _ai_context_quality(ai: dict[str, Any], language: str = "fr") -> str:
+    input_meta = ai.get("input") or {}
+    try:
+        chars = int(input_meta.get("context_characters") or 0)
+    except (TypeError, ValueError):
+        chars = 0
+    if chars <= 0:
+        return ""
+    try:
+        limit = int(input_meta.get("context_limit_characters") or 60000)
+    except (TypeError, ValueError):
+        limit = 60000
+    try:
+        original = int(input_meta.get("context_original_characters") or chars)
+    except (TypeError, ValueError):
+        original = chars
+    try:
+        omitted = int(input_meta.get("omitted_current_sources") or 0) + int(input_meta.get("omitted_comparison_sources") or 0)
+    except (TypeError, ValueError):
+        omitted = 0
+    if str(language).lower() == "en":
+        text = f"AI context: {chars / 1000:.1f} k / {limit / 1000:.1f} k characters"
+        if original > chars + 100:
+            text += f" · normalized from {original / 1000:.1f} k"
+        if input_meta.get("context_lossless") is True or input_meta.get("context_mode") == "lossless_normalized":
+            text += " · no source omitted"
+        elif omitted > 0:
+            text += f" · {omitted} routine sources omitted"
+        return text
+    text = f"Contexte IA : {chars / 1000:.1f} k / {limit / 1000:.1f} k caractères"
+    if original > chars + 100:
+        text += f" · normalisé depuis {original / 1000:.1f} k"
+    if input_meta.get("context_lossless") is True or input_meta.get("context_mode") == "lossless_normalized":
+        text += " · aucune source omise"
+    elif omitted > 0:
+        text += f" · {omitted} sources routinières omises"
+    return text
+
+
 def _ai_analysis(result: dict[str, Any]) -> str:
     ai = result.get("ai_analysis") or {}
     if not ai.get("enabled"):
         return ""
     status = ai.get("status") or "unknown"
+    language = str((result.get("report") or {}).get("language") or "fr").lower()
     if status == "completed":
         text = _e(ai.get("text") or "").replace("\n", "<br>")
+        context_quality = _ai_context_quality(ai, language)
         entity = ai.get("entity_id") or "entité AI Task préférée"
         duration = _num(ai.get("duration_seconds"), "s")
         return f"""
@@ -319,6 +360,7 @@ def _ai_analysis(result: dict[str, Any]) -> str:
             <div class="section-title"><div><h1>Analyse IA</h1><p>Interprétation automatique des statistiques. Les données, graphiques et indicateurs ci-dessous constituent la référence et permettent de vérifier, nuancer ou contester cette analyse.</p></div><span class="pill">AI Task · no-thinking</span></div>
             <div class="ai-text">{text}</div>
             <div class="quality">Source : {_e(entity)} · durée {duration} · les séries brutes ne sont pas transmises au modèle.</div>
+            {f'<div class="quality">{_e(context_quality)}</div>' if context_quality else ''}
           </section>"""
     if status in {"pending", "running"}:
         label = "en cours" if status == "running" else "en attente"

@@ -45,7 +45,7 @@ class VictoriaMetricsProvider(DataProvider):
             url,
             headers={
                 "Accept": "application/json",
-                "User-Agent": "HA-Reporting/0.1.0-beta.19",
+                "User-Agent": "HA-Reporting/0.1.0-beta.20",
             },
         )
 
@@ -327,9 +327,10 @@ class VictoriaMetricsProvider(DataProvider):
                 ]
             )
             if metric == "power":
-                common.append(
-                    ("p95", f"quantile_over_time(0.95,{selector}[{window}])")
-                )
+                common.extend([
+                    ("p95", f"quantile_over_time(0.95,{selector}[{window}])"),
+                    ("integral", f"integrate({selector}[{window}])"),
+                ])
 
         return cls._rollup_union(common)
 
@@ -433,7 +434,7 @@ class VictoriaMetricsProvider(DataProvider):
         }
         request = urllib.request.Request(
             f"{self.base_url}/api/v1/export?{urllib.parse.urlencode(params)}",
-            headers={"Accept": "application/stream+json", "User-Agent": "HA-Reporting/0.1.0-beta.19"},
+            headers={"Accept": "application/stream+json", "User-Agent": "HA-Reporting/0.1.0-beta.20"},
         )
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:

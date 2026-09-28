@@ -259,11 +259,13 @@ def render_report_html(result: dict[str, Any], theme: str = "dark") -> str:
         color_scheme = "light"
         source_bg = "#ffffff"
         device_bg = "#f7f9fb"
+        page_background = "#ffffff"
     else:
         palette = "--ink:#f2f4f7;--muted:#aeb7c2;--line:#39414b;--paper:#14191f;--canvas:#0c1015;--soft:#1a2028;--accent:#2563eb;--ref:#7c3aed;--good:#34d399;--warn:#f59e0b"
         color_scheme = "dark"
         source_bg = "#171d24"
         device_bg = "#151b22"
+        page_background = "#0c1015"
     html = f"""<!doctype html>
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{_e(title)}</title>
@@ -313,7 +315,7 @@ button{{border:0;border-radius:8px;background:var(--accent);color:#fff;padding:9
 footer{{border-top:1px solid var(--line);margin-top:28px;padding-top:12px;color:var(--muted);font-size:10px}}
 @media(max-width:800px){{.page{{margin:0;padding:22px}}.summary,.summary.mini{{grid-template-columns:repeat(2,1fr)}}.source-grid{{grid-template-columns:1fr}}}}
 @media print{{
-  @page{{size:A4;margin:10mm}}
+  @page{{size:A4;margin:10mm;background:{page_background}}}
   html,body,.page,.summary>div,.device,.source,.compare-source,.pill,.compare-bars i{{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}}
   html,body{{background:var(--canvas)!important;color:var(--ink)!important}}
   body{{font-size:10px}}

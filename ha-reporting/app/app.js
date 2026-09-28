@@ -97,6 +97,51 @@ function syncHomeAssistantTheme(){
       const value = readVariable(sourceVars);
       if(value) document.documentElement.style.setProperty(localVar, value);
     }
+
+    // Reuse the actual rendered Home Assistant/Liquid Glass page background.
+    // Theme variables may contain other var(...) references, so resolve the
+    // common simple cases against the parent before falling back to computed
+    // background properties.
+    const resolveParentVars = (raw, depth=0) => {
+      let value=String(raw||"").trim();
+      if(!value || depth>5) return value;
+      return value.replace(/var\((--[a-zA-Z0-9_-]+)(?:\s*,\s*([^)]*))?\)/g, (_m,name,fallback) => {
+        const resolved=readVariable([name]);
+        return resolved ? resolveParentVars(resolved,depth+1) : (fallback||"");
+      });
+    };
+    const themedBackground = resolveParentVars(readVariable(["--lovelace-background","--background-image"]));
+    if(themedBackground && themedBackground !== "none"){
+      if(/gradient\(|url\(/i.test(themedBackground)){
+        document.documentElement.style.setProperty("--hr-page-background-image", themedBackground);
+      }else{
+        document.documentElement.style.setProperty("--hr-page-background-color", themedBackground);
+      }
+    }
+
+    // Reading computed properties avoids copying unresolved `var(...)` tokens
+    // from the parent theme into the Ingress iframe.
+    const backgroundCandidates = [
+      doc.querySelector("ha-panel-lovelace"),
+      doc.querySelector("home-assistant-main"),
+      doc.body,
+      doc.documentElement
+    ].filter(Boolean);
+    for(const element of backgroundCandidates){
+      const style = window.parent.getComputedStyle(element);
+      const image = style.backgroundImage;
+      const color = style.backgroundColor;
+      const usefulImage = image && image !== "none";
+      const usefulColor = color && color !== "rgba(0, 0, 0, 0)" && color !== "transparent";
+      if(usefulImage || usefulColor){
+        if(usefulImage) document.documentElement.style.setProperty("--hr-page-background-image", image);
+        if(usefulColor) document.documentElement.style.setProperty("--hr-page-background-color", color);
+        document.documentElement.style.setProperty("--hr-page-background-size", style.backgroundSize || "cover");
+        document.documentElement.style.setProperty("--hr-page-background-position", style.backgroundPosition || "center");
+        document.documentElement.style.setProperty("--hr-page-background-repeat", style.backgroundRepeat || "no-repeat");
+        break;
+      }
+    }
   }catch(_){
     // If the parent is not directly readable, the generic light/dark fallbacks remain active.
   }
@@ -437,11 +482,38 @@ function renderReports(){
           <div class="reportActions">
             <button class="primary" onclick="previewReport('${esc(report.id)}')">Aperçu</button>
             <button onclick="showReportForm('${esc(report.id)}')">Modifier</button>
+            <button onclick="duplicateReportDefinition('${esc(report.id)}')">Dupliquer</button>
             <button class="danger" onclick="deleteReportDefinition('${esc(report.id)}','${esc(report.name)}')">Supprimer</button>
           </div>
         </div>
       </div>`;
   }).join("");
+}
+
+
+async function duplicateReportDefinition(reportId){
+  let report=reports.find(item=>item.id===reportId);
+  if(!report){
+    await loadReports();
+    report=reports.find(item=>item.id===reportId);
+  }
+  if(!report){ alert("Rapport introuvable"); return; }
+  const proposed=`${report.name} — copie`;
+  const name=prompt("Nom du rapport dupliqué :", proposed);
+  if(!name) return;
+  const payload={
+    name:name.trim(),
+    catalogs:[...(report.catalogs||[])],
+    period:{...(report.period||{})},
+    comparisons:{...(report.comparisons||{})},
+    ai_analysis:{...(report.ai_analysis||{})},
+    output:{...(report.output||{})}
+  };
+  const response=await fetch("api/reports",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+  const data=await response.json();
+  if(!response.ok){ alert(data.error||"Duplication impossible"); return; }
+  showToast(`Rapport « ${data.report?.name||name} » dupliqué`);
+  await loadReports();
 }
 
 function updateReportPeriodFields(){
@@ -1415,6 +1487,21 @@ function populateAutomationReports(){
   $("automationReport").innerHTML=(reports||[]).filter(r=>!r.error).map(r=>`<option value="${esc(r.id)}">${esc(r.name)}</option>`).join("") || '<option value="">Aucun rapport</option>';
 }
 
+function populateAutomationNotificationEntities(item=null){
+  const notification=item?.notification||{};
+  const optionLabel=entity=>`${entity.friendly_name||entity.entity_id} · ${entity.entity_id}`;
+  const fill=(id,domain,emptyLabel,selected)=>{
+    const items=(entities||[]).filter(entity=>entity.domain===domain).sort((a,b)=>optionLabel(a).localeCompare(optionLabel(b)));
+    const options=[`<option value="">${esc(emptyLabel)}</option>`,...items.map(entity=>`<option value="${esc(entity.entity_id)}">${esc(optionLabel(entity))}</option>`)];
+    if(selected && !items.some(entity=>entity.entity_id===selected)) options.push(`<option value="${esc(selected)}">${esc(selected)} · indisponible actuellement</option>`);
+    $(id).innerHTML=options.join("");
+    $(id).value=selected||"";
+  };
+  fill("automationNotifyEntity","notify","Aucune",notification.notify_entity);
+  fill("automationTtsEntity","tts","Désactivée",notification.tts_entity);
+  fill("automationMediaPlayer","media_player","Aucun lecteur",notification.media_player_entity);
+}
+
 function resetAutomationForm(item=null){
   editingAutomationId=item?item.id:null;
   $("automationFormTitle").textContent=item?`Modifier « ${item.name} »`:"Nouvelle automatisation";
@@ -1435,6 +1522,7 @@ function resetAutomationForm(item=null){
   $("automationTheme").value=pipeline.theme||"dark";
   $("automationPaperless").checked=(pipeline.destinations||[]).includes("paperless");
   $("automationPersistentNotification").checked=Boolean((item?.notification||{}).persistent);
+  populateAutomationNotificationEntities(item);
   const retry=item?.retry||{};
   $("automationRetryEnabled").checked=item?Boolean(retry.enabled):true;
   $("automationMaxRetries").value=String(retry.max_retries??1);
@@ -1535,7 +1623,7 @@ function renderScheduledAutomations(timezone){
         <div><span class="muted">Durée</span><strong>${esc(formatAutomationDuration(runtime.last_duration_seconds))}</strong></div>
         <div><span class="muted">Déclenchement</span><strong>${esc(automationTriggerLabel(runtime.last_trigger))}</strong></div>
         <div><span class="muted">Dernier export</span><strong>${esc(paperlessLabel)}</strong></div>
-        <div><span class="muted">Étapes prévues</span><strong>${esc(automationAiLabel(pipeline.ai_analysis))}${pipeline.generate_pdf?" · PDF":""}${(pipeline.destinations||[]).length?" · "+esc(pipeline.destinations.map(name=>name==="paperless"?"Paperless":name).join(", ")):""}${(item.notification||{}).persistent?" · notification":""}</strong></div>
+        <div><span class="muted">Étapes prévues</span><strong>${esc(automationAiLabel(pipeline.ai_analysis))}${pipeline.generate_pdf?" · PDF":""}${(pipeline.destinations||[]).length?" · "+esc(pipeline.destinations.map(name=>name==="paperless"?"Paperless":name).join(", ")):""}${(item.notification||{}).persistent?" · notification persistante":""}${(item.notification||{}).notify_entity?" · smartphone/notify":""}${(item.notification||{}).tts_entity?" · TTS":""}</strong></div>
         <div><span class="muted">Fiabilité</span><strong>${retry.enabled?`${retry.max_retries||0} nouvelle(s) tentative(s) · ${retry.delay_minutes||10} min`:"Nouvelle tentative désactivée"} · ${item.history_count||0} historique(s)</strong></div>
       </div>
       ${renderPipelineProgress(item.progress)}
@@ -1579,7 +1667,8 @@ async function showAutomations(push=true){
   $("automationHistoryCard").classList.add("hidden");
 }
 
-function showAutomationForm(item=null){
+async function showAutomationForm(item=null){
+  await ensureEntityInventory();
   resetAutomationForm(item);
   $("automationFormCard").classList.remove("hidden");
   $("automationFormCard").scrollIntoView({behavior:"smooth",block:"start"});
@@ -1617,7 +1706,12 @@ async function saveScheduledAutomation(){
       theme:$("automationTheme").value,
       destinations:$("automationPaperless").checked?["paperless"]:[]
     },
-    notification:{persistent:$("automationPersistentNotification").checked},
+    notification:{
+      persistent:$("automationPersistentNotification").checked,
+      notify_entity:$("automationNotifyEntity").value||"",
+      tts_entity:$("automationTtsEntity").value||"",
+      media_player_entity:$("automationMediaPlayer").value||""
+    },
     retry:{
       enabled:$("automationRetryEnabled").checked,
       max_retries:Number($("automationMaxRetries").value||1),
@@ -1695,7 +1789,7 @@ const PRIMARY_PAGES = new Set(["homePage","reportsPage","documentsPage","automat
 const PAGE_TAB = {
   homePage:"tabCatalogues", catalogPage:"tabCatalogues", devicePage:"tabCatalogues", deviceAnalysisPage:"tabCatalogues",
   reportsPage:"tabReports", reportFormPage:"tabReports", reportPreviewPage:"tabReports",
-  documentsPage:"tabDocuments", exportProvidersPage:"tabDocuments",
+  documentsPage:"tabDocuments", exportProvidersPage:"tabSettings",
   automationsPage:"tabAutomations",
   providersPage:"tabSettings"
 };
@@ -1712,7 +1806,7 @@ function updatePrimaryTabs(page){
 const PAGE_PARENT = {
   catalogPage:"homePage", devicePage:"homePage", deviceAnalysisPage:"homePage",
   reportFormPage:"reportsPage", reportPreviewPage:"reportsPage",
-  exportProvidersPage:"documentsPage"
+  exportProvidersPage:"providersPage"
 };
 
 function setPage(page, state={}, push=true){
@@ -1730,6 +1824,7 @@ async function showParentPage(){
   const parent = PAGE_PARENT[page] || "homePage";
   if(parent === "reportsPage") return showReports();
   if(parent === "documentsPage") return showDocuments();
+  if(parent === "providersPage") return showProviders();
   return showHome();
 }
 

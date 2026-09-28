@@ -155,6 +155,17 @@ def normalize_automation(payload, automation_id=None):
 
     notification = copy.deepcopy(payload.get('notification') or {})
     persistent = bool(notification.get('persistent', False))
+    notify_entity = str(notification.get('notify_entity') or '').strip()
+    tts_entity = str(notification.get('tts_entity') or '').strip()
+    media_player_entity = str(notification.get('media_player_entity') or '').strip()
+    if notify_entity and not notify_entity.startswith('notify.'):
+        raise ValueError('notification.notify_entity doit être une entité notify.*')
+    if tts_entity and not tts_entity.startswith('tts.'):
+        raise ValueError('notification.tts_entity doit être une entité tts.*')
+    if media_player_entity and not media_player_entity.startswith('media_player.'):
+        raise ValueError('notification.media_player_entity doit être une entité media_player.*')
+    if bool(tts_entity) != bool(media_player_entity):
+        raise ValueError('TTS nécessite une entité tts et un lecteur media_player')
 
     retry = copy.deepcopy(payload.get('retry') or {})
     retry_enabled = bool(retry.get('enabled', False))
@@ -180,6 +191,9 @@ def normalize_automation(payload, automation_id=None):
         },
         'notification': {
             'persistent': persistent,
+            'notify_entity': notify_entity,
+            'tts_entity': tts_entity,
+            'media_player_entity': media_player_entity,
         },
         'retry': {
             'enabled': retry_enabled,

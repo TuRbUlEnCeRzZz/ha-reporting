@@ -1,15 +1,40 @@
-# Nouveautés beta.19
+# Nouveautés beta.20
 
-Pour les rapports quotidiens, `period.boundary_time` permet de définir une journée métier. Exemple :
+## Données et rapports
 
-```yaml
-period:
-  type: day
-  mode: previous
-  boundary_time: "05:30"
-```
+L'onglet **Catalogues** devient **Données** afin de mieux décrire son rôle : choisir les appareils, capteurs et métriques à analyser. Le moteur continue d'utiliser les catalogues comme objets internes.
 
-Sans ce champ, la journée commence à `00:00` comme dans les versions précédentes. La navigation principale utilise désormais des onglets persistants.
+Les rapports disposent d'un bouton **Dupliquer**. La copie reprend les catalogues, période, comparaisons, analyse IA et paramètres de sortie, mais reçoit un nouvel ID et ne copie ni documents ni automatisations.
+
+## Statistiques de puissance
+
+Pour les périodes détaillées, les sources `power` utilisent l'export brut VictoriaMetrics lorsque celui-ci est disponible. Le pic n'est donc plus dépendant du pas d'affichage de 5 minutes. La moyenne est pondérée par le temps entre les échantillons. Sur les longues périodes en rollup, VictoriaMetrics fournit également une intégrale `integrate()` utilisée pour la moyenne temporelle.
+
+## Thème et PDF
+
+Dans l'Ingress, HA Reporting recopie les propriétés de fond effectivement rendues par Home Assistant afin de mieux s'intégrer aux thèmes tels que Liquid Glass. Un fallback interne reste disponible si le parent n'est pas lisible.
+
+En thème sombre, le PDF natif applique maintenant le fond sombre à la page A4 elle-même ; la marge n'apparaît donc plus comme un cadre blanc.
+
+## Exports et notifications
+
+Les destinations d'export sont accessibles depuis **Paramètres**. Les documents conservent leurs actions d'export manuel.
+
+Une automatisation peut maintenant combiner :
+
+- notification persistante Home Assistant ;
+- notification via une entité `notify.*` (notamment mobile) ;
+- lecture TTS via une entité `tts.*` et un lecteur `media_player.*`.
+
+L'échec d'une notification reste non destructif : le rapport/PDF déjà généré reste valide et le job se termine avec avertissement.
+
+## Analyse IA
+
+Le contexte IA ne transmet plus l'absence de reset comme un fait digne d'être commenté. Le prompt lui demande de ne mentionner reset, reconstruction ou fallback que lorsqu'ils se sont réellement produits et qu'ils affectent l'interprétation.
+
+## Langue
+
+Beta.20 reste en français. La couche de traduction français/anglais est reportée à une version ultérieure.
 
 # HA Reporting — 0.1.0-beta.13
 

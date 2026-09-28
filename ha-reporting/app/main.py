@@ -244,28 +244,75 @@ def home_assistant_call_service(domain, service, service_data):
     return json.loads(raw or b"[]")
 
 
-def _persistent_notification_for_job(job, report, analysis):
-    options = (job or {}).get("options") or {}
-    notification = options.get("notification") or {}
-    if not notification.get("persistent"):
-        return None
-    report_name = str((report or {}).get("name") or job.get("report_id") or "Rapport HA Reporting")
+def _notification_message(job, report, analysis):
+    report_name = str((report or {}).get("name") or (job or {}).get("report_id") or "Rapport HA Reporting")
     ai_text = (analysis or {}).get("text") if (analysis or {}).get("status") == "completed" else None
     if ai_text:
         message = ai_text
     else:
         status = str((analysis or {}).get("status") or "désactivée")
         message = f"Rapport généré avec succès. Analyse IA : {status}."
-    notification_id = "ha_reporting_" + stable_id(str(options.get("automation_id") or job.get("report_id") or job.get("id")))
-    return home_assistant_call_service(
-        "persistent_notification",
-        "create",
-        {
-            "notification_id": notification_id,
-            "title": report_name,
-            "message": message,
-        },
+    return report_name, message
+
+
+def _notification_requested(notification):
+    notification = notification or {}
+    return bool(
+        notification.get("persistent")
+        or notification.get("notify_entity")
+        or (notification.get("tts_entity") and notification.get("media_player_entity"))
     )
+
+
+def _notifications_for_job(job, report, analysis):
+    options = (job or {}).get("options") or {}
+    notification = options.get("notification") or {}
+    report_name, message = _notification_message(job, report, analysis)
+    results = {}
+
+    if notification.get("persistent"):
+        try:
+            notification_id = "ha_reporting_" + stable_id(str(options.get("automation_id") or job.get("report_id") or job.get("id")))
+            home_assistant_call_service(
+                "persistent_notification",
+                "create",
+                {"notification_id": notification_id, "title": report_name, "message": message},
+            )
+            results["persistent"] = {"ok": True}
+        except Exception as exc:
+            results["persistent"] = {"ok": False, "error": str(exc)}
+
+    notify_entity = str(notification.get("notify_entity") or "").strip()
+    if notify_entity:
+        try:
+            home_assistant_call_service(
+                "notify",
+                "send_message",
+                {"entity_id": notify_entity, "title": report_name, "message": message},
+            )
+            results["notify"] = {"ok": True, "entity_id": notify_entity}
+        except Exception as exc:
+            results["notify"] = {"ok": False, "entity_id": notify_entity, "error": str(exc)}
+
+    tts_entity = str(notification.get("tts_entity") or "").strip()
+    media_player_entity = str(notification.get("media_player_entity") or "").strip()
+    if tts_entity and media_player_entity:
+        try:
+            home_assistant_call_service(
+                "tts",
+                "speak",
+                {
+                    "entity_id": tts_entity,
+                    "media_player_entity_id": media_player_entity,
+                    "message": message,
+                    "cache": True,
+                },
+            )
+            results["tts"] = {"ok": True, "tts_entity": tts_entity, "media_player_entity": media_player_entity}
+        except Exception as exc:
+            results["tts"] = {"ok": False, "tts_entity": tts_entity, "media_player_entity": media_player_entity, "error": str(exc)}
+
+    return results
 
 
 def get_categories():
@@ -1518,7 +1565,23 @@ def _automation_options(payload):
     notification_raw = payload.get("notification") or {}
     if not isinstance(notification_raw, dict):
         raise ValueError("notification doit être un objet")
-    notification = {"persistent": bool(notification_raw.get("persistent", False))}
+    notify_entity = str(notification_raw.get("notify_entity") or "").strip()
+    tts_entity = str(notification_raw.get("tts_entity") or "").strip()
+    media_player_entity = str(notification_raw.get("media_player_entity") or "").strip()
+    if notify_entity and not notify_entity.startswith("notify."):
+        raise ValueError("notification.notify_entity doit être une entité notify.*")
+    if tts_entity and not tts_entity.startswith("tts."):
+        raise ValueError("notification.tts_entity doit être une entité tts.*")
+    if media_player_entity and not media_player_entity.startswith("media_player."):
+        raise ValueError("notification.media_player_entity doit être une entité media_player.*")
+    if bool(tts_entity) != bool(media_player_entity):
+        raise ValueError("TTS nécessite une entité tts et un lecteur media_player")
+    notification = {
+        "persistent": bool(notification_raw.get("persistent", False)),
+        "notify_entity": notify_entity,
+        "tts_entity": tts_entity,
+        "media_player_entity": media_player_entity,
+    }
     automation_id = str(payload.get("automation_id") or "").strip() or None
     trigger = str(payload.get("trigger") or "external").strip().lower()
     if trigger not in {"external", "scheduled", "manual", "retry"}:
@@ -1933,17 +1996,20 @@ def _run_automation_job(job_id):
         if destinations:
             _set_pipeline_step(job_id, "export", "warning" if any(not value["ok"] for value in export_results.values()) else "completed")
 
-        notification_result = None
-        if (options.get("notification") or {}).get("persistent"):
+        notification_result = {}
+        notification_config = options.get("notification") or {}
+        if _notification_requested(notification_config):
             _set_pipeline_step(job_id, "notification", "running")
-            try:
-                notification_result = _persistent_notification_for_job(get_automation_job(job_id), report, analysis)
-            except Exception as exc:
-                warning = f"Notification persistante: {exc}"
+            notification_result = _notifications_for_job(get_automation_job(job_id), report, analysis)
+            failed_notifications = [
+                (kind, value) for kind, value in notification_result.items()
+                if not value.get("ok")
+            ]
+            for kind, value in failed_notifications:
+                warning = f"Notification {kind}: {value.get('error') or 'échec'}"
                 warnings.append(warning)
                 _update_automation_job(job_id, message=warning)
-
-            _set_pipeline_step(job_id, "notification", "completed" if notification_result is not None else "warning")
+            _set_pipeline_step(job_id, "notification", "warning" if failed_notifications else "completed")
 
         terminal = "completed_with_errors" if warnings else "completed"
         completed_job = _update_automation_job(
@@ -1959,7 +2025,7 @@ def _run_automation_job(job_id):
                 "destinations": list(export_results.keys()),
                 "ai_analysis": (analysis or {}).get("text") if (analysis or {}).get("status") == "completed" else None,
                 "ai_status": (analysis or {}).get("status") if analysis else ("disabled" if not run_ai else None),
-                "notification": {"persistent": bool((options.get("notification") or {}).get("persistent")), "ok": notification_result is not None} if (options.get("notification") or {}).get("persistent") else {"persistent": False},
+                "notification": copy.deepcopy(notification_result) if _notification_requested(options.get("notification") or {}) else {},
             },
         )
         _record_scheduled_job_terminal(completed_job)
@@ -2008,7 +2074,7 @@ def start_automation_report_job(payload):
                 ("data", "pending"), ("ai", "pending"),
                 ("pdf", "pending" if options.get("generate_pdf") else "skipped"),
                 ("export", "pending" if options.get("destinations") else "skipped"),
-                ("notification", "pending" if (options.get("notification") or {}).get("persistent") else "skipped"),
+                ("notification", "pending" if _notification_requested(options.get("notification") or {}) else "skipped"),
             )},
             "message": "Job mis en file d'attente",
             "created_at_epoch": now,

@@ -29,6 +29,7 @@ from exporters.base import ExportProviderError
 from exporters.paperless import PaperlessExportProvider
 import exporters.config as export_config
 import document_store
+import automation_store
 from rendering.pdf_report import render_pdf_native
 import main
 
@@ -71,6 +72,21 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(a['quality']['received_points'],2)
         self.assertEqual(a['statistics']['mean'],2)
         self.assertEqual(a['quality']['expected_points'],2)
+    def test_power_mean_is_time_weighted(self):
+        a=self.engine.analyze('power',[(0,100),(10,200),(40,0)],0,50,300,'W')
+        self.assertAlmostEqual(a['statistics']['sample_mean'],100.0)
+        self.assertAlmostEqual(a['statistics']['mean'],140.0)
+        self.assertEqual(a['statistics']['mean_method'],'time_weighted')
+        self.assertAlmostEqual(a['statistics']['mean_coverage_percent'],100.0)
+        self.assertEqual(a['statistics']['max']['value'],200.0)
+
+    def test_power_rollup_uses_integral_for_weighted_mean(self):
+        values=dict(count=4,first=100,last=200,first_ts=0,last_ts=3590,min=50,min_ts=1,max=500,max_ts=1200,mean=999,p95=450,present_duration=3600,integral=720000)
+        a=self.engine.analyze_rollup('power',{'values':values},0,3600,300,'W')
+        self.assertEqual(a['statistics']['sample_mean'],999)
+        self.assertAlmostEqual(a['statistics']['mean'],200.0)
+        self.assertEqual(a['statistics']['mean_method'],'time_weighted_integral')
+
     def test_month_has_8928_positions(self):
         self.assertEqual(self.engine.analyze('power',[],0,31*86400,300)['quality']['expected_points'],8928)
     def test_monotonic_runtime(self):
@@ -195,6 +211,21 @@ class FallbackTests(unittest.TestCase):
         self.assertEqual(r['summary']['sources_error'],1)
         self.assertEqual(r['summary']['sources_ok'],1)
 
+class Beta20PowerPrecisionTests(unittest.TestCase):
+    def test_detailed_power_uses_raw_samples(self):
+        class PowerProvider:
+            capabilities=ProviderCapabilities(report_rollup=True,raw_series=True)
+            def health_check(self): return ProviderStatus('victoria_metrics',True,True,'OK')
+            def get_raw_series(self,source,start,end): return [(0,100),(10,200),(40,0)]
+            def get_series(self,*args): raise AssertionError('sampled power must not be used when raw export is available')
+        engine=DeviceAnalysisEngine(lambda _:PowerProvider())
+        result=engine.analyze(catalog_id='c',catalog_name='C',device_id='d',device={'sensors':{'p':{'entity_id':'sensor.p','metric':'power','unit':'W'}}},default_provider='victoria_metrics',start=0,end=50,step=300,retrieval_mode='series')
+        source=result['sources'][0]
+        self.assertEqual(source['retrieval_mode'],'raw_series_power')
+        self.assertEqual(source['analysis']['statistics']['max']['value'],200)
+        self.assertAlmostEqual(source['analysis']['statistics']['mean'],140)
+
+
 class ProviderTests(unittest.TestCase):
     def row(self, points, **labels):
         return json.dumps({'metric':dict(__name__='h_value',**labels),'timestamps':[ts for ts,v in points],'values':[v for ts,v in points]}).encode()+b'\n'
@@ -232,6 +263,12 @@ class ProviderTests(unittest.TestCase):
             p.get_report_statistics(SOURCE,1000.0001,1001.692432)
         self.assertIn('[1692ms]',mock.call_args.args[0])
         self.assertEqual(mock.call_args.kwargs['evaluation_time'],'1001.692')
+    def test_power_rollup_query_contains_integral_and_exact_max(self):
+        expr=VM.report_rollup_expression({'entity_id':'sensor.power','metric':'power','unit':'W'},0,3600,300)
+        self.assertIn('integrate(',expr)
+        self.assertIn('max_over_time(',expr)
+        self.assertIn('tmax_over_time(',expr)
+
     def test_integer_period_no_end_sample(self):
         p=VM('http://example.invalid')
         with patch.object(p,'instant_query',return_value={'data':{'result':[]}}) as mock:
@@ -594,6 +631,7 @@ class HtmlRendererTests(unittest.TestCase):
         self.assertIn('print-color-adjust:exact',html)
         self.assertIn('--paper:#14191f',html)
         self.assertIn('background:var(--paper)!important',html)
+        self.assertIn('@page{size:A4;margin:10mm;background:#0c1015}',html)
         self.assertIn('break-inside:auto',html)
         self.assertNotIn('.ai-ok{break-before:page;page-break-before:always}',html)
         self.assertNotIn('body{background:#fff',html)
@@ -612,6 +650,7 @@ class HtmlRendererTests(unittest.TestCase):
         self.assertIn('--paper:#ffffff',html)
         self.assertIn('color-scheme:light',html)
         self.assertNotIn('--paper:#14191f',html)
+        self.assertIn('@page{size:A4;margin:10mm;background:#ffffff}',html)
 
     def test_html_report_contains_escaped_ai_analysis(self):
         html=render_report_html(self.sample_result())
@@ -637,6 +676,21 @@ class HtmlRendererTests(unittest.TestCase):
         html=render_report_html(sample)
         self.assertEqual(html.count('La période de référence ne fournit pas une valeur comparable.'),1)
         self.assertIn('unavailable-note',html)
+
+
+class Beta20AiContextTests(unittest.TestCase):
+    def test_zero_reset_diagnostic_is_not_sent_to_ai(self):
+        result={
+            'report':{'name':'R'},'resolved_period':{'label':'P','timezone':'UTC'},'summary':{},
+            'catalogs':[{'name':'C','devices':[{'device':{'name':'D','category':'energie'},'sources':[
+                {'sensor_key':'e','metric':'energy_total','unit':'kWh','status':'ok','analysis':{'statistics':{'delta':1.2,'last':{'value':10},'resets_detected':0},'quality':{},'validation':{'warnings':[]}}}
+            ]}]}],
+            'comparisons':{}
+        }
+        context=compact_report_context(result)
+        values=context['catalogs'][0]['devices'][0]['sources'][0]['values']
+        self.assertNotIn('resets_detected',values)
+        self.assertIn("ne mentionne jamais qu'une valeur « n'a pas été reconstruite »",_instructions('{}'))
 
 
 class Beta9DocumentTests(unittest.TestCase):
@@ -709,7 +763,7 @@ class Beta12ExportProviderTests(unittest.TestCase):
         self.assertTrue(status['reachable'])
         self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
         self.assertEqual(seen['auth'],'Token secret')
-        self.assertIn('beta.19',seen['ua'])
+        self.assertIn('beta.20',seen['ua'])
 
     def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
         import tempfile
@@ -928,6 +982,34 @@ class Beta13AutomationJobTests(unittest.TestCase):
         self.assertIn('{"job": get_automation_job(job_id)}',text)
         self.assertIn('completed_with_errors',text)
 
+class Beta20NotificationTests(unittest.TestCase):
+    def test_automation_store_normalizes_notify_and_tts_targets(self):
+        item=automation_store.normalize_automation({
+            'name':'A','report_id':'r','notification':{
+                'persistent':True,'notify_entity':'notify.mobile_app_phone',
+                'tts_entity':'tts.piper','media_player_entity':'media_player.salon'
+            }
+        })
+        self.assertEqual(item['notification']['notify_entity'],'notify.mobile_app_phone')
+        self.assertEqual(item['notification']['tts_entity'],'tts.piper')
+        self.assertEqual(item['notification']['media_player_entity'],'media_player.salon')
+
+    def test_notifications_call_persistent_notify_and_tts(self):
+        job={'id':'j','report_id':'r','options':{'notification':{
+            'persistent':True,'notify_entity':'notify.mobile_app_phone',
+            'tts_entity':'tts.piper','media_player_entity':'media_player.salon'
+        }}}
+        with patch.object(main,'home_assistant_call_service',return_value=[]) as call:
+            result=main._notifications_for_job(job,{'name':'Rapport'},{'status':'completed','text':'SYNTHÈSE\nOK'})
+        self.assertTrue(result['persistent']['ok'])
+        self.assertTrue(result['notify']['ok'])
+        self.assertTrue(result['tts']['ok'])
+        domains_services=[args[:2] for args,_kwargs in call.call_args_list]
+        self.assertIn(('persistent_notification','create'),domains_services)
+        self.assertIn(('notify','send_message'),domains_services)
+        self.assertIn(('tts','speak'),domains_services)
+
+
 class PackageTests(unittest.TestCase):
     def test_yaml_and_installation_layout(self):
         import yaml
@@ -935,7 +1017,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.19')
+        self.assertEqual(config['version'],'0.1.0-beta.20')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertTrue(any(item.get('type')=='share' and item.get('read_only') is False and item.get('path')=='/share' for item in config.get('map',[]) if isinstance(item,dict)))
@@ -956,6 +1038,18 @@ class PackageTests(unittest.TestCase):
         self.assertIn('reportFilenameTemplate', index)
         self.assertIn('reportAiEnabled', index)
         self.assertIn('Think before responding', index)
+        self.assertIn('>Données</button>', index)
+        self.assertIn('Données à analyser', index)
+        self.assertIn('Configurer les destinations', index)
+        self.assertIn('automationNotifyEntity', index)
+        self.assertIn('automationTtsEntity', index)
+        self.assertIn('automationMediaPlayer', index)
+        self.assertNotIn('id="exportProvidersButton">Destinations d’export</button><button id="refreshDocumentsButton"', index)
+        app_js=(addon/'app/app.js').read_text()
+        self.assertIn('duplicateReportDefinition',app_js)
+        self.assertIn('exportProvidersPage:"tabSettings"',app_js)
+        style=(addon/'app/style.css').read_text()
+        self.assertIn('--hr-page-background-image',style)
     def test_healthy_report_no_raw_transfer(self):
         p=FakeProvider(rollup())
         resolved=PeriodEngine('UTC').resolve({'type':'custom','start':'1970-01-01','end':'1971-01-01'})

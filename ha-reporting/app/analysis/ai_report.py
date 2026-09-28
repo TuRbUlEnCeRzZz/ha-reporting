@@ -125,8 +125,12 @@ def compact_report_context(result: dict[str, Any]) -> dict[str, Any]:
                     values = {
                         "delta": stats.get("delta"),
                         "last": _stat_value(stats, "last"),
-                        "resets_detected": stats.get("resets_detected"),
                     }
+                    # A zero-reset diagnostic is an implementation detail, not
+                    # a user-facing finding. Only transmit it when a reset
+                    # actually affected the interpretation.
+                    if int(stats.get("resets_detected", 0) or 0) > 0:
+                        values["resets_detected"] = int(stats.get("resets_detected", 0) or 0)
                 else:
                     values = {
                         "first": _stat_value(stats, "first"),
@@ -262,6 +266,7 @@ def _instructions(context_json: str) -> str:
 Réponds directement et brièvement en français, sans afficher de raisonnement interne.
 N'invente aucun chiffre et ne recalcule pas les données : utilise exclusivement les statistiques fournies.
 Distingue clairement un fait calculé d'une interprétation. Ignore les identifiants techniques lorsqu'un nom lisible est disponible.
+Ne transforme pas les diagnostics internes du moteur en points d'attention. En particulier, ne mentionne jamais qu'une valeur « n'a pas été reconstruite », qu'aucun reset n'a eu lieu, ni l'absence d'un fallback. Mentionne un reset/reconstruction uniquement s'il s'est réellement produit et s'il affecte la fiabilité ou l'interprétation de la valeur.
 
 Règles impératives pour les comparaisons N/N-x :
 - Une source `unavailable` ne permet aucune conclusion d'évolution.
@@ -272,7 +277,7 @@ Règles impératives pour les comparaisons N/N-x :
 - Exemple interdit : « la puissance moyenne est en baisse de 8,6 % par rapport à l'année précédente ». Exemple attendu : « sur les données disponibles, la puissance moyenne calculée est inférieure de 8,6 %, mais la comparaison reste partielle ».
 - N'utilise jamais un pourcentage relatif issu d'une comparaison incomplète pour affirmer une dérive, une surconsommation ou une amélioration.
 - Distingue strictement reconstruction et couverture : `base_quality.counter_mode=provider_reconstructed` signifie que la valeur N a été reconstruite après un ou plusieurs resets ; `reference_quality.period_coverage_percent` décrit séparément la couverture de la référence N-x. Ne fusionne jamais ces deux notions dans une expression comme « reconstruction partielle ».
-- Si `interpretation.base_reconstructed` vaut true, dis au besoin « la valeur de la période courante a été reconstruite après reset ». Si `interpretation.reference_coverage_limited` vaut true, dis séparément « la référence historique est partielle » avec sa couverture. N'affirme pas que la référence est reconstruite sauf si `interpretation.reference_reconstructed` vaut true.
+- Si `interpretation.base_reconstructed` vaut true, tu peux signaler la reconstruction uniquement si elle est utile à la fiabilité de l'analyse. Si cette valeur est false, ne parle jamais de reset ou de reconstruction. Si `interpretation.reference_coverage_limited` vaut true, dis séparément « la référence historique est partielle » avec sa couverture. N'affirme pas que la référence est reconstruite sauf si `interpretation.reference_reconstructed` vaut true.
 - Une recommandation fondée seulement sur une comparaison partielle/reconstruite doit rester proportionnée : privilégie « surveiller », « poursuivre la collecte » ou « recontrôler quand la couverture sera suffisante ». Ne demande pas d'en rechercher les causes sauf si les données de la période courante montrent, indépendamment de la comparaison, une anomalie étayée.
 
 Produis exactement ces trois sections, en texte simple :

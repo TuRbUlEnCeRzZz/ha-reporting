@@ -18,12 +18,12 @@
   </button>
   <div>
     <h1>HA Reporting</h1>
-    <div class="subtitle">0.1.0-beta.19</div>
+    <div class="subtitle">0.1.0-beta.20</div>
   </div>
 </header>
 
 <nav id="primaryTabs" class="primaryTabs" aria-label="Navigation principale">
-  <button id="tabCatalogues" class="primaryTab" type="button">Catalogues</button>
+  <button id="tabCatalogues" class="primaryTab" type="button">Données</button>
   <button id="tabReports" class="primaryTab" type="button">Rapports</button>
   <button id="tabDocuments" class="primaryTab" type="button">Documents</button>
   <button id="tabAutomations" class="primaryTab" type="button">Automatisations</button>
@@ -34,8 +34,8 @@
   <section id="homePage">
     <div class="toolbar">
       <div>
-        <h2>Catalogues</h2>
-        <p class="muted">Les catalogues regroupent des appareils et leurs sources de données.</p>
+        <h2>Données à analyser</h2>
+        <p class="muted">Regroupe les appareils, capteurs et métriques à analyser dans des catalogues réutilisables.</p>
       </div>
       <div class="toolbarButtons">
         <button class="primary" id="newCatalogButton">+ Nouveau catalogue</button>
@@ -48,7 +48,7 @@
     <div class="toolbar">
       <div>
         <h2>Rapports</h2>
-        <p class="muted">Les rapports associent un ou plusieurs catalogues à une définition de période.</p>
+        <p class="muted">Définis la présentation, la période, les comparaisons, l’analyse IA et la sortie PDF de chaque rapport.</p>
       </div>
       <div class="toolbarButtons">
         <button class="primary" id="newReportButton">+ Nouveau rapport</button>
@@ -62,7 +62,7 @@
     <div class="toolbar">
       <div>
         <h2>Automatisations</h2>
-        <p class="muted">Planifie toutes les étapes : rapport, analyse IA, PDF local, exports et notification Home Assistant.</p>
+        <p class="muted">Planifie la création des rapports, l’analyse IA, le PDF, les exports et les notifications Home Assistant.</p>
       </div>
       <div class="toolbarButtons">
         <button id="refreshAutomationsButton">Actualiser</button>
@@ -151,11 +151,26 @@
           <span>Générer le PDF natif</span>
         </label>
       </div>
+      <h3>Exports</h3>
       <div class="choiceGrid automationDestinations">
         <label class="choiceItem"><input id="automationPaperless" type="checkbox"><span>Exporter vers Paperless-ngx</span></label>
-        <label class="choiceItem"><input id="automationPersistentNotification" type="checkbox"><span>Notification persistante avec l'analyse IA</span></label>
       </div>
-      <p class="muted">Les heures sont saisies au format 24 h et utilisent le fuseau Home Assistant. L'export Paperless nécessite la génération du PDF.</p>
+
+      <h3>Notifications</h3>
+      <div class="choiceGrid automationNotifications">
+        <label class="choiceItem"><input id="automationPersistentNotification" type="checkbox"><span>Notification persistante Home Assistant</span></label>
+        <label>Notification appareil / smartphone
+          <select id="automationNotifyEntity"><option value="">Aucune</option></select>
+          <small class="fieldHelp">Utilise une entité <code>notify.*</code>, par exemple une notification mobile.</small>
+        </label>
+        <label>Synthèse vocale (TTS)
+          <select id="automationTtsEntity"><option value="">Désactivée</option></select>
+        </label>
+        <label>Lecteur TTS
+          <select id="automationMediaPlayer"><option value="">Aucun lecteur</option></select>
+        </label>
+      </div>
+      <p class="muted">Les heures sont saisies au format 24 h et utilisent le fuseau Home Assistant. L'export Paperless nécessite la génération du PDF. Les notifications réutilisent le texte de l'analyse IA lorsqu'elle est disponible.</p>
 
       <h3>Fiabilité</h3>
       <div class="grid three">
@@ -186,7 +201,7 @@
         <h2>Documents</h2>
         <p class="muted">PDF natifs générés et conservés localement par HA Reporting.</p>
       </div>
-      <div class="toolbarButtons"><button id="exportProvidersButton">Destinations d’export</button><button id="refreshDocumentsButton">Actualiser</button></div>
+      <div class="toolbarButtons"><button id="refreshDocumentsButton">Actualiser</button></div>
     </div>
     <div id="documentList"></div>
   </section>
@@ -424,6 +439,15 @@
     <div class="card">
       <h2>Paramètres</h2>
       <p class="muted">Configuration globale de HA Reporting.</p>
+
+      <div class="settingsSection">
+        <div>
+          <h3>Destinations d’export</h3>
+          <p class="muted">Configure les destinations externes utilisées par les documents et les automatisations.</p>
+        </div>
+        <button id="exportProvidersButton">Configurer les destinations</button>
+      </div>
+
       <h3>Sources de données</h3>
       <p class="muted">Les providers fournissent les séries temporelles au moteur de reporting. Les catalogues restent indépendants de leur implémentation.</p>
 

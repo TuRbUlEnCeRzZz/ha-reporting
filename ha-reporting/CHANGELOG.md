@@ -1,3 +1,15 @@
+## 0.1.0-beta.20
+
+- statistiques de puissance précises : pics calculés sur les échantillons bruts VictoriaMetrics pour les périodes détaillées ;
+- puissance moyenne pondérée dans le temps, avec intégrale provider pour les longues périodes ;
+- PDF sombre avec fond de page A4 sombre jusqu'aux marges physiques ;
+- fond de l'Ingress synchronisé sur le fond réellement rendu par Home Assistant / Liquid Glass quand disponible ;
+- onglet « Données » et libellés d'aide clarifiés pour un usage non technique ;
+- bouton « Dupliquer » pour les définitions de rapport ;
+- destinations d'export déplacées dans « Paramètres » ;
+- automatisations : notification persistante, entité `notify.*` et TTS via `tts.*` + `media_player.*` ;
+- contexte IA nettoyé des diagnostics de reset/fallback sans intérêt utilisateur.
+
 ## 0.1.0-beta.19
 
 - Remplace la navigation principale par cinq onglets persistants : Catalogues, Rapports, Documents, Automatisations et Paramètres.

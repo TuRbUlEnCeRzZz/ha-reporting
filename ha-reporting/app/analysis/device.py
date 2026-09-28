@@ -177,7 +177,18 @@ class DeviceAnalysisEngine:
                         "l'analyse optimisée des longues périodes"
                     )
                 else:
-                    points = provider.get_series(source, start, end, step)
+                    if metric == "power" and getattr(provider.capabilities, "raw_series", False):
+                        try:
+                            points = provider.get_raw_series(source, start, end)
+                            source_retrieval_mode = "raw_series_power"
+                        except Exception:
+                            # Precision enhancement only: never make a report fail
+                            # merely because the provider cannot export raw samples.
+                            points = provider.get_series(source, start, end, step)
+                            source_retrieval_mode = "series"
+                    else:
+                        points = provider.get_series(source, start, end, step)
+                        source_retrieval_mode = "series"
                     analysis = self.statistics.analyze(
                         metric=metric,
                         points=points,
@@ -187,7 +198,6 @@ class DeviceAnalysisEngine:
                         unit=source.get("unit"),
                     )
                     points_count = len(points)
-                    source_retrieval_mode = "series"
 
                 analysis_status = analysis.get("status")
                 if analysis_status == "ok":

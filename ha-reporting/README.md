@@ -1,15 +1,19 @@
 # HA Reporting
 
-Add-on Home Assistant OS — version **0.1.0-beta.19**.
+Add-on Home Assistant OS — version **0.1.0-beta.20**.
 
-Beta.19 consolide l'expérience d'utilisation sans modifier le moteur statistique :
+Beta.20 consolide l'expérience utilisateur et la précision énergétique :
 
-- navigation principale par onglets persistants ;
-- en-tête limité au nom et à la version ;
-- libellés de périodes et comparaisons corrigés ;
-- heure de début de journée configurable par rapport, avec `00:00` par défaut et prise en charge des changements d'heure ;
-- compatibilité conservée avec les rapports existants ;
-- automatisations, analyse IA, PDF natif, documents et export Paperless-ngx issus de beta.18 conservés.
+- l'onglet principal **Données** décrit plus clairement les appareils, capteurs et métriques à analyser ;
+- les définitions de rapports peuvent être **dupliquées** ;
+- les destinations d'export sont configurées depuis **Paramètres** ;
+- le fond de l'interface reprend le fond réellement rendu par Home Assistant / Liquid Glass lorsque celui-ci est accessible depuis l'Ingress ;
+- le PDF sombre colore maintenant toute la feuille A4, y compris la zone de marge ;
+- les pics de puissance des périodes détaillées utilisent les échantillons bruts VictoriaMetrics et la moyenne de puissance est pondérée dans le temps ;
+- l'analyse IA n'est plus invitée à commenter des diagnostics internes sans incidence utilisateur ;
+- les automatisations peuvent utiliser une notification persistante, une entité `notify.*` ou un TTS (`tts.*` + `media_player.*`).
+
+La traduction dynamique n'est pas encore incluse : l'interface reste en français pour cette version.
 
 ## Notes historiques
 

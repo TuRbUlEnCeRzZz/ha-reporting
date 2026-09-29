@@ -1,4 +1,4 @@
-/* HA Reporting i18n foundation (beta.25).
+/* HA Reporting i18n foundation (beta.26).
  *
  * The legacy beta.20 UI still contains French source strings in a number of
  * rendering functions.  beta.21 centralizes translations here and translates
@@ -307,8 +307,15 @@ const HR_I18N_MESSAGES = {
   "data.normalized_json": {fr:"Voir le JSON normalisé", en:"View normalized JSON"},
   "data.normalized_received": {fr:"✓ Série normalisée reçue", en:"✓ Normalized series received"},
   "report.plan_json": {fr:"Voir le JSON du plan de rapport", en:"View report plan JSON"},
+  "document.download_failed": {fr:"Téléchargement impossible", en:"Download failed"},
+  "comparison.status_comparable": {fr:"Comparable", en:"Comparable"},
+  "comparison.status_partial": {fr:"Partielle", en:"Partial"},
+  "comparison.status_limited": {fr:"Limitée", en:"Limited"},
+  "comparison.status_reconstructed": {fr:"Reconstruite", en:"Reconstructed"},
+  "comparison.status_unavailable": {fr:"Indisponible", en:"Unavailable"},
   "comparison.comparable": {fr:"Comparables", en:"Comparable"},
   "comparison.partial": {fr:"Partielles", en:"Partial"},
+  "comparison.limited": {fr:"Limitées", en:"Limited"},
   "comparison.reconstructed": {fr:"Reconstruites", en:"Reconstructed"},
   "comparison.unavailable": {fr:"Indisponibles", en:"Unavailable"},
   "analysis.invalid": {fr:"Invalides", en:"Invalid"},

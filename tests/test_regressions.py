@@ -218,7 +218,8 @@ class FallbackTests(unittest.TestCase):
         p=FakeProvider(points=[(1000,1),(2800,0),(4600,.5)])
         a=analyze_device(p)['sources'][0]
         self.assertEqual(a['analysis']['statistics']['mode'],'detailed_reconstructed')
-        self.assertEqual(ComparisonEngine()._compare_source(a,a)['comparison_status'],'reconstructed')
+        self.assertEqual(ComparisonEngine()._compare_source(a,a)['comparison_status'],'limited')
+        self.assertTrue(any('reconstruit' in reason for reason in ComparisonEngine()._compare_source(a,a)['reasons']))
     def test_source_failure_does_not_abort_other_source(self):
         p=FakeProvider(points=[])
         r=analyze_device(p, {'bad':SOURCE,'good':dict(SOURCE,entity_id='sensor.healthy')})
@@ -401,13 +402,82 @@ class PeriodComparisonTests(unittest.TestCase):
         self.assertEqual(ComparisonEngine()._compare_source(self.source(),None)['comparison_status'],'unavailable')
     def test_partial_coverage(self):
         s=self.source();s['analysis']['quality']['period_coverage_percent']=20
-        self.assertEqual(ComparisonEngine()._compare_source(s,self.source())['comparison_status'],'partial')
+        self.assertEqual(ComparisonEngine()._compare_source(s,self.source())['comparison_status'],'limited')
     def test_zero_reference_no_percentage(self):
         a=self.source('runtime',delta=1);b=self.source('runtime',delta=0)
         self.assertIsNone(ComparisonEngine()._compare_source(a,b)['values'][0]['relative_change_percent'])
     def test_metric_aware_power_partial(self):
-        a=self.source('power');a['analysis']['quality']['sample_density_percent']=10
+        a=self.source('power');a['analysis']['quality']['density_applicable']=True;a['analysis']['quality']['sample_density_percent']=5
         self.assertEqual(ComparisonEngine()._compare_source(a,a)['comparison_status'],'partial')
+
+class Beta26ComparisonQualityTests(unittest.TestCase):
+    @staticmethod
+    def source(metric='power', unit='W', coverage=100.0, density=100.0, **stats):
+        quality={'period_coverage_percent':coverage,'sample_density_percent':density,'density_applicable':metric=='power'}
+        defaults={'max':{'value':20.0},'p95':10.0,'mean':5.0} if metric=='power' else {'delta':1.0,'last':{'value':10.0}}
+        defaults.update(stats)
+        return {'status':'ok','sensor_key':'s','entity_id':'sensor.s','metric':metric,'unit':unit,
+                'analysis':{'quality':quality,'statistics':defaults,'validation':{'valid':True,'warnings':[]}}}
+
+    def test_coverage_tiers_are_good_partial_and_limited(self):
+        engine=ComparisonEngine()
+        good=self.source(coverage=97.0,density=30.0)
+        self.assertEqual(engine._compare_source(good,good)['comparison_status'],'comparable')
+        partial=self.source(coverage=86.5,density=30.0)
+        self.assertEqual(engine._compare_source(partial,partial)['comparison_status'],'partial')
+        limited=self.source(coverage=7.1,density=30.0)
+        self.assertEqual(engine._compare_source(limited,limited)['comparison_status'],'limited')
+
+    def test_event_driven_density_is_not_blanket_partial(self):
+        engine=ComparisonEngine()
+        source=self.source(coverage=100.0,density=31.8)
+        self.assertEqual(engine._compare_source(source,source)['comparison_status'],'comparable')
+
+    def test_near_zero_energy_reference_suppresses_only_percentage(self):
+        engine=ComparisonEngine()
+        base=self.source('energy_total','kWh',density=None,delta=0.30,last={'value':7.09})
+        reference=self.source('energy_total','kWh',density=None,delta=0.05,last={'value':6.79})
+        item=engine._compare_source(base,reference)['values'][0]
+        self.assertAlmostEqual(item['absolute_change'],0.25)
+        self.assertIsNone(item['relative_change_percent'])
+        self.assertFalse(item['relative_change_applicable'])
+        self.assertEqual(item['relative_change_reason'],'near_zero_reference')
+
+    def test_near_zero_power_mean_suppresses_mean_percentage_only(self):
+        engine=ComparisonEngine()
+        base=self.source(max={'value':21.2},p95=20.9,mean=0.41,density=13.2)
+        reference=self.source(max={'value':20.3},p95=20.1,mean=0.06,density=2.8)
+        result=engine._compare_source(base,reference)
+        values={item['key']:item for item in result['values']}
+        self.assertIsNotNone(values['max']['relative_change_percent'])
+        self.assertIsNone(values['mean']['relative_change_percent'])
+        self.assertEqual(values['mean']['relative_change_reason'],'near_zero_reference')
+
+    def test_sparse_zero_power_is_not_treated_as_confirmed_zero(self):
+        engine=ComparisonEngine()
+        sparse=self.source(max={'value':0.0},p95=0.0,mean=0.0,density=1.24)
+        reference=self.source(max={'value':427.0},p95=341.0,mean=0.91,density=1.4)
+        result=engine._compare_source(sparse,reference)
+        self.assertEqual(result['comparison_status'],'limited')
+        self.assertTrue(result['base_quality']['sparse_zero_uncertain'])
+        self.assertTrue(all(item['relative_change_percent'] is None for item in result['values']))
+        self.assertTrue(all(item['relative_change_reason']=='sparse_zero_uncertain' for item in result['values']))
+        self.assertTrue(any('vrai zéro' in reason for reason in result['reasons']))
+
+    def test_limited_status_is_counted_in_target_summary(self):
+        engine=ComparisonEngine()
+        base={'catalogs':[{'id':'c','name':'C','devices':[{'device':{'id':'d','name':'D'},'sources':[dict(self.source(coverage=50),sensor_key='s')]}]}]}
+        ref={'catalogs':[{'id':'c','name':'C','devices':[{'device':{'id':'d','name':'D'},'sources':[dict(self.source(coverage=100),sensor_key='s')]}]}],
+             'resolved_period':{},'execution':{},'summary':{}}
+        out=engine.compare_target(base,ref,{'id':'x','kind':'period','offset':1,'label':'N-1'})
+        self.assertEqual(out['summary']['sources_limited'],1)
+
+    def test_v6_prompt_documents_quality_and_near_zero_policy(self):
+        prompt=_instructions('{}')
+        self.assertIn('>=95 % est représentatif',prompt)
+        self.assertIn('gap_pct_reason=near_zero_reference',prompt)
+        self.assertIn('base_sparse_zero_uncertain',prompt)
+        self.assertIn('ha-reporting-ai-context-v6',prompt)
 
 class ReportTests(unittest.TestCase):
     def test_report_aggregation_and_transfer_metadata(self):
@@ -507,7 +577,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertIn('reconstruction partielle',prompt)
         self.assertIn('base_reconstructed=true',prompt)
         self.assertIn('reference_coverage_pct',prompt)
-        self.assertIn('ha-reporting-ai-context-v5',prompt)
+        self.assertIn('ha-reporting-ai-context-v6',prompt)
         self.assertIn('poursuivre la collecte',prompt)
         self.assertIn("uniquement s'il n'y a aucune autre recommandation",prompt)
 
@@ -554,7 +624,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertEqual(meta['omitted_comparison_sources'],0)
         self.assertEqual(len(context['current']),421)
         self.assertEqual(len(context['comparisons']),420)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v5')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v6')
         encoded=json.dumps(context,ensure_ascii=False)
         self.assertIn('critical_power',encoded)
         self.assertIn('Low coverage',encoded)
@@ -569,7 +639,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertEqual(meta['omitted_current_sources'],0)
         self.assertEqual(meta['omitted_comparison_sources'],0)
         self.assertEqual(len(context['current']),1)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v5')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v6')
         self.assertNotIn('preview',context_json)
 
     def test_beta24_context_uses_named_semantics_and_integrated_energy(self):
@@ -586,7 +656,7 @@ class AiAnalysisTests(unittest.TestCase):
         sample['catalogs'][0]['devices'][0]['sources'].append(energy)
         context_json,meta=build_budgeted_ai_context(sample)
         context=json.loads(context_json)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v5')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v6')
         power=context['current'][0]
         self.assertEqual(power['values']['max'],120)
         self.assertEqual(power['values']['mean'],50)
@@ -627,7 +697,7 @@ class AiAnalysisTests(unittest.TestCase):
         sample['summary']={'sources_total':3,'sources_ok':3}
         context_json,meta=build_budgeted_ai_context(sample)
         context=json.loads(context_json)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v5')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v6')
         self.assertEqual(meta['relationships'],2)
         energy=next(item for item in context['relationships'] if item['kind']=='energy_forecast_vs_actual')
         self.assertAlmostEqual(energy['forecast_energy_kwh'],6.89)
@@ -753,7 +823,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertTrue(call['return_response'])
         self.assertEqual(call['service_data']['entity_id'],'ai_task.local')
         self.assertIn('sans afficher de raisonnement interne',call['service_data']['instructions'])
-        self.assertIn('ha-reporting-ai-context-v5',call['service_data']['instructions'])
+        self.assertIn('ha-reporting-ai-context-v6',call['service_data']['instructions'])
         self.assertEqual(result['input']['context_mode'],'lossless_self_describing')
         self.assertTrue(result['input']['context_lossless'])
         self.assertLessEqual(result['input']['context_characters'],AI_TARGET_CONTEXT_CHARS)
@@ -1011,7 +1081,7 @@ class Beta12ExportProviderTests(unittest.TestCase):
         self.assertTrue(status['reachable'])
         self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
         self.assertEqual(seen['auth'],'Token secret')
-        self.assertIn('beta.25',seen['ua'])
+        self.assertIn('beta.26',seen['ua'])
 
     def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
         import tempfile
@@ -1390,7 +1460,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.25')
+        self.assertEqual(config['version'],'0.1.0-beta.26')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertTrue(config['hassio_api'])

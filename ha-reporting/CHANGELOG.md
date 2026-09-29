@@ -1,3 +1,15 @@
+## 0.1.0-beta.26
+
+- add explicit comparison quality tiers: representative (>=95% coverage), partial (80-95%) and limited (<80%);
+- add a `limited` comparison status and surface it in report summaries;
+- stop treating normal event-driven power density as incomplete-period coverage; only very sparse power histories downgrade reliability;
+- detect sparse near-zero power histories and avoid presenting uncertain zero values as confirmed inactivity;
+- suppress relative percentages when the reference is too close to zero while retaining the absolute difference and source data;
+- introduce `ha-reporting-ai-context-v6` with near-zero and sparse-zero interpretation rules for AI Task providers;
+- require >=95% coverage for deterministic forecast/measured relationships to be described as full-period comparisons;
+- fix PDF downloads through Home Assistant Ingress/Nabu Casa by using same-session `fetch()` + Blob downloads instead of opening the protected download URL in a new tab;
+- keep all comparison sources, partial data, deterministic statistics, beta.25 relationships and existing PDF/Paperless workflows intact.
+
 ## 0.1.0-beta.25
 
 - Introduce `ha-reporting-ai-context-v5` with deterministic cross-source `relationships` while preserving every current/comparison source, including partial coverage.

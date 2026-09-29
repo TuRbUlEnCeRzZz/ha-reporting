@@ -935,12 +935,16 @@ function signedValue(value, unit=""){
 }
 
 function comparisonStatusLabel(status){
-  return ({
-    comparable:"Comparable",
-    partial:"Partielle",
-    reconstructed:"Reconstruite",
-    unavailable:"Indisponible"
-  })[status] || status;
+  const labels={
+    comparable:["comparison.status_comparable","Comparable"],
+    partial:["comparison.status_partial","Partielle"],
+    limited:["comparison.status_limited","Limitée"],
+    reconstructed:["comparison.status_reconstructed","Reconstruite"],
+    unavailable:["comparison.status_unavailable","Indisponible"]
+  };
+  const item=labels[status];
+  if(!item) return status;
+  return (typeof window!=="undefined" && window.hrT) ? window.hrT(item[0]) : item[1];
 }
 
 function comparisonSourceCard(source){
@@ -1008,6 +1012,7 @@ function renderComparisonTarget(target){
       <div class="comparisonSummary">
         <div class="seriesStat good"><div class="label">Comparables</div><div class="value">${esc(summary.sources_comparable || 0)}</div></div>
         <div class="seriesStat"><div class="label">Partielles</div><div class="value">${esc(summary.sources_partial || 0)}</div></div>
+        <div class="seriesStat"><div class="label">Limitées</div><div class="value">${esc(summary.sources_limited || 0)}</div></div>
         <div class="seriesStat"><div class="label">Reconstruites</div><div class="value">${esc(summary.sources_reconstructed || 0)}</div></div>
         <div class="seriesStat"><div class="label">Indisponibles</div><div class="value">${esc(summary.sources_unavailable || 0)}</div></div>
       </div>
@@ -1374,8 +1379,30 @@ function renderDocuments(){
     </div>`).join("");
 }
 
-function downloadDocument(id){
-  window.open(`api/document/${encodeURIComponent(id)}/download`,"_blank","noopener");
+async function downloadDocument(id){
+  const documentEntry=(documents || []).find(item=>String(item.id)===String(id));
+  const filename=(documentEntry && documentEntry.filename) || "ha-reporting.pdf";
+  try{
+    const response=await fetch(`api/document/${encodeURIComponent(id)}/download`,{
+      method:"GET",
+      credentials:"same-origin",
+      cache:"no-store"
+    });
+    if(!response.ok) throw new Error(`HTTP ${response.status}`);
+    const blob=await response.blob();
+    const url=URL.createObjectURL(blob);
+    const link=document.createElement("a");
+    link.href=url;
+    link.download=filename || "ha-reporting.pdf";
+    link.style.display="none";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }catch(error){
+    const label=(typeof window!=="undefined" && window.hrT) ? window.hrT("document.download_failed") : "Téléchargement impossible";
+    alert(`${label} : ${error && error.message ? error.message : error}`);
+  }
 }
 
 async function exportDocument(id,providerId){

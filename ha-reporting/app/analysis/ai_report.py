@@ -45,7 +45,10 @@ def _comparison_quality_snapshot(quality: Any) -> dict[str, Any]:
         "source_status": quality.get("source_status"),
         "period_coverage_percent": quality.get("period_coverage_percent"),
         "sample_density_percent": quality.get("sample_density_percent"),
+        "density_applicable": quality.get("density_applicable"),
         "counter_mode": quality.get("counter_mode"),
+        "near_zero_signal": bool(quality.get("near_zero_signal")),
+        "sparse_zero_uncertain": bool(quality.get("sparse_zero_uncertain")),
         "warnings": quality.get("warnings") or [],
     }
 
@@ -57,8 +60,19 @@ def _comparison_interpretation(source: dict[str, Any]) -> dict[str, Any]:
     base_coverage = base_quality.get("period_coverage_percent")
     reference_coverage = reference_quality.get("period_coverage_percent")
 
-    base_coverage_limited = isinstance(base_coverage, (int, float)) and base_coverage < 80.0
-    reference_coverage_limited = isinstance(reference_coverage, (int, float)) and reference_coverage < 80.0
+    def coverage_tier(value):
+        if not isinstance(value, (int, float)):
+            return "unknown"
+        if value >= 95.0:
+            return "good"
+        if value >= 80.0:
+            return "partial"
+        return "limited"
+
+    base_coverage_tier = coverage_tier(base_coverage)
+    reference_coverage_tier = coverage_tier(reference_coverage)
+    base_coverage_limited = base_coverage_tier == "limited"
+    reference_coverage_limited = reference_coverage_tier == "limited"
     coverage_limited = base_coverage_limited or reference_coverage_limited
     base_reconstructed = str(base_quality.get("counter_mode") or "") in {
         "provider_reconstructed",
@@ -68,7 +82,11 @@ def _comparison_interpretation(source: dict[str, Any]) -> dict[str, Any]:
         "provider_reconstructed",
         "reconstructed",
     }
-    full_period_change_supported = bool(status == "comparable" and not coverage_limited)
+    full_period_change_supported = bool(
+        status == "comparable"
+        and base_coverage_tier in {"good", "unknown"}
+        and reference_coverage_tier in {"good", "unknown"}
+    )
 
     if status == "unavailable":
         wording_policy = "no_change_claim"
@@ -82,6 +100,10 @@ def _comparison_interpretation(source: dict[str, Any]) -> dict[str, Any]:
         "coverage_limited": coverage_limited,
         "base_coverage_limited": base_coverage_limited,
         "reference_coverage_limited": reference_coverage_limited,
+        "base_coverage_tier": base_coverage_tier,
+        "reference_coverage_tier": reference_coverage_tier,
+        "base_sparse_zero_uncertain": bool(base_quality.get("sparse_zero_uncertain")),
+        "reference_sparse_zero_uncertain": bool(reference_quality.get("sparse_zero_uncertain")),
         "base_reconstructed": base_reconstructed,
         "reference_reconstructed": reference_reconstructed,
         "full_period_change_supported": full_period_change_supported,
@@ -528,7 +550,7 @@ def _rounded_derived(value: float | None, digits: int = 6) -> float | None:
 
 def _coverage_allows_full_period(*values: Any) -> bool:
     coverages = [_as_number(value) for value in values]
-    return bool(coverages and all(value is not None and value >= 80.0 for value in coverages))
+    return bool(coverages and all(value is not None and value >= 95.0 for value in coverages))
 
 
 def _current_source_relationships(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -564,7 +586,7 @@ def _current_source_relationships(rows: list[dict[str, Any]]) -> list[dict[str, 
         actual_kwh = _energy_to_kwh((actual.get("values") or {}).get("period_delta"), actual.get("unit"))
         if forecast_kwh is not None and actual_kwh is not None:
             gap_kwh = actual_kwh - forecast_kwh
-            gap_pct = None if forecast_kwh == 0 else gap_kwh / forecast_kwh * 100.0
+            gap_pct = None if abs(forecast_kwh) < 0.1 else gap_kwh / forecast_kwh * 100.0
             relationships.append({
                 "kind": "energy_forecast_vs_actual",
                 "forecast_source": forecast.get("source"),
@@ -589,7 +611,7 @@ def _current_source_relationships(rows: list[dict[str, Any]]) -> list[dict[str, 
         actual_mean_w = _power_to_w(actual_values.get("mean"), actual.get("unit"))
         if forecast_mean_w is not None and actual_mean_w is not None:
             mean_gap_w = actual_mean_w - forecast_mean_w
-            mean_gap_pct = None if forecast_mean_w == 0 else mean_gap_w / forecast_mean_w * 100.0
+            mean_gap_pct = None if abs(forecast_mean_w) < 0.1 else mean_gap_w / forecast_mean_w * 100.0
             relationships.append({
                 "kind": "power_forecast_vs_actual",
                 "forecast_source": forecast.get("source"),
@@ -615,7 +637,7 @@ def _current_source_relationships(rows: list[dict[str, Any]]) -> list[dict[str, 
 def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
     """Build a lossless, self-describing AI context.
 
-    beta.25 keeps the self-describing beta.24 records and adds deterministic
+    beta.26 keeps the self-describing records and deterministic
     cross-source relationships for analyses that otherwise require the model to
     infer which forecast and measured sources belong together. Each source still
     carries its readable source name and named statistics. No current or
@@ -624,7 +646,7 @@ def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
     statistics.
     """
     context: dict[str, Any] = {
-        "schema": "ha-reporting-ai-context-v5",
+        "schema": "ha-reporting-ai-context-v6",
         "lossless": True,
         "semantics": {
             "period_delta": "change during the report period",
@@ -635,6 +657,8 @@ def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
             "mean": "time-weighted mean for power when available",
             "coverage_pct": "period coverage",
             "density_pct": "sampling density when applicable",
+            "coverage_quality": ">=95% representative; 80-95% partial but usable cautiously; <80% limited",
+            "near_zero_reference": "relative percentages are intentionally suppressed when the reference is too close to zero",
         },
         "report": {
             "name": (result.get("report") or {}).get("name"),
@@ -743,6 +767,8 @@ def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
                         if item.get("relative_change_percent") is not None:
                             stat_values["gap_pct"] = item.get("relative_change_percent")
                             stat_values["gap_pct_applicable"] = bool(item.get("relative_change_applicable"))
+                        if item.get("relative_change_reason"):
+                            stat_values["gap_pct_reason"] = item.get("relative_change_reason")
                         values[stat] = stat_values
 
                     source_name = source.get("sensor_key") or source.get("entity_id")
@@ -763,6 +789,10 @@ def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
                     comparison_status = source.get("comparison_status")
                     if comparison_status and comparison_status != "comparable":
                         row["status"] = comparison_status
+                    if interpretation.get("base_sparse_zero_uncertain"):
+                        row["base_sparse_zero_uncertain"] = True
+                    if interpretation.get("reference_sparse_zero_uncertain"):
+                        row["reference_sparse_zero_uncertain"] = True
                     if interpretation.get("base_reconstructed"):
                         row["base_reconstructed"] = True
                     if interpretation.get("reference_reconstructed"):
@@ -785,7 +815,7 @@ def build_budgeted_ai_context(
 ) -> tuple[str, dict[str, Any]]:
     """Return the complete semantic AI context using self-describing normalization.
 
-    beta.25 keeps every current and comparison source, including partial entries,
+    beta.26 keeps every current and comparison source, including partial and limited entries,
     and adds deterministic cross-source relationships when pairing is unambiguous.
     Named statistics replace positional value arrays so small local models do not
     need to decode max/p95/mean or counter semantics. The hard limit is enforced
@@ -907,9 +937,13 @@ Mandatory rules for N/N-x comparisons:
 - Forbidden example: “consumption increased by 182%”. Expected style: “for the available data, the calculated gap is +182%, but it does not support a conclusion that annual consumption rose by that amount because the reference covers only 34.8% of the period”.
 - Forbidden example: “average power is down 8.6% from the previous year”. Expected style: “for the available data, calculated average power is 8.6% lower, but the comparison remains partial”.
 - Never use a relative percentage from an incomplete comparison to assert drift, overconsumption, or improvement.
+- Coverage quality is explicit: >=95% is representative, 80-95% is partial but can be discussed cautiously, and <80% is limited. Never describe a >=95% comparison as partial solely because sampling density is below 100%.
+- If a comparison value has `gap_pct_reason=near_zero_reference`, the relative percentage was deliberately suppressed because the reference is too close to zero. Report the absolute gap only; do not invent or estimate a percentage.
+- If `base_sparse_zero_uncertain` or `reference_sparse_zero_uncertain` is true, do not conclude that the device truly consumed zero or was inactive. State that the near-zero value is uncertain because the history is too sparse.
+- Sampling density is a diagnostic, not period coverage. Low event-driven density alone does not mean the full period is missing; treat it as a reliability warning only when the comparison status/policy says so.
 - Keep reconstruction and coverage strictly separate: `base_reconstructed=true` means N was reconstructed after one or more resets; `reference_coverage_pct` independently describes N-x reference coverage. Never merge these concepts into wording such as “partial reconstruction”.
 - If `base_reconstructed` is true, mention reconstruction only if useful to reliability. If absent/false, do not discuss resets or reconstruction. If `reference_coverage_pct` is below 80, separately state that the historical reference is partial and include its coverage. Do not claim the reference is reconstructed unless `reference_reconstructed` is true.
-- `ha-reporting-ai-context-v5` is lossless and self-describing. Every current/comparison source is a complete named record; no source is omitted, including partially covered sources. Never swap values between records or reinterpret named fields.
+- `ha-reporting-ai-context-v6` is lossless and self-describing. Every current/comparison source is a complete named record; no source is omitted, including partially covered sources. Never swap values between records or reinterpret named fields.
 - For power, `max`, `p95`, and `mean` are authoritative named fields. Never treat `max` as `mean` or `mean` as `max`. `integrated_energy_kwh`, when present, is the period energy derived from that exact power source.
 - For cumulative counters, `period_delta` is the period change/consumption. `counter_end` is only the cumulative meter reading at the end and must NEVER be presented as a period delta or period consumption.
 - `energy_measurement` is a gauge-like energy measurement, not a cumulative counter. Do not infer a consumption delta from it unless an explicit comparison value says so.
@@ -950,9 +984,13 @@ Règles impératives pour les comparaisons N/N-x :
 - Exemple interdit : « la consommation a augmenté de 182 % ». Exemple attendu : « sur les données disponibles, l'écart calculé est de +182 %, mais il ne permet pas de conclure à une hausse annuelle de cette ampleur car la référence ne couvre que 34,8 % de la période ».
 - Exemple interdit : « la puissance moyenne est en baisse de 8,6 % par rapport à l'année précédente ». Exemple attendu : « sur les données disponibles, la puissance moyenne calculée est inférieure de 8,6 %, mais la comparaison reste partielle ».
 - N'utilise jamais un pourcentage relatif issu d'une comparaison incomplète pour affirmer une dérive, une surconsommation ou une amélioration.
+- La qualité de couverture est explicite : >=95 % est représentatif, 80-95 % est partiel mais exploitable avec prudence, et <80 % est limité. Ne qualifie jamais une comparaison >=95 % de partielle uniquement parce que la densité d'échantillonnage est inférieure à 100 %.
+- Si une valeur comparée contient `gap_pct_reason=near_zero_reference`, le pourcentage relatif a volontairement été supprimé car la référence est trop proche de zéro. Rapporte uniquement l'écart absolu ; n'invente et n'estime aucun pourcentage.
+- Si `base_sparse_zero_uncertain` ou `reference_sparse_zero_uncertain` vaut true, ne conclus pas que l'appareil a réellement consommé zéro ou qu'il était inactif. Indique que la valeur proche de zéro est incertaine car l'historique est trop clairsemé.
+- La densité d'échantillonnage est un diagnostic, pas la couverture de période. Une faible densité événementielle ne signifie pas à elle seule que la période est absente ; traite-la comme une limite de fiabilité uniquement lorsque le statut/policy de comparaison l'indique.
 - Distingue strictement reconstruction et couverture : `base_reconstructed=true` signifie que la valeur N a été reconstruite après un ou plusieurs resets ; `reference_coverage_pct` décrit séparément la couverture de la référence N-x. Ne fusionne jamais ces deux notions dans une expression comme « reconstruction partielle ».
 - Si `base_reconstructed` vaut true, tu peux signaler la reconstruction uniquement si elle est utile à la fiabilité de l'analyse. Si elle est absente/false, ne parle jamais de reset ou de reconstruction. Si `reference_coverage_pct` est inférieur à 80, dis séparément « la référence historique est partielle » avec sa couverture. N'affirme pas que la référence est reconstruite sauf si `reference_reconstructed` vaut true.
-- `ha-reporting-ai-context-v5` est une représentation sans omission et auto-descriptive. Chaque source courante/comparée est un enregistrement complet avec des champs nommés ; aucune source n'est retirée, y compris lorsqu'elle ne couvre qu'une partie de la période. N'échange jamais des valeurs entre deux enregistrements et ne réinterprète pas les noms de champs.
+- `ha-reporting-ai-context-v6` est une représentation sans omission et auto-descriptive. Chaque source courante/comparée est un enregistrement complet avec des champs nommés ; aucune source n'est retirée, y compris lorsqu'elle ne couvre qu'une partie de la période. N'échange jamais des valeurs entre deux enregistrements et ne réinterprète pas les noms de champs.
 - Pour une puissance, `max`, `p95` et `mean` sont des champs nommés faisant foi. Ne transforme jamais `max` en moyenne ni `mean` en maximum. `integrated_energy_kwh`, lorsqu'il existe, est l'énergie de la période dérivée exactement de cette source de puissance.
 - Pour un compteur cumulatif, `period_delta` est la variation/consommation de la période. `counter_end` est uniquement l'index cumulé en fin de période et ne doit JAMAIS être présenté comme un delta ou une consommation de période.
 - `energy_measurement` est une mesure d'énergie de type jauge, pas un compteur cumulatif. N'en déduis pas une consommation par différence sauf si une comparaison explicite le fournit.

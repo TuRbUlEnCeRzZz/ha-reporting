@@ -3,6 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 
+COVERAGE_GOOD_MIN = 95.0
+COVERAGE_PARTIAL_MIN = 80.0
+POWER_DENSITY_LIMITED_MAX = 2.0
+POWER_DENSITY_PARTIAL_MAX = 10.0
+
+
 class ComparisonEngine:
     """Compare normalized report executions source-by-source.
 
@@ -22,6 +28,7 @@ class ComparisonEngine:
             "sources_total": 0,
             "sources_comparable": 0,
             "sources_partial": 0,
+            "sources_limited": 0,
             "sources_reconstructed": 0,
             "sources_unavailable": 0,
         }
@@ -41,6 +48,7 @@ class ComparisonEngine:
                     status_key = {
                         "comparable": "sources_comparable",
                         "partial": "sources_partial",
+                        "limited": "sources_limited",
                         "reconstructed": "sources_reconstructed",
                         "unavailable": "sources_unavailable",
                     }[item["comparison_status"]]
@@ -125,6 +133,7 @@ class ComparisonEngine:
         base_stats = ((base.get("analysis") or {}).get("statistics") or {})
         reference_stats = ((reference.get("analysis") or {}).get("statistics") or {})
 
+        relative_reasons = []
         for key, label, path in specs:
             base_value = self._nested_number(base_stats, path)
             reference_value = self._nested_number(reference_stats, path)
@@ -133,8 +142,21 @@ class ComparisonEngine:
             absolute = base_value - reference_value
             relative_applicable = metric != "temperature"
             relative = None
-            if relative_applicable and reference_value != 0:
-                relative = absolute / abs(reference_value) * 100.0
+            relative_reason = None
+            if relative_applicable:
+                if base_profile.get("sparse_zero_uncertain") or reference_profile.get("sparse_zero_uncertain"):
+                    relative_applicable = False
+                    relative_reason = "sparse_zero_uncertain"
+                else:
+                    floor = self._relative_reference_floor(metric, key, unit)
+                    if abs(reference_value) < floor:
+                        relative_applicable = False
+                        relative_reason = "near_zero_reference"
+                        relative_reasons.append(
+                            f"{label}: pourcentage relatif non pertinent car la référence est proche de zéro."
+                        )
+                    else:
+                        relative = absolute / abs(reference_value) * 100.0
             values.append(
                 {
                     "key": key,
@@ -144,6 +166,7 @@ class ComparisonEngine:
                     "absolute_change": absolute,
                     "relative_change_percent": relative,
                     "relative_change_applicable": relative_applicable,
+                    "relative_change_reason": relative_reason,
                 }
             )
 
@@ -158,6 +181,7 @@ class ComparisonEngine:
         status, reasons = self._comparison_quality(
             metric, base_profile, reference_profile
         )
+        reasons.extend(relative_reasons)
 
         return {
             "sensor_key": base.get("sensor_key"),
@@ -221,6 +245,48 @@ class ComparisonEngine:
         return value
 
     @staticmethod
+    def _relative_reference_floor(metric: str, key: str, unit: str | None) -> float:
+        """Minimum meaningful reference magnitude for a relative percentage.
+
+        Percentages against values that round to (or are operationally close to)
+        zero are mathematically valid but analytically misleading.  beta.26 keeps
+        the absolute gap and suppresses only the relative percentage.
+        """
+        normalized = str(unit or "").strip().casefold()
+        if metric == "power":
+            return 0.0001 if normalized == "kw" else 0.1
+        if metric in {"energy_total", "energy_measurement"}:
+            return 100.0 if normalized == "wh" else 0.1
+        if metric == "runtime":
+            if normalized in {"s", "sec", "second", "seconds"}:
+                return 360.0
+            if normalized in {"min", "minute", "minutes"}:
+                return 6.0
+            return 0.1
+        if metric == "cycles":
+            return 1.0
+        if metric == "current":
+            return 0.01
+        if metric == "voltage":
+            return 1.0
+        if metric == "humidity":
+            return 0.5
+        return 1e-9
+
+    @staticmethod
+    def _near_zero_power_signal(statistics: dict[str, Any], unit: str | None) -> bool:
+        """Return True only when the entire reported power signal is near zero."""
+        threshold = 0.0001 if str(unit or "").strip().casefold() == "kw" else 0.1
+        candidates = []
+        maximum = ComparisonEngine._nested_number(statistics, ("max", "value"))
+        mean = ComparisonEngine._nested_number(statistics, ("mean",))
+        p95 = ComparisonEngine._nested_number(statistics, ("p95",))
+        for value in (maximum, mean, p95):
+            if value is not None:
+                candidates.append(abs(value))
+        return bool(candidates) and max(candidates) < threshold
+
+    @staticmethod
     def _quality_profile(source: dict[str, Any] | None) -> dict[str, Any]:
         if source is None:
             return {
@@ -228,7 +294,10 @@ class ComparisonEngine:
                 "source_status": "missing",
                 "period_coverage_percent": None,
                 "sample_density_percent": None,
+                "density_applicable": False,
                 "counter_mode": None,
+                "near_zero_signal": False,
+                "sparse_zero_uncertain": False,
                 "warnings": [],
             }
 
@@ -239,21 +308,44 @@ class ComparisonEngine:
         statistics = analysis.get("statistics") or {}
         available = status == "ok" and validation.get("valid", True)
 
+        density_applicable = bool(quality.get("density_applicable"))
+        density = quality.get("sample_density_percent") if density_applicable else None
+        near_zero_signal = (
+            source.get("metric") == "power"
+            and ComparisonEngine._near_zero_power_signal(statistics, source.get("unit"))
+        )
+        sparse_zero_uncertain = bool(
+            near_zero_signal
+            and density is not None
+            and density < POWER_DENSITY_PARTIAL_MAX
+        )
+
         return {
             "availability": "available" if available else "unavailable",
             "source_status": status,
             "period_coverage_percent": quality.get("period_coverage_percent"),
-            "sample_density_percent": quality.get("sample_density_percent"),
+            "sample_density_percent": density,
+            "density_applicable": density_applicable,
             "counter_mode": statistics.get("mode"),
+            "near_zero_signal": near_zero_signal,
+            "sparse_zero_uncertain": sparse_zero_uncertain,
             "warnings": list(validation.get("warnings") or []),
         }
 
     @staticmethod
     def _comparison_quality(metric, base_profile, reference_profile):
+        """Classify comparison reliability without discarding any source.
+
+        beta.26 separates period coverage from sample density. Coverage below
+        80% is limited; 80-95% is partial; >=95% is representative. For power
+        sources, event-driven sampling density is only downgraded when it is very
+        sparse (<10%), avoiding the old blanket 80% density threshold.
+        """
         reasons = []
         profiles = [("N", base_profile), ("Référence", reference_profile)]
 
         reconstructed = False
+        limited = False
         partial = False
         for label, profile in profiles:
             coverage = profile.get("period_coverage_percent")
@@ -268,15 +360,41 @@ class ComparisonEngine:
                 reconstructed = True
                 reasons.append(f"{label}: compteur reconstruit après reset.")
 
-            if coverage is not None and coverage < 95.0:
-                partial = True
-                reasons.append(f"{label}: couverture de période {coverage:.1f} %.")
-
-            if metric not in {"energy_total", "runtime", "cycles"}:
-                if density is not None and density < 80.0:
+            if coverage is not None:
+                coverage = float(coverage)
+                if coverage < COVERAGE_PARTIAL_MIN:
+                    limited = True
+                    reasons.append(
+                        f"{label}: couverture de période {coverage:.1f} % ; comparaison limitée."
+                    )
+                elif coverage < COVERAGE_GOOD_MIN:
                     partial = True
-                    reasons.append(f"{label}: densité d'échantillonnage {density:.1f} %.")
+                    reasons.append(
+                        f"{label}: couverture de période {coverage:.1f} % ; comparaison partielle mais exploitable avec prudence."
+                    )
 
+            if metric == "power" and density is not None:
+                density = float(density)
+                if density < POWER_DENSITY_LIMITED_MAX:
+                    limited = True
+                    reasons.append(
+                        f"{label}: densité d'échantillonnage extrêmement faible ({density:.1f} %)."
+                    )
+                elif density < POWER_DENSITY_PARTIAL_MAX:
+                    partial = True
+                    reasons.append(
+                        f"{label}: densité d'échantillonnage faible ({density:.1f} %)."
+                    )
+
+            if profile.get("sparse_zero_uncertain"):
+                limited = True
+                reasons.append(
+                    f"{label}: valeur de puissance proche de zéro avec historique très clairsemé ; "
+                    "impossible de distinguer un vrai zéro d'un historique insuffisant."
+                )
+
+        if limited:
+            return "limited", reasons
         if reconstructed:
             return "reconstructed", reasons
         if partial:

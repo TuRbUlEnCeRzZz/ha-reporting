@@ -33,6 +33,8 @@ check(() => assert.equal(i18nSandbox.window.hrT('report.ai_context_characters'),
 check(() => assert.equal(i18nSandbox.window.hrT('report.ai_timeout_configured',{duration:'1 h 30 min'}),'Configured maximum timeout: 1 h 30 min.'));
 check(() => assert.equal(i18nSandbox.window.hrT('source.power_statistics_energy'),'Statistics + energy integration'));
 check(() => assert.equal(i18nSandbox.window.hrT('source.integrated_energy'),'Integrated energy'));
+check(() => assert.equal(i18nSandbox.window.hrT('comparison.limited'),'Limited'));
+check(() => assert.equal(i18nSandbox.window.hrT('document.download_failed'),'Download failed'));
 const i18nFrenchSandbox = {
   window: {},
   localStorage: {
@@ -69,6 +71,8 @@ check(() => assert.match(sandbox.qualityBadge({density_applicable:true,sample_de
 check(() => assert.match(sandbox.renderExecutedSource({...raw,sensor_key:'<script>x</script>'},{}), /&lt;script&gt;/));
 check(() => assert.equal(sandbox.metricCardData({...raw,analysis:{statistics:{plausible:false,delta:null},validation:{valid:false}}},{}).cells[0].value,'Incohérent'));
 check(() => assert.doesNotMatch(sandbox.comparisonSourceCard({metric:'temperature',comparison_status:'comparable',values:[{label:'Moyenne',base:25,reference:20,absolute_change:5,relative_change_percent:null,relative_change_applicable:false}]}), /comparisonMiniLabel">%/));
+check(() => assert.equal(sandbox.comparisonStatusLabel('limited'),'Limitée'));
+check(() => assert.match(sandbox.comparisonSourceCard({sensor_key:'s',entity_id:'sensor.s',metric:'power',comparison_status:'limited',values:[],base_quality:{},reference_quality:{},reasons:['couverture limitée']}), /comparison-limited/));
 
 check(() => assert.match(sandbox.renderAiAnalysis({ai_analysis:{enabled:true,status:'completed',entity_id:'ai_task.local',duration_seconds:1.23,text:'SYNTHÈSE\nOK'}}), /Analyse IA/));
 check(() => assert.match(sandbox.formatAiContextInfo({input:{context_characters:47300,context_limit_characters:60000,context_original_characters:106724,omitted_current_sources:3,omitted_comparison_sources:2}}), /47\.3 k \/ 60\.0 k caractères/));
@@ -87,6 +91,10 @@ check(() => assert.match(source, /JSON\.stringify\(\{theme:currentUiTheme\(\)\}\
 check(() => assert.match(source, /function showDocuments\(/));
 check(() => assert.match(source, /reportFilenameTemplate/));
 check(() => assert.match(source, /api\/document\/\$\{encodeURIComponent\(id\)\}\/download/));
+check(() => assert.match(source, /async function downloadDocument\(id\)/));
+check(() => assert.match(source, /credentials:"same-origin"/));
+check(() => assert.match(source, /URL\.createObjectURL\(blob\)/));
+check(() => assert.doesNotMatch(source.match(/async function downloadDocument\(id\)\{[\s\S]*?\n\}/)[0], /window\.open/));
 
 check(() => assert.match(source, /function showExportProviders\(/));
 check(() => assert.match(source, /function exportDocument\(/));

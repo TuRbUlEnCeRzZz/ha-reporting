@@ -87,6 +87,7 @@ def _translate_report_html_to_english(html: str) -> str:
         'Aucune statistique commune comparable.': 'No common comparable statistic.',
         'Référence: compteur reconstruit après reset.': 'Reference: counter reconstructed after reset.',
         'N: compteur reconstruit après reset.': 'N: counter reconstructed after reset.',
+        '>Limitées<': '>Limited<',
         'Référence: couverture de période ': 'Reference: period coverage ',
         'N: couverture de période ': 'N: period coverage ',
         "Référence: densité d'échantillonnage ": 'Reference: sample density ',
@@ -102,6 +103,10 @@ def _translate_report_html_to_english(html: str) -> str:
         content = content.replace("densité ", "density ")
         content = content.replace("runtime vérifié", "verified runtime")
         content = content.replace("fallback détaillé", "detailed fallback")
+        content = content.replace("comparaison limitée", "limited comparison")
+        content = content.replace("comparaison partielle mais exploitable avec prudence", "partial comparison, usable with caution")
+        content = content.replace("pourcentage relatif non pertinent car la référence est proche de zéro", "relative percentage not meaningful because the reference is near zero")
+        content = content.replace("valeur de puissance proche de zéro avec historique très clairsemé ; impossible de distinguer un vrai zéro d'un historique insuffisant", "near-zero power value with very sparse history; unable to distinguish a true zero from insufficient history")
         return f"{match.group(1)}{content}{match.group(3)}"
 
     html = re.sub(r'(<div class="quality">)(.*?)(</div>)', translate_quality, html, flags=re.DOTALL)
@@ -308,6 +313,7 @@ def _comparisons(result: dict[str, Any]) -> str:
             <div class="summary mini">
               <div><span>Comparables</span><strong>{_e(summary.get('sources_comparable', 0))}</strong></div>
               <div><span>Partielles</span><strong>{_e(summary.get('sources_partial', 0))}</strong></div>
+              <div><span>Limitées</span><strong>{_e(summary.get('sources_limited', 0))}</strong></div>
               <div><span>Reconstruites</span><strong>{_e(summary.get('sources_reconstructed', 0))}</strong></div>
               <div><span>Indisponibles</span><strong>{_e(summary.get('sources_unavailable', 0))}</strong></div>
             </div>

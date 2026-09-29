@@ -1,5 +1,35 @@
 # HA Reporting technical documentation
 
+## beta.26 — Comparison reliability and Ingress-safe downloads
+
+Beta.26 does not remove or trim report data. It changes how HA Reporting qualifies comparisons and how those reliability facts are exposed to the renderer and AI Task.
+
+### Coverage and density
+
+Period coverage and sampling density are separate concepts. The comparison engine now uses these coverage tiers:
+
+- **>=95%**: representative (`comparable`) when no other limitation applies;
+- **80% to <95%**: `partial`, usable with caution;
+- **<80%**: `limited`, not suitable for a full-period trend claim.
+
+Power sensors in Home Assistant are frequently event-driven, so a density below 80% is not automatically a missing-period condition. For power only, density below 10% adds a partial-data warning and density below 2% marks the comparison limited. This preserves useful power comparisons such as appliance histories with 10-40% event density while still flagging genuinely sparse histories.
+
+### Near-zero references and sparse zero values
+
+A relative percentage can become arbitrarily large when its reference rounds to zero. beta.26 therefore keeps the absolute gap but suppresses the relative percentage below metric-aware reference floors (for example 0.1 W for power and 0.1 kWh for energy). The comparison value records `relative_change_reason: near_zero_reference`; no source or absolute statistic is removed.
+
+For power, an all-near-zero signal with sampling density below 10% is marked `sparse_zero_uncertain`. The model and renderer can then distinguish a confirmed zero from a value that may simply result from insufficient history.
+
+### AI context v6
+
+`ha-reporting-ai-context-v6` retains every current and comparison source. It adds rules telling the AI that >=95% coverage is representative, that low event density is not the same as low period coverage, that near-zero percentages must not be recreated, and that sparse-zero values must not be described as confirmed inactivity. Deterministic forecast-versus-measured relationships now require >=95% coverage on both sides before `full_period_comparison_supported` becomes true.
+
+### Home Assistant Ingress PDF downloads
+
+The backend download route and UTF-8 `Content-Disposition` handling are unchanged. The frontend no longer calls `window.open(..., "_blank")` for local documents because a new browser tab—especially from the Companion app or Nabu Casa—may not retain the Ingress authentication context. The Documents page now performs a same-origin authenticated `fetch()`, converts the response to a Blob, and triggers a local download without navigating away from HA Reporting.
+
+---
+
 ## beta.25 — Deterministic cross-source AI relationships
 
 Beta.25 keeps the self-describing, lossless source records from beta.24 and adds deterministic relationships calculated by HA Reporting before the AI Task call. The purpose is to remove one remaining source of ambiguity for smaller local language models: deciding which forecast and measured sources belong together and performing arithmetic across them.

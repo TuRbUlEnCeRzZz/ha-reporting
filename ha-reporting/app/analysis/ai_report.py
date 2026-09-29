@@ -13,8 +13,8 @@ AI_WS_HEARTBEAT_SECONDS = 20
 AI_DEFAULT_TIMEOUT_SECONDS = 600
 AI_MIN_TIMEOUT_SECONDS = 60
 AI_MAX_TIMEOUT_SECONDS = 7200
-AI_TARGET_CONTEXT_CHARS = 50000
-AI_MAX_CONTEXT_CHARS = 60000
+AI_TARGET_CONTEXT_CHARS = 90000
+AI_MAX_CONTEXT_CHARS = 220000
 
 
 def _format_timeout_duration(seconds: int, language: str = "en") -> str:
@@ -130,7 +130,9 @@ def compact_report_context(result: dict[str, Any]) -> dict[str, Any]:
                         "p95": stats.get("p95"),
                         "mean": stats.get("mean"),
                     }
-                elif metric == "temperature":
+                    if source.get("derive_energy") and stats.get("integrated_energy_kwh") is not None:
+                        values["integrated_energy_kwh"] = stats.get("integrated_energy_kwh")
+                elif metric in {"temperature", "humidity", "voltage", "current", "energy_measurement"}:
                     values = {
                         "min": _stat_value(stats, "min"),
                         "mean": stats.get("mean"),
@@ -478,6 +480,163 @@ def _lossless_ai_context_v3(result: dict[str, Any]) -> dict[str, Any]:
     return context
 
 
+def _lossless_ai_context_v4(result: dict[str, Any]) -> dict[str, Any]:
+    """Build a lossless, self-describing AI context.
+
+    beta.24 deliberately trades a little structural compression for semantic
+    clarity. Each source carries its readable source name and named statistics,
+    so a small local model never has to decode positional arrays or join metric
+    schemas to values. No current or comparison source is omitted, including
+    partial sources. Raw samples and provider traces remain outside the AI
+    contract because they are not report statistics.
+    """
+    context: dict[str, Any] = {
+        "schema": "ha-reporting-ai-context-v4",
+        "lossless": True,
+        "semantics": {
+            "period_delta": "change during the report period",
+            "counter_end": "cumulative counter reading at period end; never a period delta",
+            "integrated_energy_kwh": "energy obtained by integrating the power source over the report period",
+            "max": "maximum",
+            "p95": "95th percentile",
+            "mean": "time-weighted mean for power when available",
+            "coverage_pct": "period coverage",
+            "density_pct": "sampling density when applicable",
+        },
+        "report": {
+            "name": (result.get("report") or {}).get("name"),
+            "period": (result.get("resolved_period") or {}).get("label"),
+            "timezone": (result.get("resolved_period") or {}).get("timezone"),
+        },
+        "summary": result.get("summary") or {},
+        "current": [],
+        "comparisons": [],
+    }
+
+    for catalog in result.get("catalogs") or []:
+        catalog_name = catalog.get("name")
+        for device in catalog.get("devices") or []:
+            info = device.get("device") or {}
+            device_name = info.get("name")
+            category = info.get("category")
+            for source in device.get("sources") or []:
+                analysis = source.get("analysis") or {}
+                stats = analysis.get("statistics") or {}
+                quality = analysis.get("quality") or {}
+                validation = analysis.get("validation") or {}
+                metric = source.get("metric")
+                values: dict[str, Any] = {}
+
+                if metric == "power":
+                    values = {
+                        "max": _stat_value(stats, "max"),
+                        "p95": stats.get("p95"),
+                        "mean": stats.get("mean"),
+                    }
+                    if source.get("derive_energy") and stats.get("integrated_energy_kwh") is not None:
+                        values["integrated_energy_kwh"] = stats.get("integrated_energy_kwh")
+                elif metric in {"temperature", "humidity", "voltage", "current", "energy_measurement"}:
+                    values = {
+                        "first": _stat_value(stats, "first"),
+                        "min": _stat_value(stats, "min"),
+                        "mean": stats.get("mean"),
+                        "max": _stat_value(stats, "max"),
+                        "last": _stat_value(stats, "last"),
+                    }
+                elif metric in {"energy_total", "runtime", "cycles"}:
+                    values = {
+                        "period_delta": stats.get("delta"),
+                        "counter_end": _stat_value(stats, "last"),
+                    }
+                    if int(stats.get("resets_detected", 0) or 0) > 0:
+                        values["resets_detected"] = int(stats.get("resets_detected", 0) or 0)
+                else:
+                    values = {
+                        "first": _stat_value(stats, "first"),
+                        "last": _stat_value(stats, "last"),
+                        "mean": stats.get("mean"),
+                    }
+
+                source_name = source.get("sensor_key") or source.get("entity_id")
+                source_path = "/".join(
+                    str(part) for part in (catalog_name, device_name, source_name) if part not in (None, "")
+                )
+                row: dict[str, Any] = {
+                    "source": source_path,
+                    "metric": metric,
+                    "unit": source.get("unit"),
+                    "values": values,
+                    "coverage_pct": quality.get("period_coverage_percent"),
+                }
+                if quality.get("density_applicable"):
+                    row["density_pct"] = quality.get("sample_density_percent")
+                status = source.get("status")
+                if status and status != "ok":
+                    row["status"] = status
+                if source.get("verification"):
+                    row["runtime_verified"] = True
+                warnings = validation.get("warnings") or []
+                if warnings:
+                    row["warnings"] = warnings
+                context["current"].append(row)
+
+    comparisons = result.get("comparisons") or {}
+    for target in comparisons.get("targets") or []:
+        target_label = target.get("label")
+        target_period = (target.get("resolved_period") or {}).get("label")
+        for catalog in target.get("catalogs") or []:
+            catalog_name = catalog.get("name")
+            for device in catalog.get("devices") or []:
+                device_name = device.get("name")
+                for source in device.get("sources") or []:
+                    interpretation = _comparison_interpretation(source)
+                    base_quality = source.get("base_quality") or {}
+                    reference_quality = source.get("reference_quality") or {}
+                    values: dict[str, Any] = {}
+                    for item in source.get("values") or []:
+                        if not isinstance(item, dict):
+                            continue
+                        stat = str(item.get("key") or item.get("label") or "value")
+                        stat_values: dict[str, Any] = {
+                            "base": item.get("base"),
+                            "reference": item.get("reference"),
+                            "gap": item.get("absolute_change"),
+                        }
+                        if item.get("relative_change_percent") is not None:
+                            stat_values["gap_pct"] = item.get("relative_change_percent")
+                            stat_values["gap_pct_applicable"] = bool(item.get("relative_change_applicable"))
+                        values[stat] = stat_values
+
+                    source_name = source.get("sensor_key") or source.get("entity_id")
+                    source_path = "/".join(
+                        str(part) for part in (catalog_name, device_name, source_name) if part not in (None, "")
+                    )
+                    row = {
+                        "target": target_label,
+                        "target_period": target_period,
+                        "source": source_path,
+                        "metric": source.get("metric"),
+                        "unit": source.get("unit"),
+                        "base_coverage_pct": base_quality.get("period_coverage_percent"),
+                        "reference_coverage_pct": reference_quality.get("period_coverage_percent"),
+                        "policy": interpretation.get("wording_policy"),
+                        "values": values,
+                    }
+                    comparison_status = source.get("comparison_status")
+                    if comparison_status and comparison_status != "comparable":
+                        row["status"] = comparison_status
+                    if interpretation.get("base_reconstructed"):
+                        row["base_reconstructed"] = True
+                    if interpretation.get("reference_reconstructed"):
+                        row["reference_reconstructed"] = True
+                    reasons = source.get("reasons") or []
+                    if reasons:
+                        row["reasons"] = reasons
+                    context["comparisons"].append(row)
+
+    return context
+
+
 def _encoded_context(context: dict[str, Any]) -> str:
     return json.dumps(context, ensure_ascii=False, separators=(",", ":"))
 
@@ -486,20 +645,20 @@ def build_budgeted_ai_context(
     result: dict[str, Any],
     target_chars: int = AI_TARGET_CONTEXT_CHARS,
 ) -> tuple[str, dict[str, Any]]:
-    """Return the complete semantic AI context using lossless normalization.
+    """Return the complete semantic AI context using self-describing normalization.
 
-    The 50k target remains a preferred operating size, but beta.22 no longer drops
-    sources to reach it. Every current-period and comparison source is retained,
-    including partial entries. The 60k hard limit is enforced by the caller; when
-    lossless normalization cannot fit under that limit, AI analysis fails explicitly
+    beta.24 keeps every current and comparison source, including partial entries.
+    Named statistics replace positional value arrays so small local models do not
+    need to decode max/p95/mean or counter semantics. The hard limit is enforced
+    by the caller; when the lossless context cannot fit, analysis fails explicitly
     instead of silently omitting data.
     """
     legacy_json = _encoded_context(compact_report_context(result))
-    context = _lossless_ai_context_v3(result)
+    context = _lossless_ai_context_v4(result)
     context_json = _encoded_context(context)
     metadata = {
         "schema": context.get("schema"),
-        "mode": "lossless_normalized",
+        "mode": "lossless_self_describing",
         "lossless": True,
         "characters": len(context_json),
         "target_characters": target_chars,
@@ -610,7 +769,11 @@ Mandatory rules for N/N-x comparisons:
 - Never use a relative percentage from an incomplete comparison to assert drift, overconsumption, or improvement.
 - Keep reconstruction and coverage strictly separate: `base_reconstructed=true` means N was reconstructed after one or more resets; `reference_coverage_pct` independently describes N-x reference coverage. Never merge these concepts into wording such as “partial reconstruction”.
 - If `base_reconstructed` is true, mention reconstruction only if useful to reliability. If absent/false, do not discuss resets or reconstruction. If `reference_coverage_pct` is below 80, separately state that the historical reference is partial and include its coverage. Do not claim the reference is reconstructed unless `reference_reconstructed` is true.
-- `ha-reporting-ai-context-v3` is a lossless normalized representation: IDs are array indexes described by `legend`; no current or comparison source is omitted, including partially covered sources.
+- `ha-reporting-ai-context-v4` is lossless and self-describing. Every current/comparison source is a complete named record; no source is omitted, including partially covered sources. Never swap values between records or reinterpret named fields.
+- For power, `max`, `p95`, and `mean` are authoritative named fields. Never treat `max` as `mean` or `mean` as `max`. `integrated_energy_kwh`, when present, is the period energy derived from that exact power source.
+- For cumulative counters, `period_delta` is the period change/consumption. `counter_end` is only the cumulative meter reading at the end and must NEVER be presented as a period delta or period consumption.
+- `energy_measurement` is a gauge-like energy measurement, not a cumulative counter. Do not infer a consumption delta from it unless an explicit comparison value says so.
+- Preserve source semantics: a source whose name contains `forecast` / `prevision` is a forecast, not a measured value. Do not call forecast power measured power.
 - Recommendations based only on a partial/reconstructed comparison must remain proportionate: prefer monitoring, continuing data collection, or checking again once coverage is sufficient. Do not ask the user to investigate causes unless current-period data independently supports a concrete anomaly.
 
 Produce exactly these three plain-text sections:
@@ -644,7 +807,11 @@ Règles impératives pour les comparaisons N/N-x :
 - N'utilise jamais un pourcentage relatif issu d'une comparaison incomplète pour affirmer une dérive, une surconsommation ou une amélioration.
 - Distingue strictement reconstruction et couverture : `base_reconstructed=true` signifie que la valeur N a été reconstruite après un ou plusieurs resets ; `reference_coverage_pct` décrit séparément la couverture de la référence N-x. Ne fusionne jamais ces deux notions dans une expression comme « reconstruction partielle ».
 - Si `base_reconstructed` vaut true, tu peux signaler la reconstruction uniquement si elle est utile à la fiabilité de l'analyse. Si elle est absente/false, ne parle jamais de reset ou de reconstruction. Si `reference_coverage_pct` est inférieur à 80, dis séparément « la référence historique est partielle » avec sa couverture. N'affirme pas que la référence est reconstruite sauf si `reference_reconstructed` vaut true.
-- `ha-reporting-ai-context-v3` est une représentation normalisée sans omission : les IDs sont des index de tableaux décrits par `legend` ; aucune source courante ou comparée n'est retirée, y compris lorsqu'elle ne couvre qu'une partie de la période.
+- `ha-reporting-ai-context-v4` est une représentation sans omission et auto-descriptive. Chaque source courante/comparée est un enregistrement complet avec des champs nommés ; aucune source n'est retirée, y compris lorsqu'elle ne couvre qu'une partie de la période. N'échange jamais des valeurs entre deux enregistrements et ne réinterprète pas les noms de champs.
+- Pour une puissance, `max`, `p95` et `mean` sont des champs nommés faisant foi. Ne transforme jamais `max` en moyenne ni `mean` en maximum. `integrated_energy_kwh`, lorsqu'il existe, est l'énergie de la période dérivée exactement de cette source de puissance.
+- Pour un compteur cumulatif, `period_delta` est la variation/consommation de la période. `counter_end` est uniquement l'index cumulé en fin de période et ne doit JAMAIS être présenté comme un delta ou une consommation de période.
+- `energy_measurement` est une mesure d'énergie de type jauge, pas un compteur cumulatif. N'en déduis pas une consommation par différence sauf si une comparaison explicite le fournit.
+- Respecte la sémantique du nom de source : une source contenant `forecast` / `prevision` est une prévision, pas une mesure réelle. Ne qualifie pas une puissance prévisionnelle de puissance mesurée.
 - Une recommandation fondée seulement sur une comparaison partielle/reconstruite doit rester proportionnée : privilégie « surveiller », « poursuivre la collecte » ou « recontrôler quand la couverture sera suffisante ». Ne demande pas d'en rechercher les causes sauf si les données de la période courante montrent, indépendamment de la comparaison, une anomalie étayée.
 
 Produis exactement ces trois sections, en texte simple :

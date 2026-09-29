@@ -1,5 +1,42 @@
 # HA Reporting technical documentation
 
+## beta.24 — Source semantics, power integration and AI context v4
+
+Beta.24 adds a generic derived-energy path for power sources and changes the model-facing context from positional normalization to self-describing records.
+
+### Power → energy integration
+
+A catalogue source with `metric: power` may persist `derive_energy: true`. This does not replace any power statistic. The analysis still exposes peak, P95 and time-weighted mean, and additionally publishes `statistics.integrated_energy_kwh`.
+
+For provider rollups, VictoriaMetrics already returns `integrate(<power>[window])`; HA Reporting converts the power-unit-seconds integral to kWh. For detailed series analysis, numeric Home Assistant history is treated as a stateful gauge: each power value remains active until the next recorded change inside `[start, end)`, and the same piecewise-constant integral is converted to kWh. `W` and `kW` source units are supported.
+
+The derived value is shown only when the source opted into energy integration. This keeps the feature generic: an EMHASS `p_load_forecast` source can expose both forecast-power statistics and period forecast energy, but the code contains no EMHASS-specific branch.
+
+### Energy measurements versus cumulative counters
+
+Automatic metric detection now reads Home Assistant `state_class`. A kWh/Wh sensor with `state_class: measurement` is proposed as `energy_measurement`; cumulative/legacy energy sensors continue to use `energy_total`. Existing catalogue definitions are not silently migrated because the stored metric is an explicit user choice.
+
+`energy_measurement` is analyzed as a gauge. It is not given counter reset semantics and is not automatically interpreted as period consumption.
+
+### AI context v4
+
+`ha-reporting-ai-context-v4` is still lossless at the semantic report layer: no current-period or comparison source is omitted, including partial sources. Raw samples remain intentionally outside the AI contract.
+
+The important change is semantic locality. Every source record contains its readable source path, metric, unit, quality information and named values together. Power records use keys such as `max`, `p95`, `mean` and optional `integrated_energy_kwh`; cumulative counters use `period_delta` and `counter_end`. Comparison records likewise use named `base`, `reference`, `gap` and optional percentage fields.
+
+This removes the v3 requirement for a model to join positional arrays with a separate legend and source registry. The prompt also states that:
+
+- `max`, `p95` and `mean` are authoritative names and must not be swapped;
+- `period_delta` is the period change/consumption;
+- `counter_end` is a cumulative ending reading and must never be reported as a period delta;
+- `integrated_energy_kwh` belongs to the exact power source that produced it;
+- forecast/prevision sources must not be described as measured values;
+- `energy_measurement` is not a cumulative counter.
+
+Self-describing records cost more characters than v3. beta.24 therefore treats 90,000 characters as the preferred operating size and keeps an application guard at 220,000 characters. No trimming occurs at either threshold. The downstream AI provider/model still enforces its own token context and may reject a request below or above these character counts depending on tokenizer behavior.
+
+---
+
 ## beta.23 — Long-running local AI analysis
 
 Beta.23 extends the per-report AI Task timeout range for slow local inference without changing the deterministic statistics pipeline or the beta.22 lossless AI context.

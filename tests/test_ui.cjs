@@ -31,6 +31,8 @@ check(() => assert.equal(i18nSandbox.window.hrTranslateValue('Rapport « Test »
 check(() => assert.equal(i18nSandbox.window.hrDefaultReportLanguage(),'en'));
 check(() => assert.equal(i18nSandbox.window.hrT('report.ai_context_characters'),'characters'));
 check(() => assert.equal(i18nSandbox.window.hrT('report.ai_timeout_configured',{duration:'1 h 30 min'}),'Configured maximum timeout: 1 h 30 min.'));
+check(() => assert.equal(i18nSandbox.window.hrT('source.power_statistics_energy'),'Statistics + energy integration'));
+check(() => assert.equal(i18nSandbox.window.hrT('source.integrated_energy'),'Integrated energy'));
 const i18nFrenchSandbox = {
   window: {},
   localStorage: {
@@ -48,6 +50,10 @@ check(() => assert.equal(sandbox.formatDurationCompact(5400),'1 h 30 min'));
 check(() => assert.equal(sandbox.formatDurationCompact(7200),'2 h'));
 check(() => assert.match(indexSource, /<option value="5400">1 h 30 min<\/option>/));
 check(() => assert.match(indexSource, /<option value="7200">2 h<\/option>/));
+check(() => assert.match(indexSource, /<th>State class<\/th>/));
+check(() => assert.match(indexSource, /<th>Traitement<\/th>/));
+check(() => assert.match(source, /energy_measurement/));
+check(() => assert.match(source, /derive_energy/));
 const raw = {status:'ok', sensor_key:'compressor', entity_id:'sensor.compressor', metric:'runtime',unit:'h', points:1506,retrieval_mode:'series_fallback',analysis:{quality:{period_coverage_percent:1.3,density_applicable:false,sample_density_percent:null},statistics:{delta:20.152,plausible:true,anomalies_ignored:2,resets_detected:0},validation:{valid:true,warnings:['Diagnostic conservé']}}};
 check(() => assert.match(sandbox.renderExecutedSource(raw,{duration_seconds:86400}), /points bruts/));
 check(() => assert.match(sandbox.renderExecutedSource(raw,{duration_seconds:86400}), /densité n\/a/));

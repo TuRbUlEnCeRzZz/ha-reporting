@@ -46,6 +46,7 @@ class DeviceAnalysisEngine:
                 "metric": metric,
                 "unit": source.get("unit"),
                 "provider": provider_id,
+                "derive_energy": bool(source.get("derive_energy", False)),
                 "status": "pending",
             }
 

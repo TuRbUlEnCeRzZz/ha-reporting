@@ -193,7 +193,7 @@ class ComparisonEngine:
                 ("p95", "P95", ("p95",)),
                 ("mean", "Moyenne", ("mean",)),
             ]
-        if metric in {"temperature", "humidity", "voltage", "current"}:
+        if metric in {"temperature", "humidity", "voltage", "current", "energy_measurement"}:
             return [
                 ("min", "Minimum", ("min", "value")),
                 ("mean", "Moyenne", ("mean",)),

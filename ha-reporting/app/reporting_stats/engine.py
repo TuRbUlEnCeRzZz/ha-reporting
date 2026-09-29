@@ -33,7 +33,7 @@ class DataQuality:
 
 class MetricStatisticsEngine:
     COUNTER_METRICS = {"energy_total", "runtime", "cycles"}
-    GAUGE_METRICS = {"power", "temperature", "humidity", "voltage", "current"}
+    GAUGE_METRICS = {"power", "temperature", "humidity", "voltage", "current", "energy_measurement"}
     RUNTIME_ROUNDING_TOLERANCE_HOURS = 0.0005
     RUNTIME_MINOR_CORRECTION_TOLERANCE_HOURS = 0.02
     RUNTIME_MINOR_CORRECTION_MAX_TRANSITIONS = 2
@@ -63,7 +63,7 @@ class MetricStatisticsEngine:
         elif metric in {"energy_total", "cycles"}:
             stats = self._counter_stats(numeric, metric)
         elif metric == "power":
-            stats = self._power_stats(numeric, start, end, step)
+            stats = self._power_stats(numeric, start, end, step, unit=unit)
         else:
             stats = self._gauge_stats(numeric)
 
@@ -173,7 +173,7 @@ class MetricStatisticsEngine:
                 end,
             )
         else:
-            statistics = self._gauge_stats_from_rollup(metric, values, start, end)
+            statistics = self._gauge_stats_from_rollup(metric, values, start, end, unit=unit)
 
         result["statistics"] = statistics
         result["validation"] = self._validate(
@@ -254,7 +254,7 @@ class MetricStatisticsEngine:
         }
 
     @staticmethod
-    def _gauge_stats_from_rollup(metric, values, start=None, end=None):
+    def _gauge_stats_from_rollup(metric, values, start=None, end=None, unit=None):
         statistics = {
             "first": {
                 "timestamp": values.get("first_ts"),
@@ -283,6 +283,9 @@ class MetricStatisticsEngine:
                 statistics["mean"] = float(integral) / duration
                 statistics["mean_method"] = "time_weighted_integral"
                 statistics["mean_coverage_percent"] = 100.0
+                statistics["integrated_energy_kwh"] = MetricStatisticsEngine._power_integral_to_kwh(
+                    float(integral), unit
+                )
             else:
                 statistics["mean_method"] = "sample_average"
         return statistics
@@ -447,7 +450,7 @@ class MetricStatisticsEngine:
         }
 
     @classmethod
-    def _power_stats(cls, points, start, end, step):
+    def _power_stats(cls, points, start, end, step, unit=None):
         base = cls._gauge_stats(points)
         base["sample_mean"] = base.get("mean")
         ordered = sorted(value for _, value in points)
@@ -461,22 +464,14 @@ class MetricStatisticsEngine:
         # coverage field makes any missing leading interval explicit.
         integral = 0.0
         covered = 0.0
-        gaps = [
-            float(points[i + 1][0]) - float(points[i][0])
-            for i in range(len(points) - 1)
-            if float(points[i + 1][0]) > float(points[i][0])
-        ]
-        if gaps:
-            ordered_gaps = sorted(gaps)
-            typical_gap = ordered_gaps[len(ordered_gaps) // 2]
-        else:
-            typical_gap = float(step or 0)
-        max_hold = max(float(step or 0) * 1.5, typical_gap * 1.5, 1.0)
-
+        # Home Assistant numeric history is stateful: a value remains the
+        # current state until the next recorded change. Preserve that semantic
+        # for power integration instead of treating sparse state-change history
+        # as missing samples. Data quality still exposes sparse sampling.
         for index, (ts, value) in enumerate(points):
             segment_start = max(float(start), float(ts))
             next_ts = points[index + 1][0] if index + 1 < len(points) else float(end)
-            segment_end = min(float(end), float(next_ts), float(ts) + max_hold)
+            segment_end = min(float(end), float(next_ts))
             if segment_end <= segment_start:
                 continue
             duration = segment_end - segment_start
@@ -487,10 +482,26 @@ class MetricStatisticsEngine:
             base["mean"] = integral / covered
             base["mean_method"] = "time_weighted"
             base["mean_coverage_percent"] = min(100.0, covered / max(float(end) - float(start), 1e-12) * 100.0)
+            base["integrated_energy_kwh"] = cls._power_integral_to_kwh(integral, unit)
         else:
             base["mean_method"] = "sample_average"
             base["mean_coverage_percent"] = 0.0
         return base
+
+    @staticmethod
+    def _power_integral_to_kwh(integral: float, unit: str | None) -> float | None:
+        """Convert an integrated power value (power-unit seconds) to kWh.
+
+        VictoriaMetrics `integrate()` and the series path both integrate the
+        source values over seconds. Home Assistant power sensors are normally W,
+        but kW is supported as well. Unknown units deliberately return None.
+        """
+        normalized = str(unit or "").strip().lower()
+        if normalized == "w":
+            return float(integral) / 3_600_000.0
+        if normalized == "kw":
+            return float(integral) / 3_600.0
+        return None
 
     @staticmethod
     def _runtime_stats(points, start, end):

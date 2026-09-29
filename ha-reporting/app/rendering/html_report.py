@@ -40,6 +40,9 @@ def _translate_report_html_to_english(html: str) -> str:
         '>Indisponible<': '>Unavailable<',
         '>Pic<': '>Peak<',
         '>Moyenne<': '>Average<',
+        '>Énergie intégrée<': '>Integrated energy<',
+        '>Début<': '>Start<',
+        '>Fin<': '>End<',
         '>Variation période<': '>Period change<',
         '>Fin compteur<': '>Counter end<',
         '>Premier<': '>First<',
@@ -168,16 +171,25 @@ def _source_values(source: dict[str, Any]) -> list[tuple[str, str]]:
         return [("État", source.get("message") or source.get("status") or "Indisponible")]
     if metric == "power":
         maximum = stats.get("max") or {}
-        return [
+        values = [
             ("Pic", _num(maximum.get("value"), unit)),
             ("P95", _num(stats.get("p95"), unit)),
             ("Moyenne", _num(stats.get("mean"), unit)),
         ]
+        if source.get("derive_energy") and stats.get("integrated_energy_kwh") is not None:
+            values.append(("Énergie intégrée", _num(stats.get("integrated_energy_kwh"), "kWh")))
+        return values
     if metric == "temperature":
         return [
             ("Minimum", _num((stats.get("min") or {}).get("value"), unit)),
             ("Moyenne", _num(stats.get("mean"), unit)),
             ("Maximum", _num((stats.get("max") or {}).get("value"), unit)),
+        ]
+    if metric == "energy_measurement":
+        return [
+            ("Début", _num((stats.get("first") or {}).get("value"), unit)),
+            ("Moyenne", _num(stats.get("mean"), unit)),
+            ("Fin", _num((stats.get("last") or {}).get("value"), unit)),
         ]
     if metric in {"energy_total", "runtime", "cycles"}:
         return [

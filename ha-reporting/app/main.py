@@ -120,12 +120,19 @@ def stable_id(value):
 def metric_guess(entity):
     attrs = entity.get("attributes") or {}
     device_class = str(attrs.get("device_class") or "").lower()
+    state_class = str(attrs.get("state_class") or "").lower()
     unit = str(attrs.get("unit_of_measurement") or "")
     entity_id = str(entity.get("entity_id") or "").lower()
 
-    if device_class == "power" or unit == "W":
+    if device_class == "power" or unit in ("W", "kW"):
         return "power"
     if device_class == "energy" or unit in ("kWh", "Wh"):
+        # Home Assistant distinguishes cumulative energy counters from ordinary
+        # energy measurements through state_class. Treating every kWh sensor as
+        # a counter made windowed/derived measurements look like cumulative
+        # meters. Keep legacy fallback behavior only when state_class is absent.
+        if state_class == "measurement":
+            return "energy_measurement"
         return "energy_total"
     if device_class == "voltage" or unit == "V":
         return "voltage"
@@ -167,6 +174,7 @@ def home_assistant_states():
                 "friendly_name": attrs.get("friendly_name", ""),
                 "unit": attrs.get("unit_of_measurement", ""),
                 "device_class": attrs.get("device_class", ""),
+                "state_class": attrs.get("state_class", ""),
                 "metric_guess": metric_guess(entity),
             }
         )
@@ -484,6 +492,7 @@ def catalog_summary(data, filename=None):
                         "entity_id": sensor.get("entity_id", ""),
                         "metric": sensor.get("metric", ""),
                         "unit": sensor.get("unit", ""),
+                        "derive_energy": bool(sensor.get("derive_energy", False)),
                     }
                     for key, sensor in sensors.items()
                 ],
@@ -604,6 +613,11 @@ def sensors_to_mapping(items):
             sensor["unit"] = str(item["unit"])
         if item.get("provider"):
             sensor["provider"] = str(item["provider"])
+        # Derived energy is meaningful only for power sources. Keeping the flag
+        # next to the source makes the feature generic and catalog-driven rather
+        # than EMHASS-specific.
+        if metric == "power" and bool(item.get("derive_energy")):
+            sensor["derive_energy"] = True
         output[key] = sensor
     return output
 

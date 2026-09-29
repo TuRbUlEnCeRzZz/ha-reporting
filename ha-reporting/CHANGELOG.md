@@ -1,3 +1,16 @@
+## 0.1.0-beta.24
+
+- Add an optional **Statistics + energy integration** processing mode for `power` sources.
+- Expose `integrated_energy_kwh` from the same time-weighted power series and exact report window used for power statistics.
+- Keep derived power energy generic and provider-agnostic; no EMHASS-specific code path is required.
+- Add the `energy_measurement` metric and use Home Assistant `state_class: measurement` to distinguish kWh/Wh gauges from cumulative energy counters during automatic metric detection.
+- Expose Home Assistant `state_class` in the source picker.
+- Introduce `ha-reporting-ai-context-v4`, replacing positional statistic arrays with self-describing named fields on each source record.
+- Distinguish `period_delta` from `counter_end` explicitly in AI input and add prompt rules forbidding cumulative counter readings from being described as period consumption.
+- Add explicit AI semantics for forecast sources and for `integrated_energy_kwh`.
+- Preserve every current/comparison source, including partial coverage; beta.24 still fails explicitly instead of trimming report data.
+- Keep beta.23 long-running AI timeouts and WebSocket heartbeat behavior unchanged.
+
 ## 0.1.0-beta.23
 
 - Raise the maximum configurable AI Task timeout from 1,800 seconds to 7,200 seconds (2 hours).

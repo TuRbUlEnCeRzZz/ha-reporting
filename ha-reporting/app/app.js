@@ -12,13 +12,14 @@ let currentCatalog = null;
 let editingDeviceId = null;
 let existingSensorKeyByEntity = new Map();
 let metricOverrideByEntity = new Map();
+let deriveEnergyByEntity = new Map();
 let analysisCatalogId = null;
 let analysisDeviceId = null;
 let selected = new Set();
 let modalSaveHandler = null;
 
 const metricTypes = [
-  "power","energy_total","voltage","current",
+  "power","energy_total","energy_measurement","voltage","current",
   "temperature","humidity","runtime","cycles","state"
 ];
 
@@ -304,7 +305,12 @@ function renderSeriesResult(result){
       <div class="seriesStat">
         <div class="label">P95</div>
         <div class="value">${formatSeriesNumber(metricStats.p95,unit)}</div>
-      </div>`;
+      </div>
+      ${source.derive_energy === true && metricStats.integrated_energy_kwh != null ? `
+      <div class="seriesStat">
+        <div class="label">${esc(hrT("source.integrated_energy"))}</div>
+        <div class="value">${formatSeriesNumber(metricStats.integrated_energy_kwh,"kWh")}</div>
+      </div>` : ""}`;
   }else{
     businessStats = `
       <div class="seriesStat accentStat">
@@ -2189,11 +2195,19 @@ function metricOptions(selectedMetric){
   ).join("");
 }
 
+function powerProcessingOptions(metric, deriveEnergy){
+  if(metric !== "power") return `<option value="statistics">—</option>`;
+  return [
+    `<option value="statistics" ${!deriveEnergy ? "selected" : ""}>${esc(hrT("source.power_statistics"))}</option>`,
+    `<option value="statistics_and_energy" ${deriveEnergy ? "selected" : ""}>${esc(hrT("source.power_statistics_energy"))}</option>`
+  ].join("");
+}
+
 function shouldAutoSelect(entity){
   return entity.domain === "sensor"
     && !entity.entity_id.includes("_day")
     && !entity.entity_id.includes("_month")
-    && ["power","energy_total","runtime","cycles","state"].includes(entity.metric_guess);
+    && ["power","energy_total","energy_measurement","runtime","cycles","state"].includes(entity.metric_guess);
 }
 
 async function loadEntities(){
@@ -2228,7 +2242,9 @@ function drawEntities(){
       <td>${esc(e.state)}</td>
       <td>${esc(e.unit)}</td>
       <td>${esc(e.device_class)}</td>
+      <td>${esc(e.state_class || "")}</td>
       <td><select class="metricSelect">${metricOptions(metricOverrideByEntity.get(e.entity_id) || e.metric_guess)}</select></td>
+      <td><select class="processingSelect" ${(metricOverrideByEntity.get(e.entity_id) || e.metric_guess) === "power" ? "" : "disabled"}>${powerProcessingOptions(metricOverrideByEntity.get(e.entity_id) || e.metric_guess, deriveEnergyByEntity.get(e.entity_id) === true)}</select></td>
     </tr>`).join("");
 
   document.querySelectorAll(".entityCheck").forEach(box => {
@@ -2241,8 +2257,21 @@ function drawEntities(){
 
   document.querySelectorAll(".metricSelect").forEach(select => {
     select.addEventListener("change", event => {
+      const row = event.target.closest("tr");
+      const id = row.dataset.id;
+      const metric = event.target.value;
+      metricOverrideByEntity.set(id, metric);
+      const processing = row.querySelector(".processingSelect");
+      processing.disabled = metric !== "power";
+      processing.innerHTML = powerProcessingOptions(metric, deriveEnergyByEntity.get(id) === true);
+      if(metric !== "power") deriveEnergyByEntity.set(id, false);
+    });
+  });
+
+  document.querySelectorAll(".processingSelect").forEach(select => {
+    select.addEventListener("change", event => {
       const id = event.target.closest("tr").dataset.id;
-      metricOverrideByEntity.set(id, event.target.value);
+      deriveEnergyByEntity.set(id, event.target.value === "statistics_and_energy");
     });
   });
 }
@@ -2281,7 +2310,9 @@ $("saveDeviceButton").addEventListener("click", async () => {
       key:existingSensorKeyByEntity.get(entityId) || undefined,
       entity_id:entityId,
       metric:visibleMetrics.get(entityId) || metricOverrideByEntity.get(entityId) || entity.metric_guess,
-      unit:entity.unit
+      unit:entity.unit,
+      derive_energy:(visibleMetrics.get(entityId) || metricOverrideByEntity.get(entityId) || entity.metric_guess) === "power"
+        && deriveEnergyByEntity.get(entityId) === true
     };
   });
 
@@ -2326,11 +2357,13 @@ async function editDeviceSensors(catalogId, deviceId, push=true){
   selected.clear();
   existingSensorKeyByEntity.clear();
   metricOverrideByEntity.clear();
+  deriveEnergyByEntity.clear();
 
   for(const sensor of (device.entities || [])){
     selected.add(sensor.entity_id);
     existingSensorKeyByEntity.set(sensor.entity_id, sensor.key);
     metricOverrideByEntity.set(sensor.entity_id, sensor.metric);
+    deriveEnergyByEntity.set(sensor.entity_id, sensor.derive_energy === true);
   }
 
   $("deviceTitle").textContent = `Capteurs · ${device.name}`;
@@ -2442,6 +2475,12 @@ function metricCardData(source, period){
         value:formatSeriesNumber(stats.mean,unit)
       }
     ];
+    if(source.derive_energy === true && stats.integrated_energy_kwh != null){
+      item.cells.push({
+        label:hrT("source.integrated_energy"),
+        value:formatSeriesNumber(stats.integrated_energy_kwh,"kWh")
+      });
+    }
     return item;
   }
 
@@ -2464,6 +2503,17 @@ function metricCardData(source, period){
         value:formatSeriesNumber(max.value,unit),
         sub:localDateTime(max.timestamp)
       }
+    ];
+    return item;
+  }
+
+  if(source.metric === "energy_measurement"){
+    const first = stats.first || {};
+    const last = stats.last || {};
+    item.cells = [
+      {label:hrT("source.first_value"), value:formatSeriesNumber(first.value,unit), sub:localDateTime(first.timestamp)},
+      {label:hrT("source.average"), value:formatSeriesNumber(stats.mean,unit)},
+      {label:hrT("source.last_value"), value:formatSeriesNumber(last.value,unit), sub:localDateTime(last.timestamp)}
     ];
     return item;
   }

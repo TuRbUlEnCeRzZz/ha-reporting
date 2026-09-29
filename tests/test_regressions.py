@@ -91,6 +91,16 @@ class RuntimeTests(unittest.TestCase):
         self.assertAlmostEqual(a['statistics']['mean'],200.0)
         self.assertEqual(a['statistics']['mean_method'],'time_weighted_integral')
 
+    def test_power_rollup_exposes_integrated_energy_kwh(self):
+        values=dict(count=4,first=100,last=200,first_ts=0,last_ts=3590,min=50,min_ts=1,max=500,max_ts=1200,mean=999,p95=450,present_duration=3600,integral=720000)
+        a=self.engine.analyze_rollup('power',{'values':values},0,3600,300,'W')
+        self.assertAlmostEqual(a['statistics']['integrated_energy_kwh'],0.2)
+
+    def test_power_series_integration_uses_stateful_hold(self):
+        a=self.engine.analyze('power',[(0,100),(1800,200)],0,3600,300,'W')
+        self.assertAlmostEqual(a['statistics']['mean'],150.0)
+        self.assertAlmostEqual(a['statistics']['integrated_energy_kwh'],0.15)
+
     def test_month_has_8928_positions(self):
         self.assertEqual(self.engine.analyze('power',[],0,31*86400,300)['quality']['expected_points'],8928)
     def test_monotonic_runtime(self):
@@ -497,7 +507,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertIn('reconstruction partielle',prompt)
         self.assertIn('base_reconstructed=true',prompt)
         self.assertIn('reference_coverage_pct',prompt)
-        self.assertIn('ha-reporting-ai-context-v3',prompt)
+        self.assertIn('ha-reporting-ai-context-v4',prompt)
         self.assertIn('poursuivre la collecte',prompt)
         self.assertIn("uniquement s'il n'y a aucune autre recommandation",prompt)
 
@@ -538,13 +548,13 @@ class AiAnalysisTests(unittest.TestCase):
         context=json.loads(context_json)
         self.assertLessEqual(len(context_json),AI_MAX_CONTEXT_CHARS)
         self.assertGreater(meta['legacy_characters'],meta['characters'])
-        self.assertEqual(meta['mode'],'lossless_normalized')
+        self.assertEqual(meta['mode'],'lossless_self_describing')
         self.assertTrue(meta['lossless'])
         self.assertEqual(meta['omitted_current_sources'],0)
         self.assertEqual(meta['omitted_comparison_sources'],0)
         self.assertEqual(len(context['current']),421)
         self.assertEqual(len(context['comparisons']),420)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v3')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v4')
         encoded=json.dumps(context,ensure_ascii=False)
         self.assertIn('critical_power',encoded)
         self.assertIn('Low coverage',encoded)
@@ -554,13 +564,38 @@ class AiAnalysisTests(unittest.TestCase):
         context_json,meta=build_budgeted_ai_context(self.sample())
         context=json.loads(context_json)
         self.assertLessEqual(len(context_json),AI_TARGET_CONTEXT_CHARS)
-        self.assertEqual(meta['mode'],'lossless_normalized')
+        self.assertEqual(meta['mode'],'lossless_self_describing')
         self.assertTrue(meta['lossless'])
         self.assertEqual(meta['omitted_current_sources'],0)
         self.assertEqual(meta['omitted_comparison_sources'],0)
         self.assertEqual(len(context['current']),1)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v3')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v4')
         self.assertNotIn('preview',context_json)
+
+    def test_beta24_context_uses_named_semantics_and_integrated_energy(self):
+        sample=self.sample()
+        source=sample['catalogs'][0]['devices'][0]['sources'][0]
+        source['derive_energy']=True
+        source['analysis']['statistics']['integrated_energy_kwh']=1.234
+        energy={
+            'sensor_key':'meter','entity_id':'sensor.meter','metric':'energy_total','unit':'kWh','status':'ok',
+            'analysis':{'quality':{'period_coverage_percent':100,'sample_density_percent':None,'density_applicable':False},
+                        'statistics':{'delta':8.22,'last':{'value':3788.82},'resets_detected':0},
+                        'validation':{'warnings':[]}}
+        }
+        sample['catalogs'][0]['devices'][0]['sources'].append(energy)
+        context_json,meta=build_budgeted_ai_context(sample)
+        context=json.loads(context_json)
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v4')
+        power=context['current'][0]
+        self.assertEqual(power['values']['max'],120)
+        self.assertEqual(power['values']['mean'],50)
+        self.assertAlmostEqual(power['values']['integrated_energy_kwh'],1.234)
+        counter=context['current'][1]
+        self.assertEqual(counter['values']['period_delta'],8.22)
+        self.assertEqual(counter['values']['counter_end'],3788.82)
+        self.assertNotIn('delta',counter['values'])
+        self.assertEqual(meta['omitted_current_sources'],0)
 
     def test_beta22_partial_sources_are_preserved_losslessly(self):
         sample=self.sample()
@@ -573,8 +608,8 @@ class AiAnalysisTests(unittest.TestCase):
         context=json.loads(context_json)
         self.assertEqual(len(context['current']),1)
         self.assertEqual(meta['omitted_current_sources'],0)
-        self.assertIn('partial',context['statuses'])
-        self.assertIn('Partial period',context['warnings'])
+        self.assertEqual(context['current'][0]['status'],'partial')
+        self.assertIn('Partial period',context['current'][0]['warnings'])
         self.assertIn('34.8',context_json)
 
     def test_ai_sanitizer_removes_contradictory_no_recommendation(self):
@@ -635,8 +670,8 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertTrue(call['return_response'])
         self.assertEqual(call['service_data']['entity_id'],'ai_task.local')
         self.assertIn('sans afficher de raisonnement interne',call['service_data']['instructions'])
-        self.assertIn('ha-reporting-ai-context-v3',call['service_data']['instructions'])
-        self.assertEqual(result['input']['context_mode'],'lossless_normalized')
+        self.assertIn('ha-reporting-ai-context-v4',call['service_data']['instructions'])
+        self.assertEqual(result['input']['context_mode'],'lossless_self_describing')
         self.assertTrue(result['input']['context_lossless'])
         self.assertLessEqual(result['input']['context_characters'],AI_TARGET_CONTEXT_CHARS)
 
@@ -771,6 +806,27 @@ class HtmlRendererTests(unittest.TestCase):
         self.assertIn('AI context: 47.3 k / 60.0 k characters',html)
         self.assertIn('normalized from 106.7 k',html)
 
+    def test_beta24_renderer_shows_integrated_power_energy_and_energy_measurement(self):
+        sample=self.sample_result()
+        source=sample['catalogs'][0]['devices'][0]['sources'][0]
+        source['derive_energy']=True
+        source['analysis']['statistics']['integrated_energy_kwh']=6.882
+        sample['catalogs'][0]['devices'][0]['sources'].append({
+            'sensor_key':'forecast_energy','entity_id':'sensor.forecast_energy','metric':'energy_measurement','unit':'kWh','status':'ok',
+            'analysis':{'quality':{'period_coverage_percent':100,'density_applicable':False,'sample_density_percent':None},'statistics':{
+                'first':{'value':6.251},'mean':9.5,'last':{'value':13.108},'min':{'value':6.251},'max':{'value':13.108}
+            }}
+        })
+        sample['summary']['sources_total']=3
+        sample['summary']['sources_ok']=3
+        sample['catalogs'][0]['devices'][0]['summary']={'sources_ok':3,'sources_total':3}
+        html=render_report_html(sample)
+        self.assertIn('Énergie intégrée',html)
+        self.assertIn('6.88 kWh',html)
+        self.assertIn('forecast_<wbr>energy',html)
+        self.assertIn('Début',html)
+        self.assertIn('13.1 kWh',html)
+
     def test_pdf_identifiers_wrap_at_home_assistant_separators(self):
         sample=self.sample_result()
         sample['catalogs'][0]['devices'][0]['sources'][0]['sensor_key']='armoire_combinee_compresseur_cuisine_time_noreset'
@@ -872,7 +928,7 @@ class Beta12ExportProviderTests(unittest.TestCase):
         self.assertTrue(status['reachable'])
         self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
         self.assertEqual(seen['auth'],'Token secret')
-        self.assertIn('beta.23',seen['ua'])
+        self.assertIn('beta.24',seen['ua'])
 
     def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
         import tempfile
@@ -1209,6 +1265,41 @@ class Beta21InternationalizationAndHttpTests(unittest.TestCase):
 
 
 
+class Beta24SourceSemanticsTests(unittest.TestCase):
+    def test_metric_guess_distinguishes_energy_measurement_from_counter(self):
+        measurement={'entity_id':'sensor.forecast_energy','attributes':{'device_class':'energy','unit_of_measurement':'kWh','state_class':'measurement'}}
+        counter={'entity_id':'sensor.total_energy','attributes':{'device_class':'energy','unit_of_measurement':'kWh','state_class':'total_increasing'}}
+        self.assertEqual(main.metric_guess(measurement),'energy_measurement')
+        self.assertEqual(main.metric_guess(counter),'energy_total')
+
+    def test_sensor_mapping_preserves_power_energy_derivation_only_for_power(self):
+        mapped=main.sensors_to_mapping([
+            {'entity_id':'sensor.forecast','metric':'power','unit':'W','derive_energy':True},
+            {'entity_id':'sensor.energy','metric':'energy_measurement','unit':'kWh','derive_energy':True},
+        ])
+        self.assertTrue(mapped['forecast']['derive_energy'])
+        self.assertNotIn('derive_energy',mapped['energy'])
+
+    def test_victoriametrics_metric_name_respects_power_and_energy_units(self):
+        self.assertEqual(VM._metric_name_for_source({'metric':'power','unit':'W'}),'W_value')
+        self.assertEqual(VM._metric_name_for_source({'metric':'power','unit':'kW'}),'kW_value')
+        self.assertEqual(VM._metric_name_for_source({'metric':'energy_measurement','unit':'kWh'}),'kWh_value')
+
+    def test_device_analysis_exposes_derived_energy_flag(self):
+        class PowerProvider:
+            capabilities=ProviderCapabilities(report_rollup=True,raw_series=True)
+            def health_check(self): return ProviderStatus('victoria_metrics',True,True,'OK')
+            def get_report_statistics(self,source,*args,**kwargs):
+                return {'values':{'count':2,'first':100,'last':100,'first_ts':0,'last_ts':3599,'min':100,'min_ts':0,'max':100,'max_ts':0,'mean':100,'p95':100,'present_duration':3600,'integral':360000}}
+        result=DeviceAnalysisEngine(lambda _:PowerProvider()).analyze(
+            catalog_id='c',catalog_name='C',device_id='d',
+            device={'sensors':{'forecast':{'entity_id':'sensor.forecast','metric':'power','unit':'W','derive_energy':True}}},
+            default_provider='victoria_metrics',start=0,end=3600,step=300,retrieval_mode='provider_rollup')
+        source=result['sources'][0]
+        self.assertTrue(source['derive_energy'])
+        self.assertAlmostEqual(source['analysis']['statistics']['integrated_energy_kwh'],0.1)
+
+
 class PackageTests(unittest.TestCase):
     def test_yaml_and_installation_layout(self):
         import yaml
@@ -1216,7 +1307,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.23')
+        self.assertEqual(config['version'],'0.1.0-beta.24')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertTrue(config['hassio_api'])

@@ -1,4 +1,4 @@
-/* HA Reporting i18n foundation (beta.23).
+/* HA Reporting i18n foundation (beta.24).
  *
  * The legacy beta.20 UI still contains French source strings in a number of
  * rendering functions.  beta.21 centralizes translations here and translates
@@ -35,6 +35,13 @@ const HR_I18N_MESSAGES = {
   "common.state": {fr:"État", en:"State"},
   "common.unit": {fr:"Unité", en:"Unit"},
   "common.metric": {fr:"Métrique", en:"Metric"},
+  "common.processing": {fr:"Traitement", en:"Processing"},
+  "source.power_statistics": {fr:"Statistiques de puissance", en:"Power statistics"},
+  "source.power_statistics_energy": {fr:"Statistiques + intégration énergétique", en:"Statistics + energy integration"},
+  "source.integrated_energy": {fr:"Énergie intégrée", en:"Integrated energy"},
+  "source.first_value": {fr:"Début", en:"Start"},
+  "source.last_value": {fr:"Fin", en:"End"},
+  "source.average": {fr:"Moyenne", en:"Average"},
   "common.include": {fr:"Inclure", en:"Include"},
   "common.provider": {fr:"Provider", en:"Provider"},
   "common.copy_word": {fr:"copie", en:"copy"},

@@ -45,7 +45,7 @@ class VictoriaMetricsProvider(DataProvider):
             url,
             headers={
                 "Accept": "application/json",
-                "User-Agent": "HA-Reporting/0.1.0-beta.23",
+                "User-Agent": "HA-Reporting/0.1.0-beta.24",
             },
         )
 
@@ -146,10 +146,10 @@ class VictoriaMetricsProvider(DataProvider):
         metric = source.get("metric")
         unit = source.get("unit")
 
-        if metric == "power" or unit == "W":
-            return "W_value"
-        if metric == "energy_total" or unit == "kWh":
-            return "kWh_value"
+        if metric == "power" or unit in {"W", "kW"}:
+            return f"{unit}_value" if unit in {"W", "kW"} else "W_value"
+        if metric in {"energy_total", "energy_measurement"} or unit in {"kWh", "Wh"}:
+            return f"{unit}_value" if unit in {"kWh", "Wh"} else "kWh_value"
         if metric == "runtime" or unit == "h":
             return "h_value"
         if metric == "cycles" or unit == "cycles":
@@ -434,7 +434,7 @@ class VictoriaMetricsProvider(DataProvider):
         }
         request = urllib.request.Request(
             f"{self.base_url}/api/v1/export?{urllib.parse.urlencode(params)}",
-            headers={"Accept": "application/stream+json", "User-Agent": "HA-Reporting/0.1.0-beta.23"},
+            headers={"Accept": "application/stream+json", "User-Agent": "HA-Reporting/0.1.0-beta.24"},
         )
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:

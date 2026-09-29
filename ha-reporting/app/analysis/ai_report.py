@@ -480,18 +480,151 @@ def _lossless_ai_context_v3(result: dict[str, Any]) -> dict[str, Any]:
     return context
 
 
-def _lossless_ai_context_v4(result: dict[str, Any]) -> dict[str, Any]:
+def _as_number(value: Any) -> float | None:
+    """Return a finite numeric value or None without coercing arbitrary text."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
+
+
+def _is_forecast_source(source_name: Any) -> bool:
+    """Recognize common forecast/prediction wording without provider-specific IDs."""
+    text = str(source_name or "").casefold()
+    return any(token in text for token in (
+        "forecast", "prevision", "prévision", "prediction", "prédiction", "predicted", "prévisionnel",
+    ))
+
+
+def _power_to_w(value: Any, unit: Any) -> float | None:
+    number = _as_number(value)
+    if number is None:
+        return None
+    normalized = str(unit or "").strip().casefold()
+    if normalized == "w":
+        return number
+    if normalized == "kw":
+        return number * 1000.0
+    return None
+
+
+def _energy_to_kwh(value: Any, unit: Any) -> float | None:
+    number = _as_number(value)
+    if number is None:
+        return None
+    normalized = str(unit or "").strip().casefold()
+    if normalized == "kwh":
+        return number
+    if normalized == "wh":
+        return number / 1000.0
+    return None
+
+
+def _rounded_derived(value: float | None, digits: int = 6) -> float | None:
+    return None if value is None else round(float(value), digits)
+
+
+def _coverage_allows_full_period(*values: Any) -> bool:
+    coverages = [_as_number(value) for value in values]
+    return bool(coverages and all(value is not None and value >= 80.0 for value in coverages))
+
+
+def _current_source_relationships(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build deterministic, provider-agnostic cross-source comparisons.
+
+    Relationships are emitted only when pairing is unambiguous inside one report
+    device. HA Reporting performs the arithmetic so the AI does not need to infer
+    source pairing or recalculate gaps. Partial coverage is preserved and exposed;
+    it never causes a source to be discarded.
+    """
+    forecast_power = [
+        row for row in rows
+        if row.get("metric") == "power"
+        and _is_forecast_source(row.get("source"))
+        and _as_number((row.get("values") or {}).get("integrated_energy_kwh")) is not None
+    ]
+    measured_power = [
+        row for row in rows
+        if row.get("metric") == "power" and not _is_forecast_source(row.get("source"))
+    ]
+    actual_energy = [
+        row for row in rows
+        if row.get("metric") == "energy_total"
+        and not _is_forecast_source(row.get("source"))
+        and _energy_to_kwh((row.get("values") or {}).get("period_delta"), row.get("unit")) is not None
+    ]
+
+    relationships: list[dict[str, Any]] = []
+    if len(forecast_power) == 1 and len(actual_energy) == 1:
+        forecast = forecast_power[0]
+        actual = actual_energy[0]
+        forecast_kwh = _as_number((forecast.get("values") or {}).get("integrated_energy_kwh"))
+        actual_kwh = _energy_to_kwh((actual.get("values") or {}).get("period_delta"), actual.get("unit"))
+        if forecast_kwh is not None and actual_kwh is not None:
+            gap_kwh = actual_kwh - forecast_kwh
+            gap_pct = None if forecast_kwh == 0 else gap_kwh / forecast_kwh * 100.0
+            relationships.append({
+                "kind": "energy_forecast_vs_actual",
+                "forecast_source": forecast.get("source"),
+                "actual_source": actual.get("source"),
+                "forecast_energy_kwh": _rounded_derived(forecast_kwh),
+                "actual_energy_kwh": _rounded_derived(actual_kwh),
+                "absolute_gap_kwh": _rounded_derived(gap_kwh),
+                "relative_gap_pct": _rounded_derived(gap_pct, 3),
+                "forecast_coverage_pct": forecast.get("coverage_pct"),
+                "actual_coverage_pct": actual.get("coverage_pct"),
+                "full_period_comparison_supported": _coverage_allows_full_period(
+                    forecast.get("coverage_pct"), actual.get("coverage_pct")
+                ),
+            })
+
+    if len(forecast_power) == 1 and len(measured_power) == 1:
+        forecast = forecast_power[0]
+        actual = measured_power[0]
+        forecast_values = forecast.get("values") or {}
+        actual_values = actual.get("values") or {}
+        forecast_mean_w = _power_to_w(forecast_values.get("mean"), forecast.get("unit"))
+        actual_mean_w = _power_to_w(actual_values.get("mean"), actual.get("unit"))
+        if forecast_mean_w is not None and actual_mean_w is not None:
+            mean_gap_w = actual_mean_w - forecast_mean_w
+            mean_gap_pct = None if forecast_mean_w == 0 else mean_gap_w / forecast_mean_w * 100.0
+            relationships.append({
+                "kind": "power_forecast_vs_actual",
+                "forecast_source": forecast.get("source"),
+                "actual_source": actual.get("source"),
+                "forecast_mean_w": _rounded_derived(forecast_mean_w),
+                "actual_mean_w": _rounded_derived(actual_mean_w),
+                "mean_gap_w": _rounded_derived(mean_gap_w),
+                "mean_gap_pct": _rounded_derived(mean_gap_pct, 3),
+                "forecast_p95_w": _rounded_derived(_power_to_w(forecast_values.get("p95"), forecast.get("unit"))),
+                "actual_p95_w": _rounded_derived(_power_to_w(actual_values.get("p95"), actual.get("unit"))),
+                "forecast_max_w": _rounded_derived(_power_to_w(forecast_values.get("max"), forecast.get("unit"))),
+                "actual_max_w": _rounded_derived(_power_to_w(actual_values.get("max"), actual.get("unit"))),
+                "forecast_coverage_pct": forecast.get("coverage_pct"),
+                "actual_coverage_pct": actual.get("coverage_pct"),
+                "full_period_comparison_supported": _coverage_allows_full_period(
+                    forecast.get("coverage_pct"), actual.get("coverage_pct")
+                ),
+            })
+
+    return relationships
+
+
+def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
     """Build a lossless, self-describing AI context.
 
-    beta.24 deliberately trades a little structural compression for semantic
-    clarity. Each source carries its readable source name and named statistics,
-    so a small local model never has to decode positional arrays or join metric
-    schemas to values. No current or comparison source is omitted, including
-    partial sources. Raw samples and provider traces remain outside the AI
-    contract because they are not report statistics.
+    beta.25 keeps the self-describing beta.24 records and adds deterministic
+    cross-source relationships for analyses that otherwise require the model to
+    infer which forecast and measured sources belong together. Each source still
+    carries its readable source name and named statistics. No current or
+    comparison source is omitted, including partial sources. Raw samples and
+    provider traces remain outside the AI contract because they are not report
+    statistics.
     """
     context: dict[str, Any] = {
-        "schema": "ha-reporting-ai-context-v4",
+        "schema": "ha-reporting-ai-context-v5",
         "lossless": True,
         "semantics": {
             "period_delta": "change during the report period",
@@ -511,6 +644,7 @@ def _lossless_ai_context_v4(result: dict[str, Any]) -> dict[str, Any]:
         "summary": result.get("summary") or {},
         "current": [],
         "comparisons": [],
+        "relationships": [],
     }
 
     for catalog in result.get("catalogs") or []:
@@ -519,6 +653,7 @@ def _lossless_ai_context_v4(result: dict[str, Any]) -> dict[str, Any]:
             info = device.get("device") or {}
             device_name = info.get("name")
             category = info.get("category")
+            device_rows: list[dict[str, Any]] = []
             for source in device.get("sources") or []:
                 analysis = source.get("analysis") or {}
                 stats = analysis.get("statistics") or {}
@@ -579,6 +714,9 @@ def _lossless_ai_context_v4(result: dict[str, Any]) -> dict[str, Any]:
                 if warnings:
                     row["warnings"] = warnings
                 context["current"].append(row)
+                device_rows.append(row)
+
+            context["relationships"].extend(_current_source_relationships(device_rows))
 
     comparisons = result.get("comparisons") or {}
     for target in comparisons.get("targets") or []:
@@ -647,14 +785,15 @@ def build_budgeted_ai_context(
 ) -> tuple[str, dict[str, Any]]:
     """Return the complete semantic AI context using self-describing normalization.
 
-    beta.24 keeps every current and comparison source, including partial entries.
+    beta.25 keeps every current and comparison source, including partial entries,
+    and adds deterministic cross-source relationships when pairing is unambiguous.
     Named statistics replace positional value arrays so small local models do not
     need to decode max/p95/mean or counter semantics. The hard limit is enforced
     by the caller; when the lossless context cannot fit, analysis fails explicitly
     instead of silently omitting data.
     """
     legacy_json = _encoded_context(compact_report_context(result))
-    context = _lossless_ai_context_v4(result)
+    context = _lossless_ai_context_v5(result)
     context_json = _encoded_context(context)
     metadata = {
         "schema": context.get("schema"),
@@ -669,6 +808,7 @@ def build_budgeted_ai_context(
         "omitted_comparison_sources": 0,
         "current_sources": len(context.get("current") or []),
         "comparison_sources": len(context.get("comparisons") or []),
+        "relationships": len(context.get("relationships") or []),
     }
     return context_json, metadata
 
@@ -769,11 +909,16 @@ Mandatory rules for N/N-x comparisons:
 - Never use a relative percentage from an incomplete comparison to assert drift, overconsumption, or improvement.
 - Keep reconstruction and coverage strictly separate: `base_reconstructed=true` means N was reconstructed after one or more resets; `reference_coverage_pct` independently describes N-x reference coverage. Never merge these concepts into wording such as “partial reconstruction”.
 - If `base_reconstructed` is true, mention reconstruction only if useful to reliability. If absent/false, do not discuss resets or reconstruction. If `reference_coverage_pct` is below 80, separately state that the historical reference is partial and include its coverage. Do not claim the reference is reconstructed unless `reference_reconstructed` is true.
-- `ha-reporting-ai-context-v4` is lossless and self-describing. Every current/comparison source is a complete named record; no source is omitted, including partially covered sources. Never swap values between records or reinterpret named fields.
+- `ha-reporting-ai-context-v5` is lossless and self-describing. Every current/comparison source is a complete named record; no source is omitted, including partially covered sources. Never swap values between records or reinterpret named fields.
 - For power, `max`, `p95`, and `mean` are authoritative named fields. Never treat `max` as `mean` or `mean` as `max`. `integrated_energy_kwh`, when present, is the period energy derived from that exact power source.
 - For cumulative counters, `period_delta` is the period change/consumption. `counter_end` is only the cumulative meter reading at the end and must NEVER be presented as a period delta or period consumption.
 - `energy_measurement` is a gauge-like energy measurement, not a cumulative counter. Do not infer a consumption delta from it unless an explicit comparison value says so.
 - Preserve source semantics: a source whose name contains `forecast` / `prevision` is a forecast, not a measured value. Do not call forecast power measured power.
+- `relationships` contains deterministic cross-source comparisons already calculated by HA Reporting. Treat these values as authoritative and do not recalculate them.
+- When an `energy_forecast_vs_actual` relationship is present, the SUMMARY must report actual period energy, integrated forecast energy, `absolute_gap_kwh`, and `relative_gap_pct` when available. This energy comparison has priority over isolated peak-power differences.
+- When `full_period_comparison_supported` is false, still report the supplied values but explicitly qualify the comparison with the supplied coverage; do not present the gap as a reliable full-period performance result.
+- When a `power_forecast_vs_actual` relationship is present, compare the mean forecast and measured power when useful. P95/max may be mentioned as secondary context, but do not use an isolated peak alone to characterize overall forecast quality.
+- Never omit an available `integrated_energy_kwh` from the main analysis when HA Reporting also provides a matching `energy_forecast_vs_actual` relationship.
 - Recommendations based only on a partial/reconstructed comparison must remain proportionate: prefer monitoring, continuing data collection, or checking again once coverage is sufficient. Do not ask the user to investigate causes unless current-period data independently supports a concrete anomaly.
 
 Produce exactly these three plain-text sections:
@@ -807,11 +952,16 @@ Règles impératives pour les comparaisons N/N-x :
 - N'utilise jamais un pourcentage relatif issu d'une comparaison incomplète pour affirmer une dérive, une surconsommation ou une amélioration.
 - Distingue strictement reconstruction et couverture : `base_reconstructed=true` signifie que la valeur N a été reconstruite après un ou plusieurs resets ; `reference_coverage_pct` décrit séparément la couverture de la référence N-x. Ne fusionne jamais ces deux notions dans une expression comme « reconstruction partielle ».
 - Si `base_reconstructed` vaut true, tu peux signaler la reconstruction uniquement si elle est utile à la fiabilité de l'analyse. Si elle est absente/false, ne parle jamais de reset ou de reconstruction. Si `reference_coverage_pct` est inférieur à 80, dis séparément « la référence historique est partielle » avec sa couverture. N'affirme pas que la référence est reconstruite sauf si `reference_reconstructed` vaut true.
-- `ha-reporting-ai-context-v4` est une représentation sans omission et auto-descriptive. Chaque source courante/comparée est un enregistrement complet avec des champs nommés ; aucune source n'est retirée, y compris lorsqu'elle ne couvre qu'une partie de la période. N'échange jamais des valeurs entre deux enregistrements et ne réinterprète pas les noms de champs.
+- `ha-reporting-ai-context-v5` est une représentation sans omission et auto-descriptive. Chaque source courante/comparée est un enregistrement complet avec des champs nommés ; aucune source n'est retirée, y compris lorsqu'elle ne couvre qu'une partie de la période. N'échange jamais des valeurs entre deux enregistrements et ne réinterprète pas les noms de champs.
 - Pour une puissance, `max`, `p95` et `mean` sont des champs nommés faisant foi. Ne transforme jamais `max` en moyenne ni `mean` en maximum. `integrated_energy_kwh`, lorsqu'il existe, est l'énergie de la période dérivée exactement de cette source de puissance.
 - Pour un compteur cumulatif, `period_delta` est la variation/consommation de la période. `counter_end` est uniquement l'index cumulé en fin de période et ne doit JAMAIS être présenté comme un delta ou une consommation de période.
 - `energy_measurement` est une mesure d'énergie de type jauge, pas un compteur cumulatif. N'en déduis pas une consommation par différence sauf si une comparaison explicite le fournit.
 - Respecte la sémantique du nom de source : une source contenant `forecast` / `prevision` est une prévision, pas une mesure réelle. Ne qualifie pas une puissance prévisionnelle de puissance mesurée.
+- `relationships` contient des comparaisons entre sources calculées de manière déterministe par HA Reporting. Considère ces valeurs comme faisant foi et ne les recalcule pas.
+- Lorsqu'une relation `energy_forecast_vs_actual` existe, la SYNTHÈSE doit indiquer l'énergie réelle de la période, l'énergie prévisionnelle intégrée, `absolute_gap_kwh` et `relative_gap_pct` lorsqu'ils sont disponibles. Cette comparaison énergétique est prioritaire sur les écarts de pics de puissance isolés.
+- Si `full_period_comparison_supported` vaut false, rapporte quand même les valeurs fournies mais qualifie explicitement la comparaison avec les couvertures indiquées ; ne présente pas l'écart comme un résultat fiable sur toute la période.
+- Lorsqu'une relation `power_forecast_vs_actual` existe, compare la puissance moyenne prévue et mesurée lorsque c'est utile. P95/max peuvent servir de contexte secondaire, mais n'utilise pas un pic isolé pour qualifier à lui seul la qualité globale de la prévision.
+- N'omets jamais un `integrated_energy_kwh` disponible de l'analyse principale lorsque HA Reporting fournit aussi une relation `energy_forecast_vs_actual` correspondante.
 - Une recommandation fondée seulement sur une comparaison partielle/reconstruite doit rester proportionnée : privilégie « surveiller », « poursuivre la collecte » ou « recontrôler quand la couverture sera suffisante ». Ne demande pas d'en rechercher les causes sauf si les données de la période courante montrent, indépendamment de la comparaison, une anomalie étayée.
 
 Produis exactement ces trois sections, en texte simple :
@@ -986,6 +1136,7 @@ def analyze_report_with_ai(
                 "context_lossless": context_meta["lossless"],
                 "context_current_sources": context_meta["current_sources"],
                 "context_comparison_sources": context_meta["comparison_sources"],
+                "context_relationships": context_meta["relationships"],
                 "omitted_current_sources": context_meta["omitted_current_sources"],
                 "omitted_comparison_sources": context_meta["omitted_comparison_sources"],
                 "sources": (result.get("summary") or {}).get("sources_total", 0),

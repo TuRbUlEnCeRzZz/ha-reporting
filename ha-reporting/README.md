@@ -2,7 +2,7 @@
 
 ![HA Reporting](logo.png)
 
-**Current development version: 0.1.0-beta.24**
+**Current development version: 0.1.0-beta.25**
 
 HA Reporting is a reporting engine for **Home Assistant OS**. It turns Home Assistant sensor history stored in VictoriaMetrics into structured reports, period comparisons, optional AI commentary and locally generated PDF documents.
 
@@ -99,21 +99,22 @@ Beta.21 introduces the first HA Reporting internationalization layer.
 
 From beta.21 onward, new and modified maintainer-facing repository content is written in **English**. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-## What is new in beta.24
+## What is new in beta.25
 
-Beta.24 focuses on **source semantics and AI reliability**. It keeps the long-running AI support from beta.23 while making power-derived energy a first-class, generic source option and replacing the positional AI context with a self-describing lossless schema.
+Beta.25 focuses on **deterministic cross-source AI analysis**. Beta.24 made every source self-describing; beta.25 goes one step further by calculating the important forecast-versus-measured relationships inside HA Reporting before the AI Task is called.
 
-- adds an optional **Statistics + energy integration** processing mode for any `power` source;
-- derives `integrated_energy_kwh` from the same power series and exact report period used for the power statistics, so forecast power such as `p_load_forecast` can also provide its period energy without a separate helper sensor;
-- keeps the original power statistics (`max`, `p95`, time-weighted `mean`) alongside the derived energy;
-- adds the `energy_measurement` metric for kWh/Wh sensors whose Home Assistant `state_class` is `measurement`, so they are no longer automatically treated as cumulative counters;
-- exposes Home Assistant `state_class` in the source picker to make sensor semantics visible when building a catalogue;
-- introduces **`ha-reporting-ai-context-v4`**, where every statistic uses an explicit named field on the same source record instead of positional value arrays;
-- explicitly distinguishes `period_delta` from `counter_end` in AI input, and tells the model never to present a cumulative meter reading as period consumption;
-- explicitly keeps forecast sources separate from measured sources and prevents the AI prompt from re-labelling forecast power as measured power;
-- keeps every current and comparison source, including partial data. beta.24 still fails explicitly rather than dropping sources if the lossless AI context becomes too large.
+- introduces **`ha-reporting-ai-context-v5`** while preserving every current and comparison source, including partial data;
+- adds a `relationships` section containing deterministic cross-source comparisons when source pairing is unambiguous inside one report device;
+- for an integrated forecast power source and a measured period-energy counter, precomputes actual energy, forecast energy, absolute gap and relative gap;
+- for one forecast power source and one measured power source, precomputes mean-power gap and carries P95/max values as secondary context;
+- includes forecast and measured coverage in every relationship and marks whether a full-period comparison is supported;
+- explicitly instructs the AI to prioritize period-energy forecast accuracy over isolated power peaks;
+- requires the AI summary to include the integrated forecast energy and its deterministic gap when an `energy_forecast_vs_actual` relationship is available;
+- keeps all arithmetic in HA Reporting so the language model does not need to infer source pairing or recalculate percentages;
+- keeps beta.24 power integration, lossless source records and Home Assistant `state_class` handling unchanged;
+- keeps beta.23 long-running AI timeout support unchanged.
 
-The new power integration is intentionally generic. It is useful for EMHASS forecasts, but no EMHASS-specific code path is required: any power source can opt into the same derived-energy processing.
+These relationships are provider-agnostic. EMHASS is a useful real-world example, but the logic is not tied to EMHASS entity IDs: relationships are emitted only when HA Reporting can identify one forecast power source and one unambiguous measured counterpart within the same report device.
 
 ## Installation on Home Assistant OS
 
@@ -125,16 +126,16 @@ The new power integration is intentionally generic. It is useful for EMHASS fore
 
    `https://github.com/TuRbUlEnCeRzZz/ha-reporting`
 
-4. Refresh the store and verify that the offered version is **0.1.0-beta.24** before installing or updating.
+4. Refresh the store and verify that the offered version is **0.1.0-beta.25** before installing or updating.
 5. Start HA Reporting and open its interface through Home Assistant Ingress.
 
 ### From the ZIP: local installation
 
-1. Extract `ha-reporting-0.1.0-beta.24.zip` on your computer.
+1. Extract `ha-reporting-0.1.0-beta.25.zip` on your computer.
 2. Inside the extracted repository, locate the **`ha-reporting/`** directory containing `config.yaml`, `Dockerfile`, `run.sh` and `app/`.
 3. Copy that directory to **`/addons/ha-reporting`** on Home Assistant OS using your existing file-transfer method. Do not copy the whole repository into `/addons/ha-reporting`.
 4. Refresh the app store and rebuild/reinstall the local add-on.
-5. Start it and confirm **HA Reporting 0.1.0-beta.24** in the add-on log.
+5. Start it and confirm **HA Reporting 0.1.0-beta.25** in the add-on log.
 
 The first build can take some time on a Raspberry Pi 4 because dependencies are installed by Supervisor.
 
@@ -157,7 +158,7 @@ Paths beginning with `/config` in this project refer to **HA Reporting's own per
 
 Configure an AI Task provider in Home Assistant first. In the report settings, enable AI and select the desired entity, or use Home Assistant's preferred AI Task entity where supported.
 
-The AI timeout is configured per report. Beta.24 keeps the beta.23 behavior: a 10-minute default, values from 60 seconds up to 2 hours, and presets up to 90 minutes and 2 hours for slow local inference. Model speed and memory use depend entirely on the selected provider and model.
+The AI timeout is configured per report. Beta.25 keeps the beta.23 behavior: a 10-minute default, values from 60 seconds up to 2 hours, and presets up to 90 minutes and 2 hours for slow local inference. Model speed and memory use depend entirely on the selected provider and model.
 
 HA Reporting communicates with Home Assistant for AI execution and keeps AI processing separate from the deterministic statistics. A slow or failed model should therefore not erase already calculated report data.
 
@@ -165,13 +166,13 @@ AI commentary can be wrong or over-interpret limited history. Treat it as commen
 
 ### AI context normalization
 
-Beta.24 uses **`ha-reporting-ai-context-v4`**. The context remains lossless with respect to the semantic report data sent to AI: no current-period or comparison source is removed, including partially covered sources. Raw time-series samples are still intentionally excluded.
+Beta.25 uses **`ha-reporting-ai-context-v5`**. The context remains lossless with respect to the semantic report data sent to AI: no current-period or comparison source is removed, including partially covered sources. Raw time-series samples are still intentionally excluded.
 
-Unlike the beta.22/beta.23 positional v3 format, v4 keeps each source in a self-contained record with named statistics. For example, power values are labelled `max`, `p95` and `mean`; cumulative counters expose `period_delta` separately from `counter_end`; and an integrated power source exposes `integrated_energy_kwh`. This costs some additional characters but is much easier for smaller local models to interpret reliably.
+The v4 self-describing source records remain intact: power values are labelled `max`, `p95` and `mean`; cumulative counters expose `period_delta` separately from `counter_end`; and an integrated power source exposes `integrated_energy_kwh`. Beta.25 adds deterministic `relationships` when forecast and measured sources can be paired unambiguously inside the same report device. HA Reporting calculates the corresponding energy and mean-power gaps before the AI call, so the model does not need to infer pairing or redo arithmetic.
 
 The preferred operating size is 90,000 characters and the application-side safety guard is 220,000 characters. HA Reporting does **not** trim sources to meet either value. If the lossless context exceeds the application guard, the AI stage reports an explicit error. The AI provider/model still has its own token context limit, which remains authoritative and may be lower.
 
-The completed AI result records the final context size, the earlier compact-context size, the normalization mode and a `context_lossless` flag.
+The completed AI result records the final context size, the earlier compact-context size, the normalization mode, relationship count and a `context_lossless` flag.
 
 ## Paperless-ngx
 
@@ -266,7 +267,7 @@ Possible future directions include:
 - additional export and notification destinations;
 - continued PDF/layout improvements and reporting diagnostics;
 - further validation with larger installations and longer histories;
-- optional presets for common reporting use cases. EMHASS data can already be reported through normal sensors, but there is no dedicated EMHASS integration in beta.24; the new power-integration option is provider-agnostic.
+- optional presets for common reporting use cases. EMHASS data can already be reported through normal sensors, but there is no dedicated EMHASS integration in beta.25; the new power-integration option is provider-agnostic.
 
 These are possible directions, not delivery or maintenance commitments.
 
@@ -274,5 +275,6 @@ These are possible directions, not delivery or maintenance commitments.
 
 - [Technical documentation](DOCS.md)
 - [Changelog](CHANGELOG.md)
-- [beta.24 validation](VALIDATION-beta24.md)
+- [beta.25 validation](VALIDATION-beta25.md)
+- [beta.25 GitHub release notes](RELEASE-NOTES-beta25.md)
 - [Contributing](../CONTRIBUTING.md)

@@ -1,3 +1,15 @@
+## 0.1.0-beta.25
+
+- Introduce `ha-reporting-ai-context-v5` with deterministic cross-source `relationships` while preserving every current/comparison source, including partial coverage.
+- Precompute forecast-versus-actual period-energy comparisons when one integrated forecast power source and one measured cumulative energy source can be paired unambiguously inside the same report device.
+- Expose `forecast_energy_kwh`, `actual_energy_kwh`, `absolute_gap_kwh`, `relative_gap_pct`, both coverage values and a `full_period_comparison_supported` flag to AI Tasks.
+- Precompute mean-power forecast-versus-measured gaps and carry P95/max values as secondary context when one forecast and one measured power source can be paired unambiguously.
+- Require AI summaries to report the deterministic energy forecast comparison when it is available, instead of omitting `integrated_energy_kwh`.
+- Prioritize period-energy forecast accuracy over isolated peak-power differences and qualify relationships whose coverage does not support a full-period comparison.
+- Keep arithmetic in HA Reporting so the language model does not need to infer source pairing or recalculate gaps/percentages.
+- Keep beta.24 power integration, source semantics and lossless data retention unchanged.
+- Add English, paste-ready GitHub release notes and document that every future release must provide them.
+
 ## 0.1.0-beta.24
 
 - Add an optional **Statistics + energy integration** processing mode for `power` sources.

@@ -1,5 +1,36 @@
 # HA Reporting technical documentation
 
+## beta.25 — Deterministic cross-source AI relationships
+
+Beta.25 keeps the self-describing, lossless source records from beta.24 and adds deterministic relationships calculated by HA Reporting before the AI Task call. The purpose is to remove one remaining source of ambiguity for smaller local language models: deciding which forecast and measured sources belong together and performing arithmetic across them.
+
+### Relationship generation
+
+Relationships are provider-agnostic and are created only inside one report device when pairing is unambiguous. HA Reporting never drops partial sources to create them.
+
+For one forecast `power` source with `integrated_energy_kwh` and one measured `energy_total` source with `period_delta`, HA Reporting emits `energy_forecast_vs_actual` with:
+
+- `forecast_energy_kwh`;
+- `actual_energy_kwh`;
+- `absolute_gap_kwh` (`actual - forecast`);
+- `relative_gap_pct`, using forecast energy as the reference when non-zero;
+- forecast and actual coverage;
+- `full_period_comparison_supported`, true only when both coverages are at least 80%.
+
+For one forecast power source and one measured power source, HA Reporting emits `power_forecast_vs_actual` with the forecast/measured means, deterministic mean gap, optional relative mean gap, P95 and maximum values, plus coverage. Power values are normalized to watts for the relationship (`W` and `kW` are supported). Energy counters are normalized to kWh (`Wh` and `kWh` are supported).
+
+If more than one candidate measured source or forecast source exists in the device, HA Reporting does not guess a pairing and does not emit that relationship. The original source records remain available to the model.
+
+### AI interpretation policy
+
+`ha-reporting-ai-context-v5` adds a top-level `relationships` array. These relationship values are deterministic report facts and the AI is instructed not to recalculate them. When `energy_forecast_vs_actual` is available, the summary must include actual period energy, integrated forecast energy, absolute gap and relative gap when available. The energy comparison is prioritized over isolated peak-power differences.
+
+When `full_period_comparison_supported` is false, the values are still preserved but the AI must state the coverage limitation and avoid presenting the gap as a reliable full-period performance conclusion. A power relationship may be used to compare mean power, while P95/max are secondary context rather than standalone evidence of overall forecast quality.
+
+No source is omitted by beta.25. The existing 90,000-character preferred size and 220,000-character application guard remain unchanged; the downstream AI provider/model still enforces its own token context.
+
+---
+
 ## beta.24 — Source semantics, power integration and AI context v4
 
 Beta.24 adds a generic derived-energy path for power sources and changes the model-facing context from positional normalization to self-describing records.

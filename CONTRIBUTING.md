@@ -28,3 +28,7 @@ node --check ha-reporting/app/i18n.js
 ```
 
 Keep release-specific validation notes in `VALIDATION-<version>.md`.
+
+## Release notes
+
+Every release must also include an English, paste-ready `RELEASE-NOTES-<version>.md` file for the GitHub **Publish release** description. Keep it user-facing: summarize the purpose of the release, important changes, upgrade notes, compatibility considerations and validation status without requiring readers to reconstruct the changelog.

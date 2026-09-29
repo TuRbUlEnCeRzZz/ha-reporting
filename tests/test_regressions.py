@@ -507,7 +507,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertIn('reconstruction partielle',prompt)
         self.assertIn('base_reconstructed=true',prompt)
         self.assertIn('reference_coverage_pct',prompt)
-        self.assertIn('ha-reporting-ai-context-v4',prompt)
+        self.assertIn('ha-reporting-ai-context-v5',prompt)
         self.assertIn('poursuivre la collecte',prompt)
         self.assertIn("uniquement s'il n'y a aucune autre recommandation",prompt)
 
@@ -554,7 +554,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertEqual(meta['omitted_comparison_sources'],0)
         self.assertEqual(len(context['current']),421)
         self.assertEqual(len(context['comparisons']),420)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v4')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v5')
         encoded=json.dumps(context,ensure_ascii=False)
         self.assertIn('critical_power',encoded)
         self.assertIn('Low coverage',encoded)
@@ -569,7 +569,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertEqual(meta['omitted_current_sources'],0)
         self.assertEqual(meta['omitted_comparison_sources'],0)
         self.assertEqual(len(context['current']),1)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v4')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v5')
         self.assertNotIn('preview',context_json)
 
     def test_beta24_context_uses_named_semantics_and_integrated_energy(self):
@@ -586,7 +586,7 @@ class AiAnalysisTests(unittest.TestCase):
         sample['catalogs'][0]['devices'][0]['sources'].append(energy)
         context_json,meta=build_budgeted_ai_context(sample)
         context=json.loads(context_json)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v4')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v5')
         power=context['current'][0]
         self.assertEqual(power['values']['max'],120)
         self.assertEqual(power['values']['mean'],50)
@@ -596,6 +596,89 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertEqual(counter['values']['counter_end'],3788.82)
         self.assertNotIn('delta',counter['values'])
         self.assertEqual(meta['omitted_current_sources'],0)
+
+    def test_beta25_relationships_precompute_forecast_vs_actual_gaps(self):
+        sample=self.sample()
+        forecast=sample['catalogs'][0]['devices'][0]['sources'][0]
+        forecast['sensor_key']='p_load_forecast'
+        forecast['entity_id']='sensor.p_load_forecast'
+        forecast['derive_energy']=True
+        forecast['analysis']['quality']['period_coverage_percent']=97.2
+        forecast['analysis']['statistics'].update({
+            'max':{'value':428.9},'p95':411.0,'mean':287.4,'integrated_energy_kwh':6.89
+        })
+        measured_power={
+            'sensor_key':'introduction_electrique_appartement_couloir_total_active_power',
+            'entity_id':'sensor.introduction_electrique_appartement_couloir_total_active_power',
+            'metric':'power','unit':'W','status':'ok',
+            'analysis':{'quality':{'period_coverage_percent':100,'sample_density_percent':100,'density_applicable':True},
+                        'statistics':{'max':{'value':4216.4},'p95':1944.0,'mean':343.5},
+                        'validation':{'warnings':[]}}
+        }
+        measured_energy={
+            'sensor_key':'introduction_electrique_appartement_couloir_total_active_energy',
+            'entity_id':'sensor.introduction_electrique_appartement_couloir_total_active_energy',
+            'metric':'energy_total','unit':'kWh','status':'ok',
+            'analysis':{'quality':{'period_coverage_percent':100,'sample_density_percent':None,'density_applicable':False},
+                        'statistics':{'delta':8.22,'last':{'value':3788.82},'resets_detected':0},
+                        'validation':{'warnings':[]}}
+        }
+        sample['catalogs'][0]['devices'][0]['sources'].extend([measured_power,measured_energy])
+        sample['summary']={'sources_total':3,'sources_ok':3}
+        context_json,meta=build_budgeted_ai_context(sample)
+        context=json.loads(context_json)
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v5')
+        self.assertEqual(meta['relationships'],2)
+        energy=next(item for item in context['relationships'] if item['kind']=='energy_forecast_vs_actual')
+        self.assertAlmostEqual(energy['forecast_energy_kwh'],6.89)
+        self.assertAlmostEqual(energy['actual_energy_kwh'],8.22)
+        self.assertAlmostEqual(energy['absolute_gap_kwh'],1.33)
+        self.assertAlmostEqual(energy['relative_gap_pct'],19.303,places=3)
+        self.assertTrue(energy['full_period_comparison_supported'])
+        power=next(item for item in context['relationships'] if item['kind']=='power_forecast_vs_actual')
+        self.assertAlmostEqual(power['forecast_mean_w'],287.4)
+        self.assertAlmostEqual(power['actual_mean_w'],343.5)
+        self.assertAlmostEqual(power['mean_gap_w'],56.1)
+        self.assertAlmostEqual(power['forecast_max_w'],428.9)
+        self.assertAlmostEqual(power['actual_max_w'],4216.4)
+        prompt=_instructions(context_json)
+        self.assertIn('energy_forecast_vs_actual',prompt)
+        self.assertIn('la SYNTHÈSE doit indiquer',prompt)
+        self.assertIn("N'omets jamais un `integrated_energy_kwh`",prompt)
+
+    def test_beta25_relationship_keeps_partial_coverage_and_marks_limitation(self):
+        sample=self.sample()
+        forecast=sample['catalogs'][0]['devices'][0]['sources'][0]
+        forecast['sensor_key']='p_load_forecast'
+        forecast['derive_energy']=True
+        forecast['analysis']['quality']['period_coverage_percent']=36.8
+        forecast['analysis']['statistics']['integrated_energy_kwh']=6.89
+        sample['catalogs'][0]['devices'][0]['sources'].append({
+            'sensor_key':'actual_energy','metric':'energy_total','unit':'kWh','status':'ok',
+            'analysis':{'quality':{'period_coverage_percent':100,'density_applicable':False},
+                        'statistics':{'delta':8.22,'last':{'value':100}},'validation':{'warnings':[]}}
+        })
+        context=json.loads(build_budgeted_ai_context(sample)[0])
+        rel=next(item for item in context['relationships'] if item['kind']=='energy_forecast_vs_actual')
+        self.assertEqual(rel['forecast_coverage_pct'],36.8)
+        self.assertFalse(rel['full_period_comparison_supported'])
+        self.assertEqual(len(context['current']),2)
+
+    def test_beta25_relationship_does_not_guess_ambiguous_energy_pairing(self):
+        sample=self.sample()
+        forecast=sample['catalogs'][0]['devices'][0]['sources'][0]
+        forecast['sensor_key']='p_load_forecast'
+        forecast['derive_energy']=True
+        forecast['analysis']['statistics']['integrated_energy_kwh']=6.89
+        for key,value in [('actual_energy_a',8.22),('actual_energy_b',4.11)]:
+            sample['catalogs'][0]['devices'][0]['sources'].append({
+                'sensor_key':key,'metric':'energy_total','unit':'kWh','status':'ok',
+                'analysis':{'quality':{'period_coverage_percent':100,'density_applicable':False},
+                            'statistics':{'delta':value,'last':{'value':100}},'validation':{'warnings':[]}}
+            })
+        context=json.loads(build_budgeted_ai_context(sample)[0])
+        self.assertFalse(any(item['kind']=='energy_forecast_vs_actual' for item in context['relationships']))
+        self.assertEqual(len(context['current']),3)
 
     def test_beta22_partial_sources_are_preserved_losslessly(self):
         sample=self.sample()
@@ -670,7 +753,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertTrue(call['return_response'])
         self.assertEqual(call['service_data']['entity_id'],'ai_task.local')
         self.assertIn('sans afficher de raisonnement interne',call['service_data']['instructions'])
-        self.assertIn('ha-reporting-ai-context-v4',call['service_data']['instructions'])
+        self.assertIn('ha-reporting-ai-context-v5',call['service_data']['instructions'])
         self.assertEqual(result['input']['context_mode'],'lossless_self_describing')
         self.assertTrue(result['input']['context_lossless'])
         self.assertLessEqual(result['input']['context_characters'],AI_TARGET_CONTEXT_CHARS)
@@ -928,7 +1011,7 @@ class Beta12ExportProviderTests(unittest.TestCase):
         self.assertTrue(status['reachable'])
         self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
         self.assertEqual(seen['auth'],'Token secret')
-        self.assertIn('beta.24',seen['ua'])
+        self.assertIn('beta.25',seen['ua'])
 
     def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
         import tempfile
@@ -1307,7 +1390,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.24')
+        self.assertEqual(config['version'],'0.1.0-beta.25')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertTrue(config['hassio_api'])

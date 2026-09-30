@@ -1,3 +1,14 @@
+## 0.2.0-rc.2
+
+- introduce `ha-reporting-ai-context-v8` with atomic N/N-x comparison records;
+- assign a compact `id` to every comparison record and forbid AI providers from mixing fields across different records;
+- require mean/min/max/P95/consumption wording to use the matching named statistic only;
+- allow relative percentages only when the same statistic explicitly contains `gap_pct`; never reinterpret an absolute gap as a percentage;
+- keep coverage scoped to its exact comparison/relationship and forbid coverage transfer between neighbouring sources;
+- keep RC1 deterministic relationships, direction metadata, coverage gating, limited-comparison handling and lossless source retention unchanged;
+- keep notifications unchanged;
+- keep the same-session Ingress/Nabu Casa PDF download implementation unchanged after successful real-device validation.
+
 ## 0.2.0-rc.1
 
 - introduce `ha-reporting-ai-context-v7` as the first 0.2.0 release-candidate AI contract;

@@ -1,5 +1,23 @@
 # HA Reporting technical documentation
 
+## 0.2.0-rc.2 — Atomic comparison isolation for AI
+
+`0.2.0-rc.2` is a targeted hardening release after real RC1 validation. The deterministic statistics and comparison engine remain unchanged; the change is in the AI contract and prompt.
+
+### AI context v8
+
+`ha-reporting-ai-context-v8` assigns a compact `id` to each N/N-x comparison record. A comparison record is explicitly defined as atomic: one source compared with that same source in one reference period. The AI Task is forbidden from mixing the subject, statistic, direction, percentage, coverage or gap from different comparison records.
+
+The existing named statistic objects remain authoritative. A statement about an average must use `values.mean`; min, max, P95, energy consumption/delta and other fields may not be substituted for one another. Relative percentages may be stated only when the same statistic object contains `gap_pct`. If a percentage was suppressed by HA Reporting, the AI must not infer one from an absolute gap.
+
+Cross-source current-period analysis remains restricted to deterministic `relationships`. Coverage values remain scoped to the exact comparison or relationship in which they appear.
+
+### RC1 field validation
+
+Real RC1 testing confirmed that authenticated PDF downloads through Home Assistant/Nabu Casa work on the remote/mobile path. A daily EMHASS report also preserved deterministic forecast/actual signs correctly. The remaining monthly-report issue was semantic mixing by the local AI model (for example borrowing a coverage value or interpreting an absolute gap as a percentage). RC2 addresses that specific failure mode without changing notifications, PDF generation, Paperless export or the statistical engine.
+
+---
+
 ## 0.2.0-rc.1 — Deterministic direction and comparison gating
 
 `0.2.0-rc.1` is the first release candidate for the 0.2.0 milestone. It builds on beta.26 without adding a new provider or reporting feature. The goal is to make model-facing interpretation harder to misuse before the stable release.

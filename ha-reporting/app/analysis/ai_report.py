@@ -679,7 +679,7 @@ def _current_source_relationships(rows: list[dict[str, Any]]) -> list[dict[str, 
 def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
     """Build a lossless, self-describing AI context.
 
-    0.2.0-rc.1 keeps the self-describing records and deterministic
+    0.2.0-rc.2 keeps the self-describing records and deterministic
     cross-source relationships for analyses that otherwise require the model to
     infer which forecast and measured sources belong together. Each source still
     carries its readable source name and named statistics. No current or
@@ -688,7 +688,7 @@ def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
     statistics.
     """
     context: dict[str, Any] = {
-        "schema": "ha-reporting-ai-context-v7",
+        "schema": "ha-reporting-ai-context-v8",
         "lossless": True,
         "semantics": {
             "period_delta": "change during the report period",
@@ -703,6 +703,8 @@ def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
             "near_zero_reference": "relative percentages are intentionally suppressed when the reference is too close to zero",
             "limited_comparison": "relative percentages are suppressed for limited comparisons; use absolute gaps only",
             "trend_direction": "authoritative increase/decrease/unchanged direction; only emitted for validated full-period comparisons",
+            "comparison_record": "each comparisons record is an atomic same-source N/N-x fact set; never mix fields between id values",
+            "gap_pct": "an explicit relative percentage only when present; an absolute gap is never a percentage",
         },
         "report": {
             "name": (result.get("report") or {}).get("name"),
@@ -822,6 +824,7 @@ def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
                         str(part) for part in (catalog_name, device_name, source_name) if part not in (None, "")
                     )
                     row = {
+                        "id": len(context["comparisons"]) + 1,
                         "target": target_label,
                         "target_period": target_period,
                         "source": source_path,
@@ -861,7 +864,7 @@ def build_budgeted_ai_context(
 ) -> tuple[str, dict[str, Any]]:
     """Return the complete semantic AI context using self-describing normalization.
 
-    0.2.0-rc.1 keeps every current and comparison source, including partial and limited entries,
+    0.2.0-rc.2 keeps every current and comparison source, including partial and limited entries,
     and adds deterministic cross-source relationships when pairing is unambiguous.
     Named statistics replace positional value arrays so small local models do not
     need to decode max/p95/mean or counter semantics. The hard limit is enforced
@@ -989,12 +992,17 @@ Mandatory rules for N/N-x comparisons:
 - Sampling density is a diagnostic, not period coverage. Low event-driven density alone does not mean the full period is missing; treat it as a reliability warning only when the comparison status/policy says so.
 - Keep reconstruction and coverage strictly separate: `base_reconstructed=true` means N was reconstructed after one or more resets; `reference_coverage_pct` independently describes N-x reference coverage. Never merge these concepts into wording such as “partial reconstruction”.
 - If `base_reconstructed` is true, mention reconstruction only if useful to reliability. If absent/false, do not discuss resets or reconstruction. If `reference_coverage_pct` is below 80, separately state that the historical reference is partial and include its coverage. Do not claim the reference is reconstructed unless `reference_reconstructed` is true.
-- `ha-reporting-ai-context-v7` is lossless and self-describing. Every current/comparison source is a complete named record; no source is omitted, including partially covered sources. Never swap values between records or reinterpret named fields.
+- `ha-reporting-ai-context-v8` is lossless and self-describing. Every current/comparison source is a complete named record; no source is omitted, including partially covered sources. Never swap values between records or reinterpret named fields.
 - For power, `max`, `p95`, and `mean` are authoritative named fields. Never treat `max` as `mean` or `mean` as `max`. `integrated_energy_kwh`, when present, is the period energy derived from that exact power source.
 - For cumulative counters, `period_delta` is the period change/consumption. `counter_end` is only the cumulative meter reading at the end and must NEVER be presented as a period delta or period consumption.
 - `energy_measurement` is a gauge-like energy measurement, not a cumulative counter. Do not infer a consumption delta from it unless an explicit comparison value says so.
 - Preserve source semantics: a source whose name contains `forecast` / `prevision` is a forecast, not a measured value. Do not call forecast power measured power.
 - `relationships` contains deterministic cross-source comparisons already calculated by HA Reporting. Treat these values as authoritative and do not recalculate them.
+- Each record in `comparisons` has a `id` and is ATOMIC. It compares exactly one `source` with that same source in the reference period. Never combine the source, statistic, direction, percentage, coverage or gap from different `id` records.
+- A N/N-x sentence must stay inside one `id`. Never write wording such as “between device A and device B” from two separate comparison records; only an explicit `relationship` may pair two current-period sources.
+- Match the wording to the exact statistic key inside `values`: a sentence about an average/mean may use only `values.mean`; minimum, maximum, P95, consumption/delta and other statistics must not be substituted for one another.
+- A percentage may be stated only when the SAME statistic object explicitly contains `gap_pct`. An absolute gap such as 0.25 kWh is 0.25 kWh, never 25%, 250%, or any other inferred percentage. If `gap_pct` is absent, state no relative percentage.
+- Coverage values belong only to the same `id` or `relationship` that contains them. Never transplant coverage from a neighbouring comparison/source.
 - For a validated full-period N/N-x statistic, `trend_direction` is authoritative: `increase` can never be described as a decrease, and `decrease` can never be described as an increase. Do not infer the opposite direction from prose or percentages.
 - Cross-source comparisons are allowed ONLY through `relationships`. Never compare two current-period totals, means, peaks or energies on your own when HA Reporting did not emit a relationship for them.
 - If a relationship has `comparison_policy=coverage_insufficient_for_period_gap` or `full_period_comparison_supported=false`, do not calculate, state, or imply an absolute/relative gap or a performance direction between its two period totals. You may report each value separately together with its coverage.
@@ -1039,12 +1047,17 @@ Règles impératives pour les comparaisons N/N-x :
 - La densité d'échantillonnage est un diagnostic, pas la couverture de période. Une faible densité événementielle ne signifie pas à elle seule que la période est absente ; traite-la comme une limite de fiabilité uniquement lorsque le statut/policy de comparaison l'indique.
 - Distingue strictement reconstruction et couverture : `base_reconstructed=true` signifie que la valeur N a été reconstruite après un ou plusieurs resets ; `reference_coverage_pct` décrit séparément la couverture de la référence N-x. Ne fusionne jamais ces deux notions dans une expression comme « reconstruction partielle ».
 - Si `base_reconstructed` vaut true, tu peux signaler la reconstruction uniquement si elle est utile à la fiabilité de l'analyse. Si elle est absente/false, ne parle jamais de reset ou de reconstruction. Si `reference_coverage_pct` est inférieur à 80, dis séparément « la référence historique est partielle » avec sa couverture. N'affirme pas que la référence est reconstruite sauf si `reference_reconstructed` vaut true.
-- `ha-reporting-ai-context-v7` est une représentation sans omission et auto-descriptive. Chaque source courante/comparée est un enregistrement complet avec des champs nommés ; aucune source n'est retirée, y compris lorsqu'elle ne couvre qu'une partie de la période. N'échange jamais des valeurs entre deux enregistrements et ne réinterprète pas les noms de champs.
+- `ha-reporting-ai-context-v8` est une représentation sans omission et auto-descriptive. Chaque source courante/comparée est un enregistrement complet avec des champs nommés ; aucune source n'est retirée, y compris lorsqu'elle ne couvre qu'une partie de la période. N'échange jamais des valeurs entre deux enregistrements et ne réinterprète pas les noms de champs.
 - Pour une puissance, `max`, `p95` et `mean` sont des champs nommés faisant foi. Ne transforme jamais `max` en moyenne ni `mean` en maximum. `integrated_energy_kwh`, lorsqu'il existe, est l'énergie de la période dérivée exactement de cette source de puissance.
 - Pour un compteur cumulatif, `period_delta` est la variation/consommation de la période. `counter_end` est uniquement l'index cumulé en fin de période et ne doit JAMAIS être présenté comme un delta ou une consommation de période.
 - `energy_measurement` est une mesure d'énergie de type jauge, pas un compteur cumulatif. N'en déduis pas une consommation par différence sauf si une comparaison explicite le fournit.
 - Respecte la sémantique du nom de source : une source contenant `forecast` / `prevision` est une prévision, pas une mesure réelle. Ne qualifie pas une puissance prévisionnelle de puissance mesurée.
 - `relationships` contient des comparaisons entre sources calculées de manière déterministe par HA Reporting. Considère ces valeurs comme faisant foi et ne les recalcule pas.
+- Chaque enregistrement de `comparisons` possède un `id` et est ATOMIQUE. Il compare exactement une `source` avec cette même source dans la période de référence. Ne mélange jamais le sujet, la statistique, la direction, le pourcentage, la couverture ou l'écart provenant de `id` différents.
+- Une phrase N/N-x doit rester à l'intérieur d'un seul `id`. N'écris jamais « entre l'appareil A et l'appareil B » à partir de deux enregistrements de comparaison distincts ; seule une `relationship` explicite peut associer deux sources de la période courante.
+- Fais correspondre le texte à la clé statistique exacte dans `values` : une phrase sur une moyenne doit utiliser uniquement `values.mean`; minimum, maximum, P95, consommation/delta et autres statistiques ne doivent jamais être substitués les uns aux autres.
+- Un pourcentage ne peut être annoncé que si le MÊME objet statistique contient explicitement `gap_pct`. Un écart absolu tel que 0,25 kWh signifie 0,25 kWh, jamais 25 %, 250 % ou tout autre pourcentage déduit. Si `gap_pct` est absent, n'annonce aucun pourcentage relatif.
+- Une couverture appartient uniquement au même `id` ou à la même `relationship` qui la contient. Ne récupère jamais la couverture d'une comparaison/source voisine.
 - Pour une statistique N/N-x validée sur la période complète, `trend_direction` fait foi : `increase` ne doit JAMAIS être décrit comme une baisse et `decrease` ne doit JAMAIS être décrit comme une hausse. Ne déduis jamais la direction opposée à partir du texte ou d'un pourcentage.
 - Les comparaisons entre deux sources courantes sont autorisées UNIQUEMENT via `relationships`. Ne compare jamais de toi-même deux totaux, moyennes, pics ou énergies de la période courante si HA Reporting n'a pas émis de relation correspondante.
 - Si une relation contient `comparison_policy=coverage_insufficient_for_period_gap` ou `full_period_comparison_supported=false`, ne calcule, n'annonce et n'implique aucun écart absolu/relatif ni aucune direction de performance entre les deux totaux de période. Tu peux mentionner chaque valeur séparément avec sa couverture.

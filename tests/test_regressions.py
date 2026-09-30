@@ -477,7 +477,57 @@ class Beta26ComparisonQualityTests(unittest.TestCase):
         self.assertIn('>=95 % est représentatif',prompt)
         self.assertIn('gap_pct_reason=near_zero_reference',prompt)
         self.assertIn('base_sparse_zero_uncertain',prompt)
-        self.assertIn('ha-reporting-ai-context-v6',prompt)
+        self.assertIn('ha-reporting-ai-context-v7',prompt)
+
+class Rc1DeterministicComparisonTests(unittest.TestCase):
+    @staticmethod
+    def source(metric='power', unit='W', coverage=100.0, density=100.0, **stats):
+        quality={'period_coverage_percent':coverage,'sample_density_percent':density,'density_applicable':metric=='power'}
+        defaults={'max':{'value':20.0},'p95':10.0,'mean':5.0} if metric=='power' else {'delta':1.0,'last':{'value':10.0}}
+        defaults.update(stats)
+        return {'status':'ok','sensor_key':'s','entity_id':'sensor.s','metric':metric,'unit':unit,
+                'analysis':{'quality':quality,'statistics':defaults,'validation':{'valid':True,'warnings':[]}}}
+
+    def test_limited_comparison_suppresses_all_relative_percentages(self):
+        engine=ComparisonEngine()
+        base=self.source('energy_total','kWh',coverage=100,density=None,delta=4.51,last={'value':4.94})
+        ref=self.source('energy_total','kWh',coverage=7.1,density=None,delta=0.43,last={'value':0.43})
+        result=engine._compare_source(base,ref)
+        self.assertEqual(result['comparison_status'],'limited')
+        item=result['values'][0]
+        self.assertAlmostEqual(item['absolute_change'],4.08,places=2)
+        self.assertIsNone(item['relative_change_percent'])
+        self.assertFalse(item['relative_change_applicable'])
+        self.assertEqual(item['relative_change_reason'],'limited_comparison')
+        self.assertTrue(any('Pourcentage relatif masqué' in reason for reason in result['reasons']))
+
+    def test_context_exposes_authoritative_direction_for_full_period_comparison(self):
+        base=self.source('power','W',coverage=97.6,density=99.3,max={'value':658},p95=546,mean=20.5)
+        ref=self.source('power','W',coverage=100,density=99.3,max={'value':749},p95=540,mean=17.5)
+        compared=ComparisonEngine()._compare_source(base,ref)
+        sample={'report':{'name':'Monthly'},'resolved_period':{'label':'N','timezone':'UTC'},'summary':{},'catalogs':[],
+                'comparisons':{'targets':[{'label':'N-1','resolved_period':{'label':'R'},'summary':{},'catalogs':[{'name':'Appliances','devices':[{'name':'Dryer','sources':[compared]}]}]}]}}
+        context=json.loads(build_budgeted_ai_context(sample)[0])
+        mean=context['comparisons'][0]['values']['mean']
+        self.assertEqual(mean['trend_direction'],'increase')
+        self.assertGreater(mean['gap'],0)
+        prompt=_instructions('{}')
+        self.assertIn('`trend_direction`',prompt)
+        self.assertIn('ne doit JAMAIS être décrit comme une baisse',prompt)
+
+    def test_partial_current_forecast_relationship_has_no_period_gap(self):
+        sample={'report':{'name':'Monthly'},'resolved_period':{'label':'N','timezone':'UTC'},'summary':{},'catalogs':[{'name':'EMHASS','devices':[{'device':{'name':'EMHASS','category':'energy'},'sources':[
+            {'sensor_key':'p_load_forecast','metric':'power','unit':'W','status':'ok','derive_energy':True,'analysis':{'quality':{'period_coverage_percent':62.8,'sample_density_percent':15.2,'density_applicable':True},'statistics':{'max':{'value':1695},'p95':489,'mean':326,'integrated_energy_kwh':152.2},'validation':{'warnings':[]}}},
+            {'sensor_key':'actual_energy','metric':'energy_total','unit':'kWh','status':'ok','analysis':{'quality':{'period_coverage_percent':100,'density_applicable':False},'statistics':{'delta':228.1,'last':{'value':3583}},'validation':{'warnings':[]}}}
+        ]}]}],'comparisons':{'targets':[]}}
+        context=json.loads(build_budgeted_ai_context(sample)[0])
+        rel=next(item for item in context['relationships'] if item['kind']=='energy_forecast_vs_actual')
+        self.assertFalse(rel['full_period_comparison_supported'])
+        self.assertEqual(rel['comparison_policy'],'coverage_insufficient_for_period_gap')
+        self.assertEqual(rel['forecast_energy_kwh'],152.2)
+        self.assertEqual(rel['actual_energy_kwh'],228.1)
+        self.assertNotIn('absolute_gap_kwh',rel)
+        self.assertNotIn('relative_gap_pct',rel)
 
 class ReportTests(unittest.TestCase):
     def test_report_aggregation_and_transfer_metadata(self):
@@ -577,7 +627,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertIn('reconstruction partielle',prompt)
         self.assertIn('base_reconstructed=true',prompt)
         self.assertIn('reference_coverage_pct',prompt)
-        self.assertIn('ha-reporting-ai-context-v6',prompt)
+        self.assertIn('ha-reporting-ai-context-v7',prompt)
         self.assertIn('poursuivre la collecte',prompt)
         self.assertIn("uniquement s'il n'y a aucune autre recommandation",prompt)
 
@@ -624,7 +674,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertEqual(meta['omitted_comparison_sources'],0)
         self.assertEqual(len(context['current']),421)
         self.assertEqual(len(context['comparisons']),420)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v6')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v7')
         encoded=json.dumps(context,ensure_ascii=False)
         self.assertIn('critical_power',encoded)
         self.assertIn('Low coverage',encoded)
@@ -639,7 +689,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertEqual(meta['omitted_current_sources'],0)
         self.assertEqual(meta['omitted_comparison_sources'],0)
         self.assertEqual(len(context['current']),1)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v6')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v7')
         self.assertNotIn('preview',context_json)
 
     def test_beta24_context_uses_named_semantics_and_integrated_energy(self):
@@ -656,7 +706,7 @@ class AiAnalysisTests(unittest.TestCase):
         sample['catalogs'][0]['devices'][0]['sources'].append(energy)
         context_json,meta=build_budgeted_ai_context(sample)
         context=json.loads(context_json)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v6')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v7')
         power=context['current'][0]
         self.assertEqual(power['values']['max'],120)
         self.assertEqual(power['values']['mean'],50)
@@ -697,7 +747,7 @@ class AiAnalysisTests(unittest.TestCase):
         sample['summary']={'sources_total':3,'sources_ok':3}
         context_json,meta=build_budgeted_ai_context(sample)
         context=json.loads(context_json)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v6')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v7')
         self.assertEqual(meta['relationships'],2)
         energy=next(item for item in context['relationships'] if item['kind']=='energy_forecast_vs_actual')
         self.assertAlmostEqual(energy['forecast_energy_kwh'],6.89)
@@ -705,12 +755,17 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertAlmostEqual(energy['absolute_gap_kwh'],1.33)
         self.assertAlmostEqual(energy['relative_gap_pct'],19.303,places=3)
         self.assertTrue(energy['full_period_comparison_supported'])
+        self.assertEqual(energy['comparison_policy'],'validated_full_period_gap')
+        self.assertEqual(energy['ordering'],'base_higher')
+        self.assertEqual(energy['trend_direction'],'increase')
         power=next(item for item in context['relationships'] if item['kind']=='power_forecast_vs_actual')
         self.assertAlmostEqual(power['forecast_mean_w'],287.4)
         self.assertAlmostEqual(power['actual_mean_w'],343.5)
         self.assertAlmostEqual(power['mean_gap_w'],56.1)
         self.assertAlmostEqual(power['forecast_max_w'],428.9)
         self.assertAlmostEqual(power['actual_max_w'],4216.4)
+        self.assertEqual(power['ordering'],'base_higher')
+        self.assertEqual(power['trend_direction'],'increase')
         prompt=_instructions(context_json)
         self.assertIn('energy_forecast_vs_actual',prompt)
         self.assertIn('la SYNTHÈSE doit indiquer',prompt)
@@ -732,6 +787,10 @@ class AiAnalysisTests(unittest.TestCase):
         rel=next(item for item in context['relationships'] if item['kind']=='energy_forecast_vs_actual')
         self.assertEqual(rel['forecast_coverage_pct'],36.8)
         self.assertFalse(rel['full_period_comparison_supported'])
+        self.assertEqual(rel['comparison_policy'],'coverage_insufficient_for_period_gap')
+        self.assertNotIn('absolute_gap_kwh',rel)
+        self.assertNotIn('relative_gap_pct',rel)
+        self.assertNotIn('trend_direction',rel)
         self.assertEqual(len(context['current']),2)
 
     def test_beta25_relationship_does_not_guess_ambiguous_energy_pairing(self):
@@ -823,7 +882,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertTrue(call['return_response'])
         self.assertEqual(call['service_data']['entity_id'],'ai_task.local')
         self.assertIn('sans afficher de raisonnement interne',call['service_data']['instructions'])
-        self.assertIn('ha-reporting-ai-context-v6',call['service_data']['instructions'])
+        self.assertIn('ha-reporting-ai-context-v7',call['service_data']['instructions'])
         self.assertEqual(result['input']['context_mode'],'lossless_self_describing')
         self.assertTrue(result['input']['context_lossless'])
         self.assertLessEqual(result['input']['context_characters'],AI_TARGET_CONTEXT_CHARS)
@@ -1081,7 +1140,7 @@ class Beta12ExportProviderTests(unittest.TestCase):
         self.assertTrue(status['reachable'])
         self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
         self.assertEqual(seen['auth'],'Token secret')
-        self.assertIn('beta.26',seen['ua'])
+        self.assertIn('0.2.0-rc.1',seen['ua'])
 
     def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
         import tempfile
@@ -1460,7 +1519,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.1.0-beta.26')
+        self.assertEqual(config['version'],'0.2.0-rc.1')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertTrue(config['hassio_api'])

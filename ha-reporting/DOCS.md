@@ -1,5 +1,32 @@
 # HA Reporting technical documentation
 
+## 0.2.0-rc.1 — Deterministic direction and comparison gating
+
+`0.2.0-rc.1` is the first release candidate for the 0.2.0 milestone. It builds on beta.26 without adding a new provider or reporting feature. The goal is to make model-facing interpretation harder to misuse before the stable release.
+
+### AI context v7
+
+`ha-reporting-ai-context-v7` keeps every current and comparison source and adds deterministic direction metadata to validated full-period N/N-x statistics. When a statistic supports a complete-period trend claim, HA Reporting emits `trend_direction` as one of `increase`, `decrease` or `unchanged`. This field is authoritative; the AI Task is explicitly instructed not to reverse it.
+
+Partial and limited comparisons still keep base/reference values and absolute gaps, but they do not receive a full-period `trend_direction`. Their wording policy remains descriptive rather than trend-assertive.
+
+### Limited comparison percentages
+
+When the comparison engine classifies a source as `limited`, relative percentages are now suppressed for all comparison statistics. HA Reporting preserves the base value, reference value and absolute difference and records `relative_change_reason: limited_comparison` when no stronger reason already applies. This avoids values such as `+945%` being highlighted from a reference that covers only a small fraction of the period.
+
+### Current-period cross-source comparison gating
+
+The AI Task may compare two current-period sources only when HA Reporting emitted a deterministic `relationship`. For forecast-versus-measured relationships, both sides must satisfy the >=95% full-period coverage rule before HA Reporting emits an absolute/relative performance gap.
+
+If coverage is insufficient, the relationship remains present with the individual forecast/measured values and their coverage, but uses `comparison_policy: coverage_insufficient_for_period_gap` and omits gap/direction fields. The AI is instructed to mention values separately if useful and not to invent a monthly/daily performance gap.
+
+### Downloads
+
+The beta.26 document-download fix is unchanged: the Documents page uses an authenticated same-origin Ingress `fetch()` and downloads a local Blob. The release-candidate validation therefore includes an explicit real-device Nabu Casa download check.
+
+---
+
+
 ## beta.26 — Comparison reliability and Ingress-safe downloads
 
 Beta.26 does not remove or trim report data. It changes how HA Reporting qualifies comparisons and how those reliability facts are exposed to the renderer and AI Task.

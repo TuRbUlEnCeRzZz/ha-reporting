@@ -183,6 +183,25 @@ class ComparisonEngine:
         )
         reasons.extend(relative_reasons)
 
+        # A relative percentage from a limited comparison is mathematically
+        # computable but analytically misleading because one side does not
+        # represent the full period reliably. Keep the absolute gap and source
+        # values, but suppress the percentage deterministically before rendering
+        # or AI interpretation.
+        if status == "limited":
+            suppressed = False
+            for item in values:
+                if item.get("relative_change_percent") is not None:
+                    suppressed = True
+                item["relative_change_percent"] = None
+                item["relative_change_applicable"] = False
+                if not item.get("relative_change_reason"):
+                    item["relative_change_reason"] = "limited_comparison"
+            if suppressed:
+                reasons.append(
+                    "Pourcentage relatif masqué car la comparaison est limitée."
+                )
+
         return {
             "sensor_key": base.get("sensor_key"),
             "entity_id": base.get("entity_id"),
@@ -249,7 +268,7 @@ class ComparisonEngine:
         """Minimum meaningful reference magnitude for a relative percentage.
 
         Percentages against values that round to (or are operationally close to)
-        zero are mathematically valid but analytically misleading.  beta.26 keeps
+        zero are mathematically valid but analytically misleading.  0.2.0-rc.1 keeps
         the absolute gap and suppresses only the relative percentage.
         """
         normalized = str(unit or "").strip().casefold()
@@ -336,7 +355,7 @@ class ComparisonEngine:
     def _comparison_quality(metric, base_profile, reference_profile):
         """Classify comparison reliability without discarding any source.
 
-        beta.26 separates period coverage from sample density. Coverage below
+        0.2.0-rc.1 separates period coverage from sample density. Coverage below
         80% is limited; 80-95% is partial; >=95% is representative. For power
         sources, event-driven sampling density is only downgraded when it is very
         sparse (<10%), avoiding the old blanket 80% density threshold.

@@ -2,7 +2,7 @@
 
 ![HA Reporting](ha-reporting/logo.png)
 
-**Current development version: 0.1.0-beta.26**
+**Current development version: 0.2.0-rc.1**
 
 HA Reporting is a reporting engine for **Home Assistant OS**. It turns Home Assistant sensor history stored in VictoriaMetrics into structured reports, period comparisons, optional AI commentary and locally generated PDF documents.
 
@@ -99,9 +99,23 @@ Beta.21 introduces the first HA Reporting internationalization layer.
 
 From beta.21 onward, new and modified maintainer-facing repository content is written in **English**. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## What is new in beta.26
+## What is new in 0.2.0-rc.1
 
-Beta.26 focuses on **comparison reliability and authenticated document downloads**. The statistical data remains lossless: no current-period or comparison source is removed. Instead, HA Reporting now makes clearer decisions about when a comparison is representative, partial, limited or too close to zero for a meaningful percentage.
+`0.2.0-rc.1` is the first release candidate for the planned 0.2.0 stable milestone. It intentionally avoids broad new features and focuses on locking down AI interpretation and comparison reliability after the beta.26 monthly-report validation.
+
+- introduces **`ha-reporting-ai-context-v7`**;
+- adds an authoritative `trend_direction` (`increase`, `decrease`, `unchanged`) to validated full-period N/N-x statistics so local AI models cannot legitimately reverse the direction of a deterministic comparison;
+- allows cross-source current-period comparisons only through HA Reporting's deterministic `relationships`; the AI prompt is explicitly forbidden from inventing its own comparison between unrelated totals, means, peaks or energies;
+- when forecast/measured coverage is below the full-period threshold, the relationship keeps both source values and coverage but **does not expose an absolute/relative performance gap**; this prevents partial EMHASS forecast energy from being compared directly with a complete measured month;
+- suppresses relative percentages for **Limited** comparisons, while preserving the base value, reference value and absolute gap;
+- keeps beta.26 coverage tiers, sparse-zero handling and the authenticated same-session Ingress/Nabu Casa PDF download path unchanged;
+- keeps all current and comparison sources in the AI context; no partial data is discarded.
+
+This release candidate should be tested with at least one daily EMHASS report, one large N/N-x report, and document downloads through the actual Home Assistant/Nabu Casa path before promoting the project to 0.2.0.
+
+## Previous beta.26 milestone
+
+Beta.26 focuses on **comparison reliability and authenticated document downloads**. The statistical data remains lossless: no current-period or comparison source is removed. Instead, HA Reporting makes clearer decisions about when a comparison is representative, partial, limited or too close to zero for a meaningful percentage.
 
 - introduces **`ha-reporting-ai-context-v6`** with explicit comparison-reliability rules for the AI Task;
 - treats period coverage of **95% or more as representative**, **80-95% as partial but usable with caution**, and **below 80% as limited**;
@@ -111,10 +125,7 @@ Beta.26 focuses on **comparison reliability and authenticated document downloads
 - carries `near_zero_reference` and sparse-zero semantics into the AI context so the model is instructed not to invent percentages or claim inactivity;
 - raises the forecast/measured full-period relationship threshold to **95% coverage**, matching the report comparison-quality model;
 - adds a dedicated **Limited** comparison status to the report UI/PDF summaries;
-- fixes mobile/Nabu Casa PDF downloads by fetching the document inside the authenticated Home Assistant Ingress session and downloading a local Blob instead of opening the protected endpoint in a new unauthenticated tab;
-- keeps beta.25 deterministic forecast-versus-measured relationships, beta.24 power integration and beta.23 long-running AI support unchanged.
-
-The new quality rules are intentionally conservative about interpretation but do not delete partial data. Absolute values remain available even when a relative percentage is considered misleading.
+- fixes mobile/Nabu Casa PDF downloads by fetching the document inside the authenticated Home Assistant Ingress session and downloading a local Blob instead of opening the protected endpoint in a new unauthenticated tab.
 
 ## Previous beta.25 milestone
 
@@ -143,16 +154,16 @@ These relationships are provider-agnostic. EMHASS is a useful real-world example
 
    `https://github.com/TuRbUlEnCeRzZz/ha-reporting`
 
-4. Refresh the store and verify that the offered version is **0.1.0-beta.26** before installing or updating.
+4. Refresh the store and verify that the offered version is **0.2.0-rc.1** before installing or updating.
 5. Start HA Reporting and open its interface through Home Assistant Ingress.
 
 ### From the ZIP: local installation
 
-1. Extract `ha-reporting-0.1.0-beta.26.zip` on your computer.
+1. Extract `ha-reporting-0.2.0-rc.1.zip` on your computer.
 2. Inside the extracted repository, locate the **`ha-reporting/`** directory containing `config.yaml`, `Dockerfile`, `run.sh` and `app/`.
 3. Copy that directory to **`/addons/ha-reporting`** on Home Assistant OS using your existing file-transfer method. Do not copy the whole repository into `/addons/ha-reporting`.
 4. Refresh the app store and rebuild/reinstall the local add-on.
-5. Start it and confirm **HA Reporting 0.1.0-beta.26** in the add-on log.
+5. Start it and confirm **HA Reporting 0.2.0-rc.1** in the add-on log.
 
 The first build can take some time on a Raspberry Pi 4 because dependencies are installed by Supervisor.
 
@@ -237,9 +248,9 @@ HA Reporting is experimental. Report accuracy depends on the quality and retenti
 
 Large reports and local AI inference can be slow on a Raspberry Pi 4. Supervisor builds also depend on upstream packages and system libraries.
 
-Beta.26 has automated Python and JavaScript regression coverage, but automated desktop tests do not prove that every Home Assistant OS, ARM build, AI provider, VictoriaMetrics dataset or Paperless installation behaves identically. After upgrading, run at least one end-to-end report on the actual Home Assistant OS host before relying on scheduled delivery.
+0.2.0-rc.1 has automated Python and JavaScript regression coverage, but automated desktop tests do not prove that every Home Assistant OS, ARM build, AI provider, VictoriaMetrics dataset or Paperless installation behaves identically. After upgrading, run at least one end-to-end report on the actual Home Assistant OS host before relying on scheduled delivery.
 
-See [VALIDATION-beta26.md](VALIDATION-beta26.md) for the release validation notes and [ha-reporting/DOCS.md](ha-reporting/DOCS.md) for technical details.
+See [VALIDATION-0.2.0-rc.1.md](VALIDATION-0.2.0-rc.1.md) for the release-candidate validation notes and [ha-reporting/DOCS.md](ha-reporting/DOCS.md) for technical details.
 
 ## Repository layout
 
@@ -284,7 +295,7 @@ Possible future directions include:
 - additional export and notification destinations;
 - continued PDF/layout improvements and reporting diagnostics;
 - further validation with larger installations and longer histories;
-- optional presets for common reporting use cases. EMHASS data can already be reported through normal sensors, but there is no dedicated EMHASS integration in beta.26; the power-integration option is provider-agnostic.
+- optional presets for common reporting use cases. EMHASS data can already be reported through normal sensors, but there is no dedicated EMHASS integration in 0.2.0-rc.1; the power-integration option is provider-agnostic.
 
 These are possible directions, not delivery or maintenance commitments.
 
@@ -292,6 +303,7 @@ These are possible directions, not delivery or maintenance commitments.
 
 - [Technical documentation](ha-reporting/DOCS.md)
 - [Changelog](ha-reporting/CHANGELOG.md)
+- [0.2.0-rc.1 validation](VALIDATION-0.2.0-rc.1.md)
+- [0.2.0-rc.1 GitHub release notes](RELEASE-NOTES-0.2.0-rc.1.md)
 - [beta.26 validation](VALIDATION-beta26.md)
-- [beta.26 GitHub release notes](RELEASE-NOTES-beta26.md)
 - [Contributing](CONTRIBUTING.md)

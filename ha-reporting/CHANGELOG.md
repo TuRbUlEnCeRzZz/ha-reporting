@@ -1,3 +1,13 @@
+## 0.2.0-rc.1
+
+- introduce `ha-reporting-ai-context-v7` as the first 0.2.0 release-candidate AI contract;
+- add authoritative `trend_direction` metadata to validated full-period N/N-x statistics so AI providers cannot legitimately reverse an increase into a decrease or vice versa;
+- restrict current-period cross-source comparisons to deterministic HA Reporting `relationships`;
+- when forecast/measured coverage is insufficient for a full-period comparison, preserve both values and coverage but omit absolute/relative performance gaps;
+- suppress relative percentages for `limited` comparisons while preserving source values and absolute differences;
+- keep beta.26 coverage tiers, sparse-zero safeguards and same-session Ingress/Nabu Casa PDF downloads unchanged;
+- preserve all current/comparison sources and partial data without AI-context trimming.
+
 ## 0.1.0-beta.26
 
 - add explicit comparison quality tiers: representative (>=95% coverage), partial (80-95%) and limited (<80%);

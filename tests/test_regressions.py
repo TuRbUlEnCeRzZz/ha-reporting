@@ -477,7 +477,7 @@ class Beta26ComparisonQualityTests(unittest.TestCase):
         self.assertIn('>=95 % est représentatif',prompt)
         self.assertIn('gap_pct_reason=near_zero_reference',prompt)
         self.assertIn('base_sparse_zero_uncertain',prompt)
-        self.assertIn('ha-reporting-ai-context-v8',prompt)
+        self.assertIn('ha-reporting-ai-context-v9',prompt)
 
 class Rc1DeterministicComparisonTests(unittest.TestCase):
     @staticmethod
@@ -508,9 +508,10 @@ class Rc1DeterministicComparisonTests(unittest.TestCase):
         sample={'report':{'name':'Monthly'},'resolved_period':{'label':'N','timezone':'UTC'},'summary':{},'catalogs':[],
                 'comparisons':{'targets':[{'label':'N-1','resolved_period':{'label':'R'},'summary':{},'catalogs':[{'name':'Appliances','devices':[{'name':'Dryer','sources':[compared]}]}]}]}}
         context=json.loads(build_budgeted_ai_context(sample)[0])
-        mean=context['comparisons'][0]['values']['mean']
-        self.assertEqual(mean['trend_direction'],'increase')
-        self.assertGreater(mean['gap'],0)
+        comp=context['comparison_sets'][0]
+        mean=next(f for f in context['facts'] if f.get('c')==comp['i'] and f.get('k')=='mean')
+        self.assertEqual(mean['t'],'increase')
+        self.assertGreater(mean['d'],0)
         prompt=_instructions('{}')
         self.assertIn('`trend_direction`',prompt)
         self.assertIn('ne doit JAMAIS être décrit comme une baisse',prompt)
@@ -627,7 +628,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertIn('reconstruction partielle',prompt)
         self.assertIn('base_reconstructed=true',prompt)
         self.assertIn('reference_coverage_pct',prompt)
-        self.assertIn('ha-reporting-ai-context-v8',prompt)
+        self.assertIn('ha-reporting-ai-context-v9',prompt)
         self.assertIn('poursuivre la collecte',prompt)
         self.assertIn("uniquement s'il n'y a aucune autre recommandation",prompt)
 
@@ -672,9 +673,9 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertTrue(meta['lossless'])
         self.assertEqual(meta['omitted_current_sources'],0)
         self.assertEqual(meta['omitted_comparison_sources'],0)
-        self.assertEqual(len(context['current']),421)
-        self.assertEqual(len(context['comparisons']),420)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v8')
+        self.assertEqual(context['counts']['current_sources'],421)
+        self.assertEqual(context['counts']['comparison_sources'],420)
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v9')
         encoded=json.dumps(context,ensure_ascii=False)
         self.assertIn('critical_power',encoded)
         self.assertIn('Low coverage',encoded)
@@ -688,8 +689,8 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertTrue(meta['lossless'])
         self.assertEqual(meta['omitted_current_sources'],0)
         self.assertEqual(meta['omitted_comparison_sources'],0)
-        self.assertEqual(len(context['current']),1)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v8')
+        self.assertEqual(context['counts']['current_sources'],1)
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v9')
         self.assertNotIn('preview',context_json)
 
     def test_beta24_context_uses_named_semantics_and_integrated_energy(self):
@@ -706,15 +707,17 @@ class AiAnalysisTests(unittest.TestCase):
         sample['catalogs'][0]['devices'][0]['sources'].append(energy)
         context_json,meta=build_budgeted_ai_context(sample)
         context=json.loads(context_json)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v8')
-        power=context['current'][0]
-        self.assertEqual(power['values']['max'],120)
-        self.assertEqual(power['values']['mean'],50)
-        self.assertAlmostEqual(power['values']['integrated_energy_kwh'],1.234)
-        counter=context['current'][1]
-        self.assertEqual(counter['values']['period_delta'],8.22)
-        self.assertEqual(counter['values']['counter_end'],3788.82)
-        self.assertNotIn('delta',counter['values'])
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v9')
+        power=next(src for src in context['sources'] if src['n'].endswith('/frigo_power'))
+        pfacts={f['k']:f['v'] for f in context['facts'] if f.get('s')==power['i'] and f.get('q')=='current'}
+        self.assertEqual(pfacts['max'],120)
+        self.assertEqual(pfacts['mean'],50)
+        self.assertAlmostEqual(pfacts['integrated_energy_kwh'],1.234)
+        counter=next(src for src in context['sources'] if src['n'].endswith('/meter'))
+        cfacts={f['k']:f['v'] for f in context['facts'] if f.get('s')==counter['i'] and f.get('q')=='current'}
+        self.assertEqual(cfacts['period_delta'],8.22)
+        self.assertEqual(cfacts['counter_end'],3788.82)
+        self.assertNotIn('delta',cfacts)
         self.assertEqual(meta['omitted_current_sources'],0)
 
     def test_beta25_relationships_precompute_forecast_vs_actual_gaps(self):
@@ -747,7 +750,7 @@ class AiAnalysisTests(unittest.TestCase):
         sample['summary']={'sources_total':3,'sources_ok':3}
         context_json,meta=build_budgeted_ai_context(sample)
         context=json.loads(context_json)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v8')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v9')
         self.assertEqual(meta['relationships'],2)
         energy=next(item for item in context['relationships'] if item['kind']=='energy_forecast_vs_actual')
         self.assertAlmostEqual(energy['forecast_energy_kwh'],6.89)
@@ -791,7 +794,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertNotIn('absolute_gap_kwh',rel)
         self.assertNotIn('relative_gap_pct',rel)
         self.assertNotIn('trend_direction',rel)
-        self.assertEqual(len(context['current']),2)
+        self.assertEqual(context['counts']['current_sources'],2)
 
     def test_beta25_relationship_does_not_guess_ambiguous_energy_pairing(self):
         sample=self.sample()
@@ -807,7 +810,7 @@ class AiAnalysisTests(unittest.TestCase):
             })
         context=json.loads(build_budgeted_ai_context(sample)[0])
         self.assertFalse(any(item['kind']=='energy_forecast_vs_actual' for item in context['relationships']))
-        self.assertEqual(len(context['current']),3)
+        self.assertEqual(context['counts']['current_sources'],3)
 
     def test_beta22_partial_sources_are_preserved_losslessly(self):
         sample=self.sample()
@@ -818,10 +821,11 @@ class AiAnalysisTests(unittest.TestCase):
         source['analysis']['validation']['warnings']=['Partial period']
         context_json,meta=build_budgeted_ai_context(sample)
         context=json.loads(context_json)
-        self.assertEqual(len(context['current']),1)
+        self.assertEqual(context['counts']['current_sources'],1)
         self.assertEqual(meta['omitted_current_sources'],0)
-        self.assertEqual(context['current'][0]['status'],'partial')
-        self.assertIn('Partial period',context['current'][0]['warnings'])
+        source_row=context['sources'][0]
+        self.assertEqual(source_row['st'],'partial')
+        self.assertIn('Partial period',source_row['w'])
         self.assertIn('34.8',context_json)
 
     def test_ai_sanitizer_removes_contradictory_no_recommendation(self):
@@ -882,7 +886,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertTrue(call['return_response'])
         self.assertEqual(call['service_data']['entity_id'],'ai_task.local')
         self.assertIn('sans afficher de raisonnement interne',call['service_data']['instructions'])
-        self.assertIn('ha-reporting-ai-context-v8',call['service_data']['instructions'])
+        self.assertIn('ha-reporting-ai-context-v9',call['service_data']['instructions'])
         self.assertEqual(result['input']['context_mode'],'lossless_self_describing')
         self.assertTrue(result['input']['context_lossless'])
         self.assertLessEqual(result['input']['context_characters'],AI_TARGET_CONTEXT_CHARS)
@@ -1140,7 +1144,7 @@ class Beta12ExportProviderTests(unittest.TestCase):
         self.assertTrue(status['reachable'])
         self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
         self.assertEqual(seen['auth'],'Token secret')
-        self.assertIn('0.2.0-rc.2',seen['ua'])
+        self.assertIn('0.2.0-rc.3',seen['ua'])
 
     def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
         import tempfile
@@ -1519,7 +1523,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.2.0-rc.2')
+        self.assertEqual(config['version'],'0.2.0-rc.3')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertTrue(config['hassio_api'])
@@ -1620,7 +1624,7 @@ class Beta6TransportTests(unittest.TestCase):
 if __name__ == '__main__': unittest.main()
 
 
-class Rc2AtomicComparisonRecordTests(unittest.TestCase):
+class Rc3FactLedgerTests(unittest.TestCase):
     @staticmethod
     def source(sensor_key, metric='power', unit='W', coverage=100.0, density=100.0, **stats):
         quality={'period_coverage_percent':coverage,'sample_density_percent':density,'density_applicable':metric=='power'}
@@ -1641,47 +1645,113 @@ class Rc2AtomicComparisonRecordTests(unittest.TestCase):
                                            'catalogs':[{'name':'Home','devices':[{'name':'Devices','sources':comparisons}]}]}]}}
         return json.loads(build_budgeted_ai_context(sample)[0])
 
-    def test_v8_records_are_atomic_and_keep_authoritative_direction(self):
+    def test_v9_comparison_facts_are_atomic_and_keep_authoritative_direction(self):
         base=self.source('dryer_power',coverage=97.6,density=99.3,max={'value':658},p95=546,mean=20.5)
         ref=self.source('dryer_power',coverage=100,density=99.3,max={'value':749},p95=540,mean=17.5)
         context=self.context_for([ComparisonEngine()._compare_source(base,ref)])
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v8')
-        row=context['comparisons'][0]
-        self.assertEqual(row['id'],1)
-        self.assertTrue(row['source'].endswith('/dryer_power'))
-        self.assertEqual(row['values']['mean']['trend_direction'],'increase')
-        self.assertGreater(row['values']['mean']['gap_pct'],0)
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v9')
+        comp=context['comparison_sets'][0]
+        src=next(item for item in context['sources'] if item['i']==comp['s'])
+        self.assertTrue(src['n'].endswith('/dryer_power'))
+        mean=next(f for f in context['facts'] if f.get('c')==comp['i'] and f.get('k')=='mean')
+        self.assertEqual(mean['t'],'increase')
+        self.assertGreater(mean['p'],0)
 
-    def test_v8_mean_direction_is_distinct_from_temperature_maximum(self):
+    def test_v9_mean_direction_is_distinct_from_temperature_maximum(self):
         base=self.source('bathroom_temperature','temperature','°C',coverage=100,density=None,
                          min={'value':23.2},mean=25.1,max={'value':26.9})
         ref=self.source('bathroom_temperature','temperature','°C',coverage=100,density=None,
                         min={'value':22.6},mean=24.8,max={'value':27.1})
-        row=self.context_for([ComparisonEngine()._compare_source(base,ref)])['comparisons'][0]
-        self.assertEqual(row['values']['mean']['trend_direction'],'increase')
-        self.assertEqual(row['values']['max']['trend_direction'],'decrease')
+        context=self.context_for([ComparisonEngine()._compare_source(base,ref)])
+        comp=context['comparison_sets'][0]
+        facts={f['k']:f for f in context['facts'] if f.get('c')==comp['i']}
+        self.assertEqual(facts['mean']['t'],'increase')
+        self.assertEqual(facts['max']['t'],'decrease')
 
-    def test_v8_near_zero_absolute_gap_has_no_percentage(self):
+    def test_v9_near_zero_absolute_gap_has_no_percentage(self):
         base=self.source('bathroom_fan_energy','energy_total','kWh',coverage=96.7,density=None,delta=0.30,last={'value':7.09})
         ref=self.source('bathroom_fan_energy','energy_total','kWh',coverage=96.7,density=None,delta=0.05,last={'value':6.79})
-        row=self.context_for([ComparisonEngine()._compare_source(base,ref)])['comparisons'][0]
-        stat=next(iter(row['values'].values()))
-        self.assertAlmostEqual(stat['gap'],0.25)
-        self.assertNotIn('gap_pct',stat)
-        self.assertEqual(stat['gap_pct_reason'],'near_zero_reference')
+        context=self.context_for([ComparisonEngine()._compare_source(base,ref)])
+        comp=context['comparison_sets'][0]
+        stat=next(f for f in context['facts'] if f.get('c')==comp['i'])
+        self.assertAlmostEqual(stat['d'],0.25)
+        self.assertNotIn('p',stat)
+        self.assertEqual(stat['pr'],'near_zero_reference')
 
-    def test_v8_ids_keep_distinct_sources_separate(self):
+    def test_v9_ids_keep_distinct_sources_separate(self):
         dryer=ComparisonEngine()._compare_source(self.source('dryer_power',mean=20.5),self.source('dryer_power',mean=17.5))
         washer=ComparisonEngine()._compare_source(self.source('washer_power',mean=16.9),self.source('washer_power',mean=19.0))
         context=self.context_for([dryer,washer])
-        self.assertEqual([r['id'] for r in context['comparisons']],[1,2])
-        self.assertNotEqual(context['comparisons'][0]['source'],context['comparisons'][1]['source'])
-        self.assertEqual(context['comparisons'][0]['values']['mean']['trend_direction'],'increase')
-        self.assertEqual(context['comparisons'][1]['values']['mean']['trend_direction'],'decrease')
+        self.assertEqual([r['i'] for r in context['comparison_sets']],['C1','C2'])
+        self.assertNotEqual(context['comparison_sets'][0]['s'],context['comparison_sets'][1]['s'])
+        means=[next(f for f in context['facts'] if f.get('c')==row['i'] and f.get('k')=='mean') for row in context['comparison_sets']]
+        self.assertEqual(means[0]['t'],'increase')
+        self.assertEqual(means[1]['t'],'decrease')
 
-    def test_v8_prompt_forbids_cross_record_mixing_and_inferred_percentages(self):
+    def test_v9_prompt_forbids_cross_fact_mixing_and_inferred_percentages(self):
         prompt=_instructions('{}')
-        self.assertIn('`id` et est ATOMIQUE',prompt)
-        self.assertIn('Ne mélange jamais le sujet',prompt)
+        self.assertIn('registre déterministe de faits',prompt)
+        self.assertIn('exactement un élément de `facts`',prompt)
         self.assertIn('0,25 kWh',prompt)
-        self.assertIn('deux enregistrements de comparaison distincts',prompt)
+        self.assertIn("N'invente jamais", prompt)
+
+class Rc3MaintenanceTests(unittest.TestCase):
+    def test_vm_inventory_deduplicates_entities_and_metrics(self):
+        provider=VM('http://vm:8428')
+        payload=[
+            {'__name__':'W_value','db':'homeassistant','domain':'sensor','entity_id':'living_power'},
+            {'__name__':'state','db':'homeassistant','domain':'sensor','entity_id':'living_power'},
+            {'__name__':'state','db':'homeassistant','domain':'switch','entity_id':'legacy_switch'},
+        ]
+        with patch.object(provider,'series_metadata',return_value=payload):
+            inventory=provider.list_home_assistant_entities(start=0,end=100)
+        self.assertEqual(inventory['series_count'],3)
+        self.assertEqual(len(inventory['entities']),2)
+        power=next(item for item in inventory['entities'] if item['entity_id']=='living_power')
+        self.assertEqual(power['domain'],'sensor')
+        self.assertEqual(power['series_count'],2)
+        self.assertEqual(power['metrics'],['W_value','state'])
+
+    def test_maintenance_classifies_without_catalog_access(self):
+        class FakeVM:
+            base_url='http://vm:8428'
+            def health_check(self):
+                return ProviderStatus('victoria_metrics',True,True,'OK')
+            def list_home_assistant_entities(self,start=0,end=None):
+                return {
+                    'series_count':5,
+                    'entities':[
+                        {'domain':'sensor','entity_id':'active_power','series_count':2,'metrics':['W_value','state']},
+                        {'domain':'sensor','entity_id':'old_power','series_count':1,'metrics':['W_value']},
+                        {'domain':'switch','entity_id':'old_switch','series_count':1,'metrics':['state']},
+                        {'domain':None,'entity_id':'mystery','series_count':1,'metrics':['state']},
+                    ],
+                    'indeterminate_series':[],
+                }
+        with patch.object(main,'victoria_provider',return_value=FakeVM()), \
+             patch.object(main,'home_assistant_states',return_value=[{'entity_id':'sensor.active_power'}]), \
+             patch.object(main,'load_catalog',side_effect=AssertionError('maintenance must not read catalogs')):
+            result=main.victoria_metrics_maintenance_analysis()
+        self.assertFalse(result['automatic_deletion'])
+        self.assertFalse(result['catalogs_used'])
+        self.assertEqual(result['summary'],{'active':1,'orphaned':1,'protected':1,'indeterminate':1})
+        statuses={row['full_entity_id'] or row['entity_id']:row['status'] for row in result['entities']}
+        self.assertEqual(statuses['sensor.active_power'],'active')
+        self.assertEqual(statuses['sensor.old_power'],'orphaned')
+        self.assertEqual(statuses['switch.old_switch'],'protected')
+        self.assertEqual(statuses['mystery'],'indeterminate')
+
+    def test_no_maintenance_delete_route_is_exposed(self):
+        main_text=(ROOT/'ha-reporting/app/main.py').read_text()
+        self.assertIn('/api/maintenance/victoriametrics/analyze',main_text)
+        self.assertNotIn('/api/maintenance/victoriametrics/delete',main_text)
+
+class Rc3UiContractTests(unittest.TestCase):
+    def test_maintenance_ui_is_analysis_only(self):
+        index=(ROOT/'ha-reporting/app/index.html').read_text()
+        app=(ROOT/'ha-reporting/app/app.js').read_text()
+        self.assertIn('vmMaintenanceAnalyzeButton',index)
+        self.assertIn('Aucune suppression automatique',index)
+        self.assertIn('Les catalogues HA Reporting ne sont pas consultés',index)
+        self.assertIn('api/maintenance/victoriametrics/analyze',app)
+        self.assertNotIn('api/maintenance/victoriametrics/delete',app)

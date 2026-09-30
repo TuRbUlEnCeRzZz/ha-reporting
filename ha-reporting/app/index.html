@@ -18,7 +18,7 @@
   </button>
   <div>
     <h1>HA Reporting</h1>
-    <div class="subtitle">0.2.0-rc.2</div>
+    <div class="subtitle">0.2.0-rc.3</div>
   </div>
 </header>
 
@@ -547,6 +547,46 @@
         </div>
 
         <div id="seriesResult" class="seriesResult hidden"></div>
+      </div>
+
+      <h3>Maintenance</h3>
+      <p class="muted">Outils de diagnostic indépendants des catalogues HA Reporting. Aucun nettoyage n'est exécuté automatiquement.</p>
+
+      <div class="providerCard maintenanceCard">
+        <div class="providerHeading">
+          <div>
+            <h3>VictoriaMetrics</h3>
+            <p class="muted">Compare les entités historiques présentes dans VictoriaMetrics avec les entités actuellement disponibles dans Home Assistant. Cette analyse utilise uniquement la connexion VictoriaMetrics configurée et l'état courant de Home Assistant.</p>
+          </div>
+          <span id="vmMaintenanceBadge" class="providerBadge">Non analysé</span>
+        </div>
+
+        <div class="maintenanceNotice">
+          <strong>Analyse uniquement</strong>
+          <span>Aucune suppression automatique. Les catalogues HA Reporting ne sont pas consultés.</span>
+        </div>
+
+        <div class="actions">
+          <button class="primary" id="vmMaintenanceAnalyzeButton">Analyser</button>
+          <span id="vmMaintenanceStatusText" class="statusText"></span>
+        </div>
+
+        <div id="vmMaintenanceResult" class="hidden">
+          <div id="vmMaintenanceSummary" class="maintenanceSummary"></div>
+          <div class="maintenanceToolbar">
+            <label>Afficher
+              <select id="vmMaintenanceFilter">
+                <option value="all">Toutes les séries</option>
+                <option value="orphaned">Orphelines</option>
+                <option value="indeterminate">Indéterminées</option>
+                <option value="protected">Protégées</option>
+                <option value="active">Actives</option>
+              </select>
+            </label>
+            <span id="vmMaintenanceMeta" class="muted"></span>
+          </div>
+          <div id="vmMaintenanceEntities" class="maintenanceEntities"></div>
+        </div>
       </div>
     </div>
   </section>

@@ -1,3 +1,15 @@
+## 0.2.0-rc.3
+
+- introduce `ha-reporting-ai-context-v9` with a deterministic atomic fact ledger for AI interpretation;
+- normalize source/comparison identity into compact registries while retaining every semantic current and N/N-x statistic;
+- require every quantitative AI statement to come from one fact or one explicit deterministic relationship;
+- forbid invented devices, cross-fact source pairing, physical-unit changes and unsupported peak-based fault/calibration diagnoses;
+- add a read-only **Settings → Maintenance → VictoriaMetrics** inventory;
+- compare HA-labelled VictoriaMetrics series with the live Home Assistant entity set without reading HA Reporting catalogs;
+- classify VictoriaMetrics entities as active, orphaned, protected or indeterminate using a conservative first cleanup policy;
+- expose no deletion endpoint and perform no automatic VictoriaMetrics cleanup;
+- keep authenticated Ingress/Nabu Casa PDF downloads, notifications, report statistics, PDF generation and Paperless workflows unchanged.
+
 ## 0.2.0-rc.2
 
 - introduce `ha-reporting-ai-context-v8` with atomic N/N-x comparison records;

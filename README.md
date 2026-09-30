@@ -1,8 +1,8 @@
 # HA Reporting
 
-![HA Reporting](ha-reporting/logo.png)
+![HA Reporting](logo.png)
 
-**Current development version: 0.2.0-rc.2**
+**Current development version: 0.2.0-rc.3**
 
 HA Reporting is a reporting engine for **Home Assistant OS**. It turns Home Assistant sensor history stored in VictoriaMetrics into structured reports, period comparisons, optional AI commentary and locally generated PDF documents.
 
@@ -97,23 +97,24 @@ Beta.21 introduces the first HA Reporting internationalization layer.
 - Every report can override the default and generate renderer-owned content and AI instructions in French or English.
 - User-owned names such as report names, catalogue names, device names and entity IDs are not translated.
 
-From beta.21 onward, new and modified maintainer-facing repository content is written in **English**. See [CONTRIBUTING.md](CONTRIBUTING.md).
+From beta.21 onward, new and modified maintainer-facing repository content is written in **English**. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-## What is new in 0.2.0-rc.2
+## What is new in 0.2.0-rc.3
 
-`0.2.0-rc.2` is a narrowly scoped release candidate focused on one remaining AI reliability issue observed during real monthly-report validation: a small local model could still mix fields from neighbouring N/N-x comparison records even though each individual record was correct.
+`0.2.0-rc.3` is the final hardening step currently planned before 0.2.0 stable. It addresses the remaining semantic mixing observed with a small local AI model and adds the first read-only VictoriaMetrics maintenance inventory.
 
-- introduces **`ha-reporting-ai-context-v8`**;
-- assigns a compact `id` to every N/N-x comparison record and treats each record as an atomic same-source comparison;
-- explicitly forbids the AI from mixing subjects, statistics, directions, percentages, coverage values or gaps across different comparison records;
-- requires wording about an average to use only `values.mean`, and likewise keeps minimum, maximum, P95, consumption/delta and other statistics semantically isolated;
-- permits a relative percentage only when the same statistic object explicitly contains `gap_pct`; an absolute gap can no longer be reinterpreted as a percentage;
-- forbids transferring a coverage value from one source/comparison to another;
-- keeps deterministic cross-source `relationships`, coverage gating, limited-comparison percentage suppression, sparse-zero handling and all report data unchanged;
-- leaves notification behavior unchanged;
-- keeps the authenticated same-session Ingress/Nabu Casa PDF download path unchanged. Two real PDFs were successfully downloaded through Home Assistant/Nabu Casa during RC1 validation.
+- introduces **`ha-reporting-ai-context-v9`**, a deterministic fact ledger;
+- normalizes source identity and comparison metadata into compact registries while preserving every semantic current-period and N/N-x value;
+- sends one statistic per atomic AI fact, preventing a model from legitimately combining a temperature fact with an energy label, borrowing another source's coverage, or creating an unsupported device-to-device comparison;
+- keeps current-period cross-source comparisons restricted to deterministic `relationships` calculated by HA Reporting;
+- marks forecast-vs-measured peak differences as context only and explicitly forbids diagnosing overload, bad calibration, sensor placement or faults from a peak gap alone;
+- adds **Settings → Maintenance → VictoriaMetrics** with a read-only inventory of VictoriaMetrics entities compared with the live Home Assistant entity set;
+- classifies VictoriaMetrics entries as **Active**, **Orphaned**, **Protected** or **Indeterminate**;
+- the maintenance analyzer uses the existing VictoriaMetrics connection and the Home Assistant Core states API directly and **does not read HA Reporting catalogs**;
+- this RC exposes **no deletion endpoint and performs no automatic cleanup**. Orphan detection is diagnostic only;
+- keeps the RC1/RC2 download path unchanged; authenticated PDF downloads through Home Assistant/Nabu Casa were validated on real reports before RC3.
 
-The remaining purpose of this RC is to validate that local AI commentary stays inside the deterministic source/statistic boundaries already calculated by HA Reporting.
+The maintenance classification is intentionally conservative: only missing `sensor` and `binary_sensor` entities are considered orphan cleanup candidates. Missing entities from other domains are shown as protected until a future explicit deletion workflow defines stronger safeguards.
 
 ## Previous 0.2.0-rc.1 milestone
 
@@ -170,16 +171,16 @@ These relationships are provider-agnostic. EMHASS is a useful real-world example
 
    `https://github.com/TuRbUlEnCeRzZz/ha-reporting`
 
-4. Refresh the store and verify that the offered version is **0.2.0-rc.2** before installing or updating.
+4. Refresh the store and verify that the offered version is **0.2.0-rc.3** before installing or updating.
 5. Start HA Reporting and open its interface through Home Assistant Ingress.
 
 ### From the ZIP: local installation
 
-1. Extract `ha-reporting-0.2.0-rc.2.zip` on your computer.
+1. Extract `ha-reporting-0.2.0-rc.3.zip` on your computer.
 2. Inside the extracted repository, locate the **`ha-reporting/`** directory containing `config.yaml`, `Dockerfile`, `run.sh` and `app/`.
 3. Copy that directory to **`/addons/ha-reporting`** on Home Assistant OS using your existing file-transfer method. Do not copy the whole repository into `/addons/ha-reporting`.
 4. Refresh the app store and rebuild/reinstall the local add-on.
-5. Start it and confirm **HA Reporting 0.2.0-rc.2** in the add-on log.
+5. Start it and confirm **HA Reporting 0.2.0-rc.3** in the add-on log.
 
 The first build can take some time on a Raspberry Pi 4 because dependencies are installed by Supervisor.
 
@@ -210,7 +211,7 @@ AI commentary can be wrong or over-interpret limited history. Treat it as commen
 
 ### AI context normalization
 
-0.2.0-rc.2 uses **`ha-reporting-ai-context-v8`**. The context remains lossless with respect to the semantic report data sent to AI: no current-period or comparison source is removed, including partially covered sources. Raw time-series samples are still intentionally excluded.
+0.2.0-rc.3 uses **`ha-reporting-ai-context-v8`**. The context remains lossless with respect to the semantic report data sent to AI: no current-period or comparison source is removed, including partially covered sources. Raw time-series samples are still intentionally excluded.
 
 Self-describing source records keep power values explicitly named as `max`, `p95` and `mean`; cumulative counters expose `period_delta` separately from `counter_end`; and an integrated power source exposes `integrated_energy_kwh`. Deterministic `relationships` are used for validated current-period cross-source comparisons such as forecast versus measured energy. N/N-x comparison records now carry a compact `id` and are treated as atomic: the AI may not mix fields, percentages, coverage or trend direction across two comparison records.
 
@@ -264,9 +265,9 @@ HA Reporting is experimental. Report accuracy depends on the quality and retenti
 
 Large reports and local AI inference can be slow on a Raspberry Pi 4. Supervisor builds also depend on upstream packages and system libraries.
 
-0.2.0-rc.2 has automated Python and JavaScript regression coverage, but automated desktop tests do not prove that every Home Assistant OS, ARM build, AI provider, VictoriaMetrics dataset or Paperless installation behaves identically. After upgrading, run at least one end-to-end report on the actual Home Assistant OS host before relying on scheduled delivery.
+0.2.0-rc.3 has automated Python and JavaScript regression coverage, but automated desktop tests do not prove that every Home Assistant OS, ARM build, AI provider, VictoriaMetrics dataset or Paperless installation behaves identically. After upgrading, run at least one end-to-end report on the actual Home Assistant OS host before relying on scheduled delivery.
 
-See [VALIDATION-0.2.0-rc.2.md](VALIDATION-0.2.0-rc.2.md) for the release-candidate validation notes and [ha-reporting/DOCS.md](ha-reporting/DOCS.md) for technical details.
+See [VALIDATION-0.2.0-rc.3.md](VALIDATION-0.2.0-rc.3.md) for the release-candidate validation notes and [DOCS.md](DOCS.md) for technical details.
 
 ## Repository layout
 
@@ -300,7 +301,7 @@ node --check ha-reporting/app/app.js
 node --check ha-reporting/app/i18n.js
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the repository language policy and [ha-reporting/CHANGELOG.md](ha-reporting/CHANGELOG.md) for release history.
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for the repository language policy and [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## Roadmap
 
@@ -311,17 +312,17 @@ Possible future directions include:
 - additional export and notification destinations;
 - continued PDF/layout improvements and reporting diagnostics;
 - further validation with larger installations and longer histories;
-- optional presets for common reporting use cases. EMHASS data can already be reported through normal sensors, but there is no dedicated EMHASS integration in 0.2.0-rc.2; the power-integration option is provider-agnostic.
+- optional presets for common reporting use cases. EMHASS data can already be reported through normal sensors, but there is no dedicated EMHASS integration in 0.2.0-rc.3; the power-integration option is provider-agnostic.
 
 These are possible directions, not delivery or maintenance commitments.
 
 ## Documentation
 
-- [Technical documentation](ha-reporting/DOCS.md)
-- [Changelog](ha-reporting/CHANGELOG.md)
-- [0.2.0-rc.2 validation](VALIDATION-0.2.0-rc.2.md)
-- [0.2.0-rc.2 GitHub release notes](RELEASE-NOTES-0.2.0-rc.2.md)
+- [Technical documentation](DOCS.md)
+- [Changelog](CHANGELOG.md)
+- [0.2.0-rc.3 validation](VALIDATION-0.2.0-rc.3.md)
+- [0.2.0-rc.3 GitHub release notes](RELEASE-NOTES-0.2.0-rc.3.md)
 - [0.2.0-rc.1 validation](VALIDATION-0.2.0-rc.1.md)
 - [0.2.0-rc.1 GitHub release notes](RELEASE-NOTES-0.2.0-rc.1.md)
 - [beta.26 validation](VALIDATION-beta26.md)
-- [Contributing](CONTRIBUTING.md)
+- [Contributing](../CONTRIBUTING.md)

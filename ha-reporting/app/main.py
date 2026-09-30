@@ -66,6 +66,7 @@ HA_SERVICES_URL = "http://supervisor/core/api/services"
 CATALOG_DIR = Path("/config/catalogs")
 CATEGORY_FILE = Path("/config/categories.yaml")
 PROVIDER_FILE = Path("/config/providers.yaml")
+VM_MAINTENANCE_CANDIDATE_DOMAINS = {"sensor", "binary_sensor"}
 REPORT_DIR = Path("/config/reports")
 REPORT_ROLLUP_THRESHOLD_SECONDS = 45 * 24 * 3600
 REPORT_QUALITY_STEP_SECONDS = 300
@@ -738,6 +739,90 @@ def provider_overview():
                 "status": status,
             }
         ]
+    }
+
+
+def victoria_metrics_maintenance_analysis():
+    """Compare VM's HA-labelled entity inventory with the live HA registry.
+
+    This diagnostic intentionally does not read HA Reporting catalogs and never
+    deletes data. It is a conservative first step toward future manual cleanup.
+    """
+    provider = victoria_provider()
+    status = provider.health_check()
+    if not status.available:
+        raise RuntimeError(status.message or "VictoriaMetrics unavailable")
+
+    inventory = provider.list_home_assistant_entities(start=0, end=time.time())
+    ha_entities = home_assistant_states()
+    ha_ids = {str(item.get("entity_id") or "").strip() for item in ha_entities if item.get("entity_id")}
+
+    rows = []
+    summary = {"active": 0, "orphaned": 0, "protected": 0, "indeterminate": 0}
+
+    for item in inventory.get("entities") or []:
+        domain = str(item.get("domain") or "").strip()
+        object_id = str(item.get("entity_id") or "").strip()
+        if not domain or not object_id:
+            classification = "indeterminate"
+            reason_code = "missing_domain_or_entity_id"
+            full_entity_id = f"{domain}.{object_id}".strip(".") or None
+        else:
+            full_entity_id = f"{domain}.{object_id}"
+            if full_entity_id in ha_ids:
+                classification = "active"
+                reason_code = "present_in_home_assistant"
+            elif domain not in VM_MAINTENANCE_CANDIDATE_DOMAINS:
+                classification = "protected"
+                reason_code = "domain_protected_by_policy"
+            else:
+                classification = "orphaned"
+                reason_code = "missing_from_home_assistant"
+
+        summary[classification] += 1
+        rows.append({
+            "status": classification,
+            "reason_code": reason_code,
+            "full_entity_id": full_entity_id,
+            "domain": domain or None,
+            "entity_id": object_id or None,
+            "series_count": int(item.get("series_count") or 0),
+            "metrics": item.get("metrics") or [],
+        })
+
+    for item in inventory.get("indeterminate_series") or []:
+        summary["indeterminate"] += 1
+        rows.append({
+            "status": "indeterminate",
+            "reason_code": item.get("reason") or "unclassified_vm_series",
+            "full_entity_id": None,
+            "domain": item.get("domain"),
+            "entity_id": item.get("entity_id"),
+            "series_count": 1,
+            "metrics": [item.get("metric")] if item.get("metric") else [],
+        })
+
+    order = {"orphaned": 0, "indeterminate": 1, "protected": 2, "active": 3}
+    rows.sort(key=lambda row: (order.get(row.get("status"), 9), str(row.get("full_entity_id") or row.get("entity_id") or "")))
+
+    return {
+        "generated_at": datetime.now().astimezone().isoformat(),
+        "analysis_only": True,
+        "automatic_deletion": False,
+        "catalogs_used": False,
+        "provider": {
+            "id": "victoria_metrics",
+            "url": provider.base_url,
+            "series_count": inventory.get("series_count", 0),
+            "entity_count": len(inventory.get("entities") or []),
+        },
+        "home_assistant": {"entity_count": len(ha_ids)},
+        "policy": {
+            "cleanup_candidate_domains": sorted(VM_MAINTENANCE_CANDIDATE_DOMAINS),
+            "protected_rule": "VM entities absent from HA are protected when their domain is outside the cleanup candidate domains.",
+        },
+        "summary": summary,
+        "entities": rows,
     }
 
 
@@ -2691,6 +2776,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_payload(202, {"job": run_scheduler_automation_now(parts[0])})
             if path.endswith("/api/providers/victoria_metrics/test"):
                 return self.send_payload(200, {"status": provider_status(payload.get("url"))})
+            if path.endswith("/api/maintenance/victoriametrics/analyze"):
+                return self.send_payload(200, {"analysis": victoria_metrics_maintenance_analysis()})
             if path.endswith("/api/export-providers/paperless/test"):
                 return self.send_payload(200, {"status": test_export_provider("paperless", payload)})
             if "/api/document/" in path and "/export/" in path:

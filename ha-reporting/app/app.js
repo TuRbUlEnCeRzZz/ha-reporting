@@ -17,6 +17,7 @@ let analysisCatalogId = null;
 let analysisDeviceId = null;
 let selected = new Set();
 let modalSaveHandler = null;
+let vmMaintenanceAnalysis = null;
 
 const metricTypes = [
   "power","energy_total","energy_measurement","voltage","current",
@@ -428,6 +429,108 @@ async function loadProviders(){
   if(!vm) return;
   $("vmUrl").value = vm.url || "";
   renderProviderStatus(vm.status);
+}
+
+function vmMaintenanceStatusLabel(status){
+  const labels={
+    active:typeof hrT==="function"?hrT("maintenance.vm.active"):"Active",
+    orphaned:typeof hrT==="function"?hrT("maintenance.vm.orphaned"):"Orphaned",
+    protected:typeof hrT==="function"?hrT("maintenance.vm.protected"):"Protected",
+    indeterminate:typeof hrT==="function"?hrT("maintenance.vm.indeterminate"):"Indeterminate"
+  };
+  return labels[status]||status;
+}
+
+function vmMaintenanceReasonLabel(code){
+  const labels={
+    present_in_home_assistant:typeof hrT==="function"?hrT("maintenance.vm.reason.active"):"Present in Home Assistant",
+    missing_from_home_assistant:typeof hrT==="function"?hrT("maintenance.vm.reason.orphaned"):"Missing from Home Assistant",
+    domain_protected_by_policy:typeof hrT==="function"?hrT("maintenance.vm.reason.protected"):"Protected domain",
+    missing_domain_or_entity_id:typeof hrT==="function"?hrT("maintenance.vm.reason.indeterminate"):"Missing domain/entity_id",
+    missing_entity_id:typeof hrT==="function"?hrT("maintenance.vm.reason.indeterminate"):"Missing domain/entity_id",
+    unclassified_vm_series:typeof hrT==="function"?hrT("maintenance.vm.reason.indeterminate"):"Unclassified VictoriaMetrics series"
+  };
+  return labels[code]||code||"—";
+}
+
+function renderVmMaintenanceAnalysis(analysis){
+  vmMaintenanceAnalysis=analysis||null;
+  const result=$("vmMaintenanceResult");
+  const badge=$("vmMaintenanceBadge");
+  if(!analysis){
+    result.classList.add("hidden");
+    badge.textContent=typeof hrT==="function"?hrT("maintenance.vm.not_analyzed"):"Not analyzed";
+    badge.className="providerBadge";
+    return;
+  }
+  result.classList.remove("hidden");
+  badge.textContent=typeof hrT==="function"?hrT("maintenance.vm.analyzed"):"Analyzed";
+  badge.className="providerBadge ok";
+  const summary=analysis.summary||{};
+  const cards=[
+    ["active",summary.active||0],
+    ["orphaned",summary.orphaned||0],
+    ["protected",summary.protected||0],
+    ["indeterminate",summary.indeterminate||0]
+  ];
+  $("vmMaintenanceSummary").innerHTML=cards.map(([status,count])=>`
+    <div class="maintenanceStat ${esc(status)}">
+      <span>${esc(vmMaintenanceStatusLabel(status))}</span>
+      <strong>${esc(count)}</strong>
+    </div>`).join("");
+  const vm=analysis.provider||{};
+  const ha=analysis.home_assistant||{};
+  $("vmMaintenanceMeta").textContent=`VictoriaMetrics: ${Number(vm.entity_count||0)} entité(s), ${Number(vm.series_count||0)} série(s) · Home Assistant: ${Number(ha.entity_count||0)} entité(s)`;
+  renderVmMaintenanceEntities();
+}
+
+function renderVmMaintenanceEntities(){
+  if(!vmMaintenanceAnalysis) return;
+  const filter=$("vmMaintenanceFilter").value||"all";
+  const rows=(vmMaintenanceAnalysis.entities||[]).filter(row=>filter==="all"||row.status===filter);
+  if(!rows.length){
+    $("vmMaintenanceEntities").innerHTML=`<div class="emptyState">${esc(typeof hrT==="function"?hrT("maintenance.vm.no_results"):"No matching series")}</div>`;
+    return;
+  }
+  $("vmMaintenanceEntities").innerHTML=`
+    <div class="maintenanceTableHeader">
+      <span>${esc(typeof hrT==="function"?hrT("maintenance.vm.status"):"Status")}</span>
+      <span>${esc(typeof hrT==="function"?hrT("maintenance.vm.entity"):"Entity")}</span>
+      <span>${esc(typeof hrT==="function"?hrT("maintenance.vm.series"):"VM series")}</span>
+      <span>${esc(typeof hrT==="function"?hrT("maintenance.vm.metrics"):"Metrics")}</span>
+      <span>${esc(typeof hrT==="function"?hrT("maintenance.vm.reason"):"Reason")}</span>
+    </div>
+    ${rows.map(row=>`<div class="maintenanceTableRow">
+      <span><span class="maintenanceStatus ${esc(row.status)}">${esc(vmMaintenanceStatusLabel(row.status))}</span></span>
+      <strong title="${esc(row.full_entity_id||row.entity_id||'')}">${esc(row.full_entity_id||row.entity_id||'—')}</strong>
+      <span>${esc(row.series_count||0)}</span>
+      <span class="maintenanceMetrics">${esc((row.metrics||[]).join(", ")||"—")}</span>
+      <span class="muted">${esc(vmMaintenanceReasonLabel(row.reason_code))}</span>
+    </div>`).join("")}`;
+}
+
+async function analyzeVictoriaMetricsMaintenance(){
+  const button=$("vmMaintenanceAnalyzeButton");
+  const status=$("vmMaintenanceStatusText");
+  button.disabled=true;
+  status.textContent=typeof hrT==="function"?hrT("maintenance.vm.analyzing"):"Analysis in progress…";
+  status.classList.remove("error");
+  try{
+    const response=await fetch("api/maintenance/victoriametrics/analyze",{
+      method:"POST",headers:{"Content-Type":"application/json"},body:"{}",cache:"no-store"
+    });
+    const data=await response.json();
+    if(!response.ok) throw new Error(data.error||"Analysis failed");
+    renderVmMaintenanceAnalysis(data.analysis);
+    status.textContent=typeof hrT==="function"?hrT("maintenance.vm.done"):"✓ Analysis complete — no data was deleted.";
+  }catch(error){
+    status.textContent=(typeof hrT==="function"?hrT("common.error"):"Error")+" : "+error.message;
+    status.classList.add("error");
+    $("vmMaintenanceBadge").textContent=typeof hrT==="function"?hrT("common.error"):"Error";
+    $("vmMaintenanceBadge").className="providerBadge error";
+  }finally{
+    button.disabled=false;
+  }
 }
 
 function periodTypeLabel(type){
@@ -1995,6 +2098,9 @@ $("reportPdfButton").addEventListener("click", generateNativePdf);
 $("seriesCatalog").addEventListener("change", populateSeriesDevices);
 $("seriesDevice").addEventListener("change", populateSeriesSensors);
 $("seriesTestButton").addEventListener("click", testCatalogSeries);
+
+$("vmMaintenanceAnalyzeButton").addEventListener("click", analyzeVictoriaMetricsMaintenance);
+$("vmMaintenanceFilter").addEventListener("change", renderVmMaintenanceEntities);
 
 $("vmTestButton").addEventListener("click", async () => {
   $("vmStatusText").textContent = "Test en cours…";

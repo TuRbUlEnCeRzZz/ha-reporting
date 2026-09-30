@@ -1,4 +1,4 @@
-/* HA Reporting i18n foundation (0.2.0-rc.2).
+/* HA Reporting i18n foundation (0.2.0-rc.3).
  *
  * The legacy beta.20 UI still contains French source strings in a number of
  * rendering functions.  beta.21 centralizes translations here and translates
@@ -225,6 +225,29 @@ const HR_I18N_MESSAGES = {
   "settings.use_entity": {fr:"Utilise une entité", en:"Use an entity"},
   "settings.provider_interface": {fr:"Interface DataProvider", en:"DataProvider interface"},
   "settings.entity": {fr:"Entité", en:"Entity"},
+  "maintenance.title": {fr:"Maintenance", en:"Maintenance"},
+  "maintenance.help": {fr:"Outils de diagnostic indépendants des catalogues HA Reporting. Aucun nettoyage n'est exécuté automatiquement.", en:"Diagnostic tools independent from HA Reporting catalogs. No cleanup is performed automatically."},
+  "maintenance.vm.help": {fr:"Compare les entités historiques présentes dans VictoriaMetrics avec les entités actuellement disponibles dans Home Assistant. Cette analyse utilise uniquement la connexion VictoriaMetrics configurée et l'état courant de Home Assistant.", en:"Compare historical entities present in VictoriaMetrics with entities currently available in Home Assistant. This analysis uses only the configured VictoriaMetrics connection and the current Home Assistant state."},
+  "maintenance.vm.analysis_only": {fr:"Analyse uniquement", en:"Analysis only"},
+  "maintenance.vm.no_delete": {fr:"Aucune suppression automatique. Les catalogues HA Reporting ne sont pas consultés.", en:"No automatic deletion. HA Reporting catalogs are not read."},
+  "maintenance.vm.not_analyzed": {fr:"Non analysé", en:"Not analyzed"},
+  "maintenance.vm.analyzed": {fr:"Analysé", en:"Analyzed"},
+  "maintenance.vm.analyzing": {fr:"Analyse en cours…", en:"Analysis in progress…"},
+  "maintenance.vm.done": {fr:"✓ Analyse terminée — aucune donnée supprimée.", en:"✓ Analysis complete — no data was deleted."},
+  "maintenance.vm.active": {fr:"Actives", en:"Active"},
+  "maintenance.vm.orphaned": {fr:"Orphelines", en:"Orphaned"},
+  "maintenance.vm.protected": {fr:"Protégées", en:"Protected"},
+  "maintenance.vm.indeterminate": {fr:"Indéterminées", en:"Indeterminate"},
+  "maintenance.vm.status": {fr:"Statut", en:"Status"},
+  "maintenance.vm.entity": {fr:"Entité", en:"Entity"},
+  "maintenance.vm.series": {fr:"Séries VM", en:"VM series"},
+  "maintenance.vm.metrics": {fr:"Métriques", en:"Metrics"},
+  "maintenance.vm.reason": {fr:"Motif", en:"Reason"},
+  "maintenance.vm.no_results": {fr:"Aucune série ne correspond à ce filtre.", en:"No series match this filter."},
+  "maintenance.vm.reason.active": {fr:"Présente dans Home Assistant", en:"Present in Home Assistant"},
+  "maintenance.vm.reason.orphaned": {fr:"Absente de Home Assistant", en:"Missing from Home Assistant"},
+  "maintenance.vm.reason.protected": {fr:"Domaine protégé par la politique conservatrice", en:"Domain protected by conservative policy"},
+  "maintenance.vm.reason.indeterminate": {fr:"Domaine ou entity_id insuffisant pour classer la série", en:"Domain or entity_id is insufficient to classify the series"},
   "paperless.path_prefix": {fr:"Le chemin doit se trouver sous", en:"The path must be located under"},
   "paperless.path_help": {fr:"Sur Home Assistant OS, monte idéalement le partage réseau du dossier consume avec l’usage « Share », puis indique ici le chemin obtenu, par exemple", en:"On Home Assistant OS, preferably mount the network share containing the consume folder with the “Share” usage, then enter the resulting path here, for example"},
   "paperless.variables_help": {fr:"Même variables que les noms locaux : {report_id}, {report_name}, {year}, {month}, {period_start}, {period_end}, etc. Le nom déposé peut ainsi déclencher des workflows Paperless.", en:"Same variables as local filenames: {report_id}, {report_name}, {year}, {month}, {period_start}, {period_end}, etc. The deposited filename can therefore trigger Paperless workflows."},

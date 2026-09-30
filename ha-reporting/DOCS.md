@@ -1,20 +1,40 @@
 # HA Reporting technical documentation
 
-## 0.2.0-rc.2 — Atomic comparison isolation for AI
+## 0.2.0-rc.3 — Fact-ledger AI contract and VictoriaMetrics maintenance inventory
 
-`0.2.0-rc.2` is a targeted hardening release after real RC1 validation. The deterministic statistics and comparison engine remain unchanged; the change is in the AI contract and prompt.
+`0.2.0-rc.3` changes the model-facing contract instead of adding more prompt-only prohibitions. It also adds a read-only maintenance diagnostic for VictoriaMetrics.
 
-### AI context v8
+### AI context v9: deterministic fact ledger
 
-`ha-reporting-ai-context-v8` assigns a compact `id` to each N/N-x comparison record. A comparison record is explicitly defined as atomic: one source compared with that same source in one reference period. The AI Task is forbidden from mixing the subject, statistic, direction, percentage, coverage or gap from different comparison records.
+`ha-reporting-ai-context-v9` preserves the semantic data previously sent to AI, but separates it into three layers:
 
-The existing named statistic objects remain authoritative. A statement about an average must use `values.mean`; min, max, P95, energy consumption/delta and other fields may not be substituted for one another. Relative percentages may be stated only when the same statistic object contains `gap_pct`. If a percentage was suppressed by HA Reporting, the AI must not infer one from an absolute gap.
+1. `sources` — a compact registry containing source identity, metric/unit and current-period quality metadata;
+2. `comparison_sets` — N/N-x metadata for exactly one source and one reference target;
+3. `facts` — atomic statistics. Each fact contains exactly one statistic such as `mean`, `max`, `period_delta` or `integrated_energy_kwh`.
 
-Cross-source current-period analysis remains restricted to deterministic `relationships`. Coverage values remain scoped to the exact comparison or relationship in which they appear.
+Compact field aliases are documented in the embedded `legend`. Unlike the old v3 positional rows, a fact never contains an ordered bundle such as `[max, p95, mean]`; the statistic name remains explicit. This keeps the context compact while sharply reducing opportunities for small local models to swap statistics or merge neighbouring comparisons.
 
-### RC1 field validation
+A quantitative sentence must be supported by exactly one fact or one deterministic `relationship`. The prompt also requires physical quantities to remain stable: °C cannot become consumption, W cannot become energy, and an absolute kWh gap cannot become an invented percentage.
 
-Real RC1 testing confirmed that authenticated PDF downloads through Home Assistant/Nabu Casa work on the remote/mobile path. A daily EMHASS report also preserved deterministic forecast/actual signs correctly. The remaining monthly-report issue was semantic mixing by the local AI model (for example borrowing a coverage value or interpreting an absolute gap as a percentage). RC2 addresses that specific failure mode without changing notifications, PDF generation, Paperless export or the statistical engine.
+Forecast-versus-measured max/P95 values remain available as context, but a peak gap alone is explicitly not evidence of overload, bad calibration, bad sensor placement or a fault.
+
+### VictoriaMetrics maintenance inventory
+
+**Settings → Maintenance → VictoriaMetrics** adds a read-only analysis endpoint and UI. It:
+
+- uses the existing VictoriaMetrics provider URL;
+- queries VictoriaMetrics `/api/v1/series` for Home Assistant-labelled historical series across the retained history;
+- retrieves the live Home Assistant entity set through the Supervisor/Core API;
+- does not load or inspect HA Reporting catalogs;
+- groups VM series by Home Assistant `(domain, entity_id)`;
+- classifies entries as `active`, `orphaned`, `protected` or `indeterminate`;
+- exposes series counts and metric names for diagnostics.
+
+The first cleanup policy is deliberately conservative. Missing `sensor` and `binary_sensor` entities can be shown as orphaned. Missing entities from other domains are protected. Incomplete VM label metadata is indeterminate. RC3 provides **no delete route**, no background cleanup and no automatic mutation of VictoriaMetrics.
+
+### Validated behaviour carried forward
+
+RC1/RC2 deterministic comparison gating, limited-percentage suppression, sparse-zero handling, long-running AI timeouts, PDF generation, Paperless export and same-session Ingress/Nabu Casa downloads remain unchanged.
 
 ---
 

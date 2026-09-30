@@ -858,3 +858,39 @@ button:disabled {cursor:default;opacity:.55;}
   .primaryTab{min-height:36px;padding:7px 12px}
   main{padding-top:18px}
 }
+
+/* VictoriaMetrics maintenance inventory (0.2.0-rc.3). */
+.maintenanceCard{margin-top:12px}
+.maintenanceNotice{display:flex;flex-direction:column;gap:4px;margin:12px 0 16px;padding:12px 14px;border:1px solid var(--hr-divider);border-radius:10px;background:color-mix(in srgb,var(--hr-primary) 6%,transparent)}
+.maintenanceNotice strong{color:var(--hr-text)}
+.maintenanceNotice span{color:var(--hr-secondary);font-size:.9rem}
+.maintenanceSummary{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px;margin:16px 0}
+.maintenanceStat{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--hr-divider);border-radius:10px;background:var(--hr-card)}
+.maintenanceStat strong{font-size:1.25rem}
+.maintenanceStat.active strong{color:var(--hr-success)}
+.maintenanceStat.orphaned strong{color:var(--hr-error)}
+.maintenanceStat.protected strong{color:var(--hr-primary)}
+.maintenanceStat.indeterminate strong{color:#d6a63b}
+.maintenanceToolbar{display:flex;align-items:end;justify-content:space-between;gap:16px;margin:12px 0}
+.maintenanceToolbar label{min-width:190px}
+.maintenanceEntities{display:flex;flex-direction:column;gap:0;border:1px solid var(--hr-divider);border-radius:10px;overflow:hidden}
+.maintenanceTableHeader,.maintenanceTableRow{display:grid;grid-template-columns:130px minmax(220px,1.5fr) 90px minmax(180px,1fr) minmax(220px,1.3fr);gap:12px;align-items:center;padding:10px 12px}
+.maintenanceTableHeader{font-size:.78rem;color:var(--hr-secondary);font-weight:700;background:color-mix(in srgb,var(--hr-card) 88%,transparent);border-bottom:1px solid var(--hr-divider)}
+.maintenanceTableRow{font-size:.86rem;border-bottom:1px solid var(--hr-divider)}
+.maintenanceTableRow:last-child{border-bottom:0}
+.maintenanceTableRow strong,.maintenanceMetrics{overflow-wrap:anywhere;min-width:0}
+.maintenanceStatus{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;border:1px solid var(--hr-divider);font-size:.76rem;white-space:nowrap}
+.maintenanceStatus.active{color:var(--hr-success);border-color:color-mix(in srgb,var(--hr-success) 50%,var(--hr-divider))}
+.maintenanceStatus.orphaned{color:var(--hr-error);border-color:color-mix(in srgb,var(--hr-error) 50%,var(--hr-divider))}
+.maintenanceStatus.protected{color:var(--hr-primary);border-color:color-mix(in srgb,var(--hr-primary) 50%,var(--hr-divider))}
+.maintenanceStatus.indeterminate{color:#d6a63b;border-color:#d6a63b}
+@media(max-width:980px){
+  .maintenanceSummary{grid-template-columns:repeat(2,1fr)}
+  .maintenanceTableHeader{display:none}
+  .maintenanceTableRow{grid-template-columns:1fr;gap:6px;padding:12px}
+  .maintenanceTableRow>span:nth-child(3)::before{content:"VM: ";color:var(--hr-secondary)}
+}
+@media(max-width:560px){
+  .maintenanceSummary{grid-template-columns:1fr}
+  .maintenanceToolbar{align-items:stretch;flex-direction:column}
+}

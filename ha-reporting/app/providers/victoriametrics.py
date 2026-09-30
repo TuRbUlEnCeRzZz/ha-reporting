@@ -39,13 +39,13 @@ class VictoriaMetricsProvider(DataProvider):
         if not self.configured:
             raise ProviderError("VictoriaMetrics n'est pas configuré")
 
-        query = urllib.parse.urlencode(params)
+        query = urllib.parse.urlencode(params, doseq=True)
         url = f"{self.base_url}{path}?{query}"
         request = urllib.request.Request(
             url,
             headers={
                 "Accept": "application/json",
-                "User-Agent": "HA-Reporting/0.2.0-rc.2",
+                "User-Agent": "HA-Reporting/0.2.0-rc.3",
             },
         )
 
@@ -95,6 +95,100 @@ class VictoriaMetricsProvider(DataProvider):
                 "step": step,
             },
         )
+
+    def series_metadata(
+        self,
+        selector: str,
+        start: float | int | None = None,
+        end: float | int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return unique VictoriaMetrics series label sets for a selector.
+
+        This uses the Prometheus-compatible /api/v1/series endpoint and is used
+        by maintenance diagnostics only. It does not read HA Reporting catalogs.
+        """
+        params: dict[str, Any] = {"match[]": selector}
+        if start is not None:
+            params["start"] = start
+        if end is not None:
+            params["end"] = end
+        payload = self._request_json("/api/v1/series", params)
+        data = payload.get("data")
+        if not isinstance(data, list):
+            raise ProviderError("Réponse VictoriaMetrics /series invalide")
+        return [item for item in data if isinstance(item, dict)]
+
+    def list_home_assistant_entities(
+        self,
+        start: float | int | None = 0,
+        end: float | int | None = None,
+    ) -> dict[str, Any]:
+        """Inventory HA-labelled entities present in VictoriaMetrics history.
+
+        Entities are deduplicated by (domain, entity_id). Metric names are kept
+        only as diagnostics so a future explicit cleanup flow can show exactly
+        which series would be affected.
+        """
+        import time
+
+        if end is None:
+            end = time.time()
+        series = self.series_metadata(
+            '{db="homeassistant",entity_id!=""}',
+            start=start,
+            end=end,
+        )
+        grouped: dict[tuple[str, str], dict[str, Any]] = {}
+        indeterminate: list[dict[str, Any]] = []
+        for labels in series:
+            entity_id = str(labels.get("entity_id") or "").strip()
+            domain = str(labels.get("domain") or "").strip()
+            metric_name = str(labels.get("__name__") or "").strip()
+            if not entity_id:
+                indeterminate.append({
+                    "domain": domain or None,
+                    "entity_id": None,
+                    "metric": metric_name or None,
+                    "labels": {k: v for k, v in labels.items() if k in {"db", "domain", "entity_id", "__name__"}},
+                    "reason": "missing_entity_id",
+                })
+                continue
+
+            # Some import pipelines may store a complete entity_id while others
+            # split domain and object_id. Normalize both forms conservatively.
+            object_id = entity_id
+            if "." in entity_id:
+                embedded_domain, embedded_object = entity_id.split(".", 1)
+                if not domain:
+                    domain = embedded_domain
+                if domain == embedded_domain:
+                    object_id = embedded_object
+
+            key = (domain, object_id)
+            row = grouped.setdefault(key, {
+                "domain": domain or None,
+                "entity_id": object_id,
+                "series_count": 0,
+                "metrics": set(),
+            })
+            row["series_count"] += 1
+            if metric_name:
+                row["metrics"].add(metric_name)
+
+        entities = []
+        for row in grouped.values():
+            entities.append({
+                **{k: v for k, v in row.items() if k != "metrics"},
+                "metrics": sorted(row["metrics"]),
+            })
+        entities.sort(key=lambda item: (str(item.get("domain") or ""), str(item.get("entity_id") or "")))
+        return {
+            "entities": entities,
+            "indeterminate_series": indeterminate,
+            "series_count": len(series),
+            "start": start,
+            "end": end,
+        }
 
     def health_check(self) -> ProviderStatus:
         if not self.configured:
@@ -433,8 +527,8 @@ class VictoriaMetricsProvider(DataProvider):
             "max_rows_per_line": 5000,
         }
         request = urllib.request.Request(
-            f"{self.base_url}/api/v1/export?{urllib.parse.urlencode(params)}",
-            headers={"Accept": "application/stream+json", "User-Agent": "HA-Reporting/0.2.0-rc.2"},
+            f"{self.base_url}/api/v1/export?{urllib.parse.urlencode(params, doseq=True)}",
+            headers={"Accept": "application/stream+json", "User-Agent": "HA-Reporting/0.2.0-rc.3"},
         )
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:

@@ -677,45 +677,73 @@ def _current_source_relationships(rows: list[dict[str, Any]]) -> list[dict[str, 
 
 
 def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
-    """Build a lossless, self-describing AI context.
+    """Build the RC3 deterministic fact-ledger AI context.
 
-    0.2.0-rc.2 keeps the self-describing records and deterministic
-    cross-source relationships for analyses that otherwise require the model to
-    infer which forecast and measured sources belong together. Each source still
-    carries its readable source name and named statistics. No current or
-    comparison source is omitted, including partial sources. Raw samples and
-    provider traces remain outside the AI contract because they are not report
-    statistics.
+    Repeated source/comparison metadata is normalized into registries. Each fact
+    is atomic and contains one named statistic only. Compact field aliases keep
+    the lossless ledger small enough for local models without returning to the
+    ambiguous multi-value positional rows used by older contexts.
     """
     context: dict[str, Any] = {
-        "schema": "ha-reporting-ai-context-v8",
+        "schema": "ha-reporting-ai-context-v9",
         "lossless": True,
+        "legend": {
+            "source": {"i":"id","n":"name","m":"metric","u":"unit","cat":"category","cov":"coverage_pct","den":"density_pct","st":"status","w":"warnings","rv":"runtime_verified"},
+            "comparison_set": {"i":"id","tg":"target","tp":"target_period","s":"source_id","st":"status","p":"policy","bc":"base_coverage_pct","rc":"reference_coverage_pct","bz":"base_sparse_zero_uncertain","rz":"reference_sparse_zero_uncertain","br":"base_reconstructed","rr":"reference_reconstructed","r":"reasons"},
+            "fact": {"i":"id","q":"scope(current|comparison)","s":"source_id","c":"comparison_id","k":"stat","v":"value","b":"base","r":"reference","d":"gap","p":"gap_pct","t":"trend_direction","pr":"gap_pct_reason"},
+        },
         "semantics": {
-            "period_delta": "change during the report period",
-            "counter_end": "cumulative counter reading at period end; never a period delta",
-            "integrated_energy_kwh": "energy obtained by integrating the power source over the report period",
-            "max": "maximum",
-            "p95": "95th percentile",
-            "mean": "time-weighted mean for power when available",
-            "coverage_pct": "period coverage",
-            "density_pct": "sampling density when applicable",
-            "coverage_quality": ">=95% representative; 80-95% partial but usable cautiously; <80% limited",
-            "near_zero_reference": "relative percentages are intentionally suppressed when the reference is too close to zero",
-            "limited_comparison": "relative percentages are suppressed for limited comparisons; use absolute gaps only",
-            "trend_direction": "authoritative increase/decrease/unchanged direction; only emitted for validated full-period comparisons",
-            "comparison_record": "each comparisons record is an atomic same-source N/N-x fact set; never mix fields between id values",
-            "gap_pct": "an explicit relative percentage only when present; an absolute gap is never a percentage",
+            "fact": "atomic authoritative statement; never combine facts to create a new comparison",
+            "period_delta": "change during report period",
+            "counter_end": "cumulative reading at period end; never period consumption",
+            "integrated_energy_kwh": "energy integrated from the same power source over the report period",
+            "coverage_quality": ">=95 representative; 80-95 partial/cautious; <80 limited",
+            "relationship": "only allowed cross-source comparison",
+            "forecast_peak": "max gap is context only; it never proves overload, calibration error or a fault",
         },
-        "report": {
-            "name": (result.get("report") or {}).get("name"),
-            "period": (result.get("resolved_period") or {}).get("label"),
-            "timezone": (result.get("resolved_period") or {}).get("timezone"),
-        },
+        "report": [(result.get("report") or {}).get("name"), (result.get("resolved_period") or {}).get("label"), (result.get("resolved_period") or {}).get("timezone")],
         "summary": result.get("summary") or {},
-        "current": [],
-        "comparisons": [],
+        "sources": [],
+        "comparison_sets": [],
+        "facts": [],
         "relationships": [],
+        "counts": {"current_sources": 0, "comparison_sources": 0},
     }
+
+    fact_seq = 0
+    source_by_key: dict[tuple[str, str, str], str] = {}
+    source_rows_by_id: dict[str, dict[str, Any]] = {}
+
+    def ensure_source(source_path: str, metric: Any, unit: Any, **metadata: Any) -> str:
+        key = (str(source_path or ""), str(metric or ""), str(unit or ""))
+        source_id = source_by_key.get(key)
+        aliases = {"category":"cat","coverage_pct":"cov","density_pct":"den","status":"st","warnings":"w","runtime_verified":"rv"}
+        if source_id is None:
+            source_id = f"S{len(context['sources']) + 1}"
+            source_by_key[key] = source_id
+            row: dict[str, Any] = {"i": source_id, "n": source_path, "m": metric, "u": unit}
+            for key_name, value in metadata.items():
+                if value is not None and value != []:
+                    row[aliases.get(key_name, key_name)] = value
+            context["sources"].append(row)
+            source_rows_by_id[source_id] = row
+        else:
+            row = source_rows_by_id[source_id]
+            for key_name, value in metadata.items():
+                alias = aliases.get(key_name, key_name)
+                if value is not None and value != [] and alias not in row:
+                    row[alias] = value
+        return source_id
+
+    def add_fact(**payload: Any) -> None:
+        nonlocal fact_seq
+        fact_seq += 1
+        aliases = {"scope":"q","source_id":"s","comparison_id":"c","stat":"k","value":"v","base":"b","reference":"r","gap":"d","gap_pct":"p","trend_direction":"t","gap_pct_reason":"pr"}
+        row: dict[str, Any] = {"i": f"F{fact_seq}"}
+        for key, value in payload.items():
+            if value is not None:
+                row[aliases.get(key, key)] = value
+        context["facts"].append(row)
 
     for catalog in result.get("catalogs") or []:
         catalog_name = catalog.get("name")
@@ -725,67 +753,40 @@ def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
             category = info.get("category")
             device_rows: list[dict[str, Any]] = []
             for source in device.get("sources") or []:
+                context["counts"]["current_sources"] += 1
                 analysis = source.get("analysis") or {}
                 stats = analysis.get("statistics") or {}
                 quality = analysis.get("quality") or {}
                 validation = analysis.get("validation") or {}
                 metric = source.get("metric")
-                values: dict[str, Any] = {}
+                source_name = source.get("sensor_key") or source.get("entity_id")
+                source_path = "/".join(str(part) for part in (catalog_name, device_name, source_name) if part not in (None, ""))
+                coverage = quality.get("period_coverage_percent")
+                density = quality.get("sample_density_percent") if quality.get("density_applicable") else None
+                source_id = ensure_source(source_path, metric, source.get("unit"), category=category, coverage_pct=coverage, density_pct=density,
+                                          status=source.get("status") if source.get("status") != "ok" else None,
+                                          warnings=(validation.get("warnings") or []) or None,
+                                          runtime_verified=True if source.get("verification") else None)
 
+                values: dict[str, Any]
                 if metric == "power":
-                    values = {
-                        "max": _stat_value(stats, "max"),
-                        "p95": stats.get("p95"),
-                        "mean": stats.get("mean"),
-                    }
+                    values = {"max": _stat_value(stats, "max"), "p95": stats.get("p95"), "mean": stats.get("mean")}
                     if source.get("derive_energy") and stats.get("integrated_energy_kwh") is not None:
                         values["integrated_energy_kwh"] = stats.get("integrated_energy_kwh")
                 elif metric in {"temperature", "humidity", "voltage", "current", "energy_measurement"}:
-                    values = {
-                        "first": _stat_value(stats, "first"),
-                        "min": _stat_value(stats, "min"),
-                        "mean": stats.get("mean"),
-                        "max": _stat_value(stats, "max"),
-                        "last": _stat_value(stats, "last"),
-                    }
+                    values = {"first": _stat_value(stats, "first"), "min": _stat_value(stats, "min"), "mean": stats.get("mean"), "max": _stat_value(stats, "max"), "last": _stat_value(stats, "last")}
                 elif metric in {"energy_total", "runtime", "cycles"}:
-                    values = {
-                        "period_delta": stats.get("delta"),
-                        "counter_end": _stat_value(stats, "last"),
-                    }
+                    values = {"period_delta": stats.get("delta"), "counter_end": _stat_value(stats, "last")}
                     if int(stats.get("resets_detected", 0) or 0) > 0:
                         values["resets_detected"] = int(stats.get("resets_detected", 0) or 0)
                 else:
-                    values = {
-                        "first": _stat_value(stats, "first"),
-                        "last": _stat_value(stats, "last"),
-                        "mean": stats.get("mean"),
-                    }
+                    values = {"first": _stat_value(stats, "first"), "last": _stat_value(stats, "last"), "mean": stats.get("mean")}
 
-                source_name = source.get("sensor_key") or source.get("entity_id")
-                source_path = "/".join(
-                    str(part) for part in (catalog_name, device_name, source_name) if part not in (None, "")
-                )
-                row: dict[str, Any] = {
-                    "source": source_path,
-                    "metric": metric,
-                    "unit": source.get("unit"),
-                    "values": values,
-                    "coverage_pct": quality.get("period_coverage_percent"),
-                }
-                if quality.get("density_applicable"):
-                    row["density_pct"] = quality.get("sample_density_percent")
-                status = source.get("status")
-                if status and status != "ok":
-                    row["status"] = status
-                if source.get("verification"):
-                    row["runtime_verified"] = True
-                warnings = validation.get("warnings") or []
-                if warnings:
-                    row["warnings"] = warnings
-                context["current"].append(row)
-                device_rows.append(row)
+                for stat, value in values.items():
+                    if value is not None:
+                        add_fact(scope="current", source_id=source_id, stat=stat, value=value)
 
+                device_rows.append({"source": source_path, "source_id": source_id, "metric": metric, "unit": source.get("unit"), "values": values, "coverage_pct": coverage})
             context["relationships"].extend(_current_source_relationships(device_rows))
 
     comparisons = result.get("comparisons") or {}
@@ -797,62 +798,61 @@ def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
             for device in catalog.get("devices") or []:
                 device_name = device.get("name")
                 for source in device.get("sources") or []:
+                    context["counts"]["comparison_sources"] += 1
                     interpretation = _comparison_interpretation(source)
                     base_quality = source.get("base_quality") or {}
                     reference_quality = source.get("reference_quality") or {}
-                    values: dict[str, Any] = {}
+                    source_name = source.get("sensor_key") or source.get("entity_id")
+                    source_path = "/".join(str(part) for part in (catalog_name, device_name, source_name) if part not in (None, ""))
+                    source_id = ensure_source(source_path, source.get("metric"), source.get("unit"))
+                    comparison_id = f"C{len(context['comparison_sets']) + 1}"
+                    comparison_status = source.get("comparison_status")
+                    comparison_set = {
+                        "i": comparison_id, "tg": target_label, "tp": target_period, "s": source_id,
+                        "st": comparison_status if comparison_status != "comparable" else None,
+                        "p": interpretation.get("wording_policy"),
+                        "bc": base_quality.get("period_coverage_percent"), "rc": reference_quality.get("period_coverage_percent"),
+                        "bz": True if interpretation.get("base_sparse_zero_uncertain") else None,
+                        "rz": True if interpretation.get("reference_sparse_zero_uncertain") else None,
+                        "br": True if interpretation.get("base_reconstructed") else None,
+                        "rr": True if interpretation.get("reference_reconstructed") else None,
+                        "r": (source.get("reasons") or []) or None,
+                    }
+                    context["comparison_sets"].append({k: v for k, v in comparison_set.items() if v is not None})
                     for item in source.get("values") or []:
                         if not isinstance(item, dict):
                             continue
-                        stat = str(item.get("key") or item.get("label") or "value")
-                        stat_values: dict[str, Any] = {
-                            "base": item.get("base"),
-                            "reference": item.get("reference"),
-                            "gap": item.get("absolute_change"),
+                        kwargs: dict[str, Any] = {
+                            "scope":"comparison", "comparison_id":comparison_id,
+                            "stat":str(item.get("key") or item.get("label") or "value"),
+                            "base":item.get("base"), "reference":item.get("reference"), "gap":item.get("absolute_change"),
                         }
                         if interpretation.get("wording_policy") == "full_period_change_allowed":
-                            stat_values["trend_direction"] = _trend_from_gap(item.get("absolute_change"))
-                        if item.get("relative_change_percent") is not None:
-                            stat_values["gap_pct"] = item.get("relative_change_percent")
-                            stat_values["gap_pct_applicable"] = bool(item.get("relative_change_applicable"))
+                            kwargs["trend_direction"] = _trend_from_gap(item.get("absolute_change"))
+                        if item.get("relative_change_percent") is not None and item.get("relative_change_applicable"):
+                            kwargs["gap_pct"] = item.get("relative_change_percent")
                         if item.get("relative_change_reason"):
-                            stat_values["gap_pct_reason"] = item.get("relative_change_reason")
-                        values[stat] = stat_values
+                            kwargs["gap_pct_reason"] = item.get("relative_change_reason")
+                        add_fact(**kwargs)
 
-                    source_name = source.get("sensor_key") or source.get("entity_id")
-                    source_path = "/".join(
-                        str(part) for part in (catalog_name, device_name, source_name) if part not in (None, "")
-                    )
-                    row = {
-                        "id": len(context["comparisons"]) + 1,
-                        "target": target_label,
-                        "target_period": target_period,
-                        "source": source_path,
-                        "metric": source.get("metric"),
-                        "unit": source.get("unit"),
-                        "base_coverage_pct": base_quality.get("period_coverage_percent"),
-                        "reference_coverage_pct": reference_quality.get("period_coverage_percent"),
-                        "policy": interpretation.get("wording_policy"),
-                        "values": values,
-                    }
-                    comparison_status = source.get("comparison_status")
-                    if comparison_status and comparison_status != "comparable":
-                        row["status"] = comparison_status
-                    if interpretation.get("base_sparse_zero_uncertain"):
-                        row["base_sparse_zero_uncertain"] = True
-                    if interpretation.get("reference_sparse_zero_uncertain"):
-                        row["reference_sparse_zero_uncertain"] = True
-                    if interpretation.get("base_reconstructed"):
-                        row["base_reconstructed"] = True
-                    if interpretation.get("reference_reconstructed"):
-                        row["reference_reconstructed"] = True
-                    reasons = source.get("reasons") or []
-                    if reasons:
-                        row["reasons"] = reasons
-                    context["comparisons"].append(row)
+    for index, relationship in enumerate(context["relationships"], start=1):
+        relationship["id"] = f"R{index}"
+        forecast_name = relationship.get("forecast_source")
+        actual_name = relationship.get("actual_source")
+        if forecast_name:
+            for row in context["sources"]:
+                if row.get("n") == forecast_name:
+                    relationship["forecast_source_id"] = row.get("i")
+                    break
+        if actual_name:
+            for row in context["sources"]:
+                if row.get("n") == actual_name:
+                    relationship["actual_source_id"] = row.get("i")
+                    break
+        if relationship.get("kind") == "power_forecast_vs_actual":
+            relationship["max_interpretation"] = "context_only_not_a_fault_indicator"
 
     return context
-
 
 def _encoded_context(context: dict[str, Any]) -> str:
     return json.dumps(context, ensure_ascii=False, separators=(",", ":"))
@@ -864,10 +864,7 @@ def build_budgeted_ai_context(
 ) -> tuple[str, dict[str, Any]]:
     """Return the complete semantic AI context using self-describing normalization.
 
-    0.2.0-rc.2 keeps every current and comparison source, including partial and limited entries,
-    and adds deterministic cross-source relationships when pairing is unambiguous.
-    Named statistics replace positional value arrays so small local models do not
-    need to decode max/p95/mean or counter semantics. The hard limit is enforced
+    0.2.0-rc.3 preserves every semantic current/comparison value as an atomic fact and adds deterministic cross-source relationships only when pairing is unambiguous. The language model no longer receives free-form source records that invite cross-source recombination. The hard limit is enforced
     by the caller; when the lossless context cannot fit, analysis fails explicitly
     instead of silently omitting data.
     """
@@ -885,8 +882,8 @@ def build_budgeted_ai_context(
         "full_compact_characters": len(context_json),
         "omitted_current_sources": 0,
         "omitted_comparison_sources": 0,
-        "current_sources": len(context.get("current") or []),
-        "comparison_sources": len(context.get("comparisons") or []),
+        "current_sources": (context.get("counts") or {}).get("current_sources", 0),
+        "comparison_sources": (context.get("counts") or {}).get("comparison_sources", 0),
         "relationships": len(context.get("relationships") or []),
     }
     return context_json, metadata
@@ -992,18 +989,18 @@ Mandatory rules for N/N-x comparisons:
 - Sampling density is a diagnostic, not period coverage. Low event-driven density alone does not mean the full period is missing; treat it as a reliability warning only when the comparison status/policy says so.
 - Keep reconstruction and coverage strictly separate: `base_reconstructed=true` means N was reconstructed after one or more resets; `reference_coverage_pct` independently describes N-x reference coverage. Never merge these concepts into wording such as “partial reconstruction”.
 - If `base_reconstructed` is true, mention reconstruction only if useful to reliability. If absent/false, do not discuss resets or reconstruction. If `reference_coverage_pct` is below 80, separately state that the historical reference is partial and include its coverage. Do not claim the reference is reconstructed unless `reference_reconstructed` is true.
-- `ha-reporting-ai-context-v8` is lossless and self-describing. Every current/comparison source is a complete named record; no source is omitted, including partially covered sources. Never swap values between records or reinterpret named fields.
-- For power, `max`, `p95`, and `mean` are authoritative named fields. Never treat `max` as `mean` or `mean` as `max`. `integrated_energy_kwh`, when present, is the period energy derived from that exact power source.
-- For cumulative counters, `period_delta` is the period change/consumption. `counter_end` is only the cumulative meter reading at the end and must NEVER be presented as a period delta or period consumption.
-- `energy_measurement` is a gauge-like energy measurement, not a cumulative counter. Do not infer a consumption delta from it unless an explicit comparison value says so.
-- Preserve source semantics: a source whose name contains `forecast` / `prevision` is a forecast, not a measured value. Do not call forecast power measured power.
-- `relationships` contains deterministic cross-source comparisons already calculated by HA Reporting. Treat these values as authoritative and do not recalculate them.
-- Each record in `comparisons` has a `id` and is ATOMIC. It compares exactly one `source` with that same source in the reference period. Never combine the source, statistic, direction, percentage, coverage or gap from different `id` records.
-- A N/N-x sentence must stay inside one `id`. Never write wording such as “between device A and device B” from two separate comparison records; only an explicit `relationship` may pair two current-period sources.
-- Match the wording to the exact statistic key inside `values`: a sentence about an average/mean may use only `values.mean`; minimum, maximum, P95, consumption/delta and other statistics must not be substituted for one another.
-- A percentage may be stated only when the SAME statistic object explicitly contains `gap_pct`. An absolute gap such as 0.25 kWh is 0.25 kWh, never 25%, 250%, or any other inferred percentage. If `gap_pct` is absent, state no relative percentage.
-- Coverage values belong only to the same `id` or `relationship` that contains them. Never transplant coverage from a neighbouring comparison/source.
-- For a validated full-period N/N-x statistic, `trend_direction` is authoritative: `increase` can never be described as a decrease, and `decrease` can never be described as an increase. Do not infer the opposite direction from prose or percentages.
+- `ha-reporting-ai-context-v9` is a deterministic fact ledger. Every quantitative statement is an atomic item in `facts` with its own `id`, `source`, `metric`, `stat`, unit and quality metadata. All semantic current-period and N/N-x values are preserved, including partial/limited data.
+- Every quantitative sentence you write MUST be supported by exactly one `facts` item or one explicit `relationship`. Never merge two facts to manufacture a new comparison, device pair, percentage, direction, coverage or diagnosis.
+- Use the exact `source` from the supporting fact. Never invent a device or subsystem name (for example air conditioning) that is not present in a fact or relationship.
+- Respect `metric` and `unit`: temperature in °C is temperature, never consumption or power; energy in kWh is energy; power in W is power. Never change the physical quantity while paraphrasing.
+- Respect `stat`: `mean`, `max`, `p95`, `min`, `period_delta`, `counter_end` and `integrated_energy_kwh` are distinct. Never substitute one for another.
+- For cumulative counters, `period_delta` is the period change/consumption. `counter_end` is only the cumulative meter reading at the end and must NEVER be presented as period consumption.
+- A percentage may be stated only when the SAME fact or relationship explicitly contains `gap_pct`, `relative_gap_pct`, or `mean_gap_pct`. An absolute gap such as 0.25 kWh is 0.25 kWh, never 25%, 250%, or another inferred percentage.
+- For N/N-x facts, `trend_direction` is authoritative whenever present: `increase` can never be described as a decrease, and `decrease` can never be described as an increase. If the fact policy forbids a full-period trend, use descriptive gap wording only.
+- Coverage values belong only to the same fact or relationship. Never transplant coverage from a neighbouring fact.
+- Preserve source semantics: a source whose name contains `forecast` / `prevision` is a forecast, not a measured value.
+- `relationships` contains the only permitted cross-source comparisons and is calculated deterministically by HA Reporting. Treat it as authoritative and never recalculate or extend it.
+- For `power_forecast_vs_actual`, max/P95 differences are secondary context only. A large measured peak compared with a forecast peak does NOT by itself prove overload, bad calibration, sensor placement problems or a fault. Do not recommend checking calibration or overload solely from that peak gap unless a supplied warning/fact explicitly supports it.
 - Cross-source comparisons are allowed ONLY through `relationships`. Never compare two current-period totals, means, peaks or energies on your own when HA Reporting did not emit a relationship for them.
 - If a relationship has `comparison_policy=coverage_insufficient_for_period_gap` or `full_period_comparison_supported=false`, do not calculate, state, or imply an absolute/relative gap or a performance direction between its two period totals. You may report each value separately together with its coverage.
 - When an `energy_forecast_vs_actual` relationship is present, the SUMMARY must report actual period energy, integrated forecast energy, `absolute_gap_kwh`, and `relative_gap_pct` when available. This energy comparison has priority over isolated peak-power differences.
@@ -1047,18 +1044,18 @@ Règles impératives pour les comparaisons N/N-x :
 - La densité d'échantillonnage est un diagnostic, pas la couverture de période. Une faible densité événementielle ne signifie pas à elle seule que la période est absente ; traite-la comme une limite de fiabilité uniquement lorsque le statut/policy de comparaison l'indique.
 - Distingue strictement reconstruction et couverture : `base_reconstructed=true` signifie que la valeur N a été reconstruite après un ou plusieurs resets ; `reference_coverage_pct` décrit séparément la couverture de la référence N-x. Ne fusionne jamais ces deux notions dans une expression comme « reconstruction partielle ».
 - Si `base_reconstructed` vaut true, tu peux signaler la reconstruction uniquement si elle est utile à la fiabilité de l'analyse. Si elle est absente/false, ne parle jamais de reset ou de reconstruction. Si `reference_coverage_pct` est inférieur à 80, dis séparément « la référence historique est partielle » avec sa couverture. N'affirme pas que la référence est reconstruite sauf si `reference_reconstructed` vaut true.
-- `ha-reporting-ai-context-v8` est une représentation sans omission et auto-descriptive. Chaque source courante/comparée est un enregistrement complet avec des champs nommés ; aucune source n'est retirée, y compris lorsqu'elle ne couvre qu'une partie de la période. N'échange jamais des valeurs entre deux enregistrements et ne réinterprète pas les noms de champs.
-- Pour une puissance, `max`, `p95` et `mean` sont des champs nommés faisant foi. Ne transforme jamais `max` en moyenne ni `mean` en maximum. `integrated_energy_kwh`, lorsqu'il existe, est l'énergie de la période dérivée exactement de cette source de puissance.
-- Pour un compteur cumulatif, `period_delta` est la variation/consommation de la période. `counter_end` est uniquement l'index cumulé en fin de période et ne doit JAMAIS être présenté comme un delta ou une consommation de période.
-- `energy_measurement` est une mesure d'énergie de type jauge, pas un compteur cumulatif. N'en déduis pas une consommation par différence sauf si une comparaison explicite le fournit.
-- Respecte la sémantique du nom de source : une source contenant `forecast` / `prevision` est une prévision, pas une mesure réelle. Ne qualifie pas une puissance prévisionnelle de puissance mesurée.
-- `relationships` contient des comparaisons entre sources calculées de manière déterministe par HA Reporting. Considère ces valeurs comme faisant foi et ne les recalcule pas.
-- Chaque enregistrement de `comparisons` possède un `id` et est ATOMIQUE. Il compare exactement une `source` avec cette même source dans la période de référence. Ne mélange jamais le sujet, la statistique, la direction, le pourcentage, la couverture ou l'écart provenant de `id` différents.
-- Une phrase N/N-x doit rester à l'intérieur d'un seul `id`. N'écris jamais « entre l'appareil A et l'appareil B » à partir de deux enregistrements de comparaison distincts ; seule une `relationship` explicite peut associer deux sources de la période courante.
-- Fais correspondre le texte à la clé statistique exacte dans `values` : une phrase sur une moyenne doit utiliser uniquement `values.mean`; minimum, maximum, P95, consommation/delta et autres statistiques ne doivent jamais être substitués les uns aux autres.
-- Un pourcentage ne peut être annoncé que si le MÊME objet statistique contient explicitement `gap_pct`. Un écart absolu tel que 0,25 kWh signifie 0,25 kWh, jamais 25 %, 250 % ou tout autre pourcentage déduit. Si `gap_pct` est absent, n'annonce aucun pourcentage relatif.
-- Une couverture appartient uniquement au même `id` ou à la même `relationship` qui la contient. Ne récupère jamais la couverture d'une comparaison/source voisine.
-- Pour une statistique N/N-x validée sur la période complète, `trend_direction` fait foi : `increase` ne doit JAMAIS être décrit comme une baisse et `decrease` ne doit JAMAIS être décrit comme une hausse. Ne déduis jamais la direction opposée à partir du texte ou d'un pourcentage.
+- `ha-reporting-ai-context-v9` est un registre déterministe de faits. Chaque affirmation quantitative est un élément atomique de `facts` avec son propre `id`, sa `source`, sa `metric`, sa `stat`, son unité et ses métadonnées de qualité. Toutes les valeurs sémantiques courantes et N/N-x sont conservées, y compris les données partielles/limitées.
+- Chaque phrase quantitative que tu écris DOIT être étayée par exactement un élément de `facts` ou une `relationship` explicite. Ne fusionne jamais deux faits pour fabriquer une nouvelle comparaison, paire d'appareils, couverture, direction, pourcentage ou diagnostic.
+- Utilise exactement la `source` du fait qui étaye la phrase. N'invente jamais un appareil ou sous-système (par exemple une climatisation) absent des faits/relations.
+- Respecte `metric` et l'unité : une température en °C reste une température, jamais une consommation ou une puissance ; une énergie en kWh reste une énergie ; une puissance en W reste une puissance. Ne change jamais de grandeur physique en reformulant.
+- Respecte `stat` : `mean`, `max`, `p95`, `min`, `period_delta`, `counter_end` et `integrated_energy_kwh` sont distincts. Ne substitue jamais une statistique à une autre.
+- Pour un compteur cumulatif, `period_delta` est la variation/consommation de la période. `counter_end` est uniquement l'index cumulé en fin de période et ne doit JAMAIS être présenté comme consommation de période.
+- Un pourcentage ne peut être annoncé que si le MÊME fait ou la MÊME relation contient explicitement `gap_pct`, `relative_gap_pct` ou `mean_gap_pct`. Un écart absolu de 0,25 kWh reste 0,25 kWh, jamais 25 %, 250 % ou un pourcentage déduit.
+- Pour les faits N/N-x, `trend_direction` fait foi lorsqu'il existe : `increase` ne doit JAMAIS être décrit comme une baisse et `decrease` ne doit JAMAIS être décrit comme une hausse. Si la policy interdit une tendance de période complète, utilise uniquement une formulation descriptive de l'écart.
+- Une couverture appartient uniquement au même fait ou à la même relation. Ne récupère jamais la couverture d'un fait voisin.
+- Respecte la sémantique de la source : une source contenant `forecast` / `prevision` est une prévision, pas une mesure réelle.
+- `relationships` contient les seules comparaisons autorisées entre deux sources et est calculé de manière déterministe par HA Reporting. Considère ces valeurs comme faisant foi ; ne les recalcule pas et ne les étends pas.
+- Pour `power_forecast_vs_actual`, les écarts de max/P95 ne sont qu'un contexte secondaire. Un pic mesuré bien supérieur au pic prévu ne prouve à lui seul ni surcharge, ni mauvais calibrage, ni mauvais positionnement, ni panne. Ne recommande pas de vérifier calibrage/surcharge uniquement à partir de cet écart de pic sauf si un avertissement/fait fourni l'étaye explicitement.
 - Les comparaisons entre deux sources courantes sont autorisées UNIQUEMENT via `relationships`. Ne compare jamais de toi-même deux totaux, moyennes, pics ou énergies de la période courante si HA Reporting n'a pas émis de relation correspondante.
 - Si une relation contient `comparison_policy=coverage_insufficient_for_period_gap` ou `full_period_comparison_supported=false`, ne calcule, n'annonce et n'implique aucun écart absolu/relatif ni aucune direction de performance entre les deux totaux de période. Tu peux mentionner chaque valeur séparément avec sa couverture.
 - Lorsqu'une relation `energy_forecast_vs_actual` existe, la SYNTHÈSE doit indiquer l'énergie réelle de la période, l'énergie prévisionnelle intégrée, `absolute_gap_kwh` et `relative_gap_pct` lorsqu'ils sont disponibles. Cette comparaison énergétique est prioritaire sur les écarts de pics de puissance isolés.

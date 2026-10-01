@@ -685,7 +685,7 @@ def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
     ambiguous multi-value positional rows used by older contexts.
     """
     context: dict[str, Any] = {
-        "schema": "ha-reporting-ai-context-v9",
+        "schema": "ha-reporting-ai-context-v10",
         "lossless": True,
         "legend": {
             "source": {"i":"id","n":"name","m":"metric","u":"unit","cat":"category","cov":"coverage_pct","den":"density_pct","st":"status","w":"warnings","rv":"runtime_verified"},
@@ -707,6 +707,7 @@ def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
         "comparison_sets": [],
         "facts": [],
         "relationships": [],
+        "selection_policy": {"protocol":"id_only_v1","summary_prefixes":["F","R"],"attention_prefixes":["F","C","S","R"],"recommendation_actions":["collect_more_data","monitor_forecast","monitor_source","verify_reconstructed_counter"]},
         "counts": {"current_sources": 0, "comparison_sources": 0},
     }
 
@@ -852,7 +853,481 @@ def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
         if relationship.get("kind") == "power_forecast_vs_actual":
             relationship["max_interpretation"] = "context_only_not_a_fault_indicator"
 
+    _populate_selection_policy(context)
     return context
+
+
+
+def _populate_selection_policy(context: dict[str, Any]) -> None:
+    """Declare the compact RC4 id-only selection protocol.
+
+    Allowed IDs are derived deterministically at validation time instead of being
+    serialized as long lists. This keeps large reports lossless and under the
+    context budget while preserving every fact and comparison.
+    """
+    context["selection_policy"] = {
+        "protocol": "id_only_v1",
+        "summary_prefixes": ["F", "R"],
+        "attention_prefixes": ["F", "C", "S", "R"],
+        "recommendation_actions": [
+            "collect_more_data",
+            "monitor_forecast",
+            "monitor_source",
+            "verify_reconstructed_counter",
+        ],
+    }
+
+
+def _allowed_selection_ids(context: dict[str, Any]) -> tuple[set[str], set[str], set[str]]:
+    """Return deterministic allowed ID sets without serializing them into context."""
+    sources = {row.get("i"): row for row in context.get("sources") or []}
+    comparisons = {row.get("i"): row for row in context.get("comparison_sets") or []}
+    summary: set[str] = set()
+    attention: set[str] = set()
+
+    for relationship in context.get("relationships") or []:
+        rid = relationship.get("id")
+        if not rid:
+            continue
+        summary.add(str(rid))
+        if not relationship.get("full_period_comparison_supported", True):
+            attention.add(str(rid))
+
+    for fact in context.get("facts") or []:
+        fid = fact.get("i")
+        if not fid:
+            continue
+        fid = str(fid)
+        scope = fact.get("q")
+        stat = fact.get("k")
+        source = sources.get(fact.get("s")) or {}
+        metric = source.get("m")
+        comparison = comparisons.get(fact.get("c")) or {}
+        if scope == "current":
+            if stat in {"mean", "period_delta", "integrated_energy_kwh"}:
+                summary.add(fid)
+            elif metric == "temperature" and stat in {"min", "max"}:
+                summary.add(fid)
+        elif scope == "comparison":
+            if stat in {"mean", "period_delta"}:
+                summary.add(fid)
+            if comparison.get("st") in {"partial", "limited", "reconstructed"}:
+                attention.add(fid)
+            elif fact.get("p") is not None:
+                try:
+                    if abs(float(fact.get("p"))) >= 20:
+                        attention.add(fid)
+                except (TypeError, ValueError):
+                    pass
+
+    for comparison in context.get("comparison_sets") or []:
+        cid = comparison.get("i")
+        if cid and (
+            comparison.get("st") in {"partial", "limited", "reconstructed", "unavailable"}
+            or comparison.get("r")
+            or comparison.get("bz")
+            or comparison.get("rz")
+            or comparison.get("br")
+            or comparison.get("rr")
+        ):
+            attention.add(str(cid))
+
+    for source in context.get("sources") or []:
+        sid = source.get("i")
+        coverage = source.get("cov")
+        if sid and (source.get("st") or source.get("w") or (isinstance(coverage, (int, float)) and coverage < 80)):
+            attention.add(str(sid))
+
+    return summary, attention, set(attention)
+
+
+def _selection_index(context: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for key in ("sources", "comparison_sets", "facts", "relationships"):
+        for row in context.get(key) or []:
+            rid = row.get("i") or row.get("id")
+            if rid:
+                out[str(rid)] = row
+    return out
+
+
+def _extract_json_object(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+        if text.lower().startswith("json"):
+            text = text[4:].lstrip()
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        pass
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            parsed = json.loads(text[start:end + 1])
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            return None
+    return None
+
+
+def _validate_selection(data: Any, context: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Validate an id-only AI selection. Any free-form prose is discarded."""
+    parsed = _extract_json_object(data) or {}
+    policy = context.get("selection_policy") or {}
+    summary_allowed, attention_allowed, evidence_allowed = _allowed_selection_ids(context)
+    actions_allowed = set(policy.get("recommendation_actions") or [])
+
+    def ids(key: str, allowed: set[str], limit: int) -> list[str]:
+        value = parsed.get(key)
+        if not isinstance(value, list):
+            return []
+        selected: list[str] = []
+        for item in value:
+            item = str(item)
+            if item in allowed and item not in selected:
+                selected.append(item)
+            if len(selected) >= limit:
+                break
+        return selected
+
+    recommendations: list[dict[str, str]] = []
+    raw_recommendations = parsed.get("recommendations")
+    if isinstance(raw_recommendations, list):
+        for item in raw_recommendations:
+            if not isinstance(item, dict):
+                continue
+            action = str(item.get("action") or "")
+            evidence = str(item.get("evidence") or "")
+            if action in actions_allowed and evidence in evidence_allowed:
+                pair = {"action": action, "evidence": evidence}
+                if pair not in recommendations:
+                    recommendations.append(pair)
+            if len(recommendations) >= 4:
+                break
+
+    selection = {
+        "summary": ids("summary", summary_allowed, 4),
+        "attention": ids("attention", attention_allowed, 5),
+        "recommendations": recommendations,
+    }
+    valid = bool(selection["summary"])
+    return selection, valid
+
+
+def _fallback_selection(context: dict[str, Any]) -> dict[str, Any]:
+    """Deterministic fallback if the model does not return valid JSON IDs."""
+    summary_set, attention_set, _ = _allowed_selection_ids(context)
+    index = _selection_index(context)
+    ordered_ids = list(index)
+    summary_allowed = [item for item in ordered_ids if item in summary_set]
+    attention_allowed = [item for item in ordered_ids if item in attention_set]
+
+    summary: list[str] = []
+    # Prefer validated energy and power forecast relationships for EMHASS-like reports.
+    for kind in ("energy_forecast_vs_actual", "power_forecast_vs_actual"):
+        for rid in summary_allowed:
+            row = index.get(rid) or {}
+            if row.get("kind") == kind and row.get("full_period_comparison_supported"):
+                summary.append(rid)
+                break
+    # Then choose representative comparison means/period totals, followed by current means.
+    for rid in summary_allowed:
+        if rid in summary:
+            continue
+        row = index.get(rid) or {}
+        if rid.startswith("F") and row.get("q") == "comparison" and row.get("k") in {"period_delta", "mean"}:
+            summary.append(rid)
+        if len(summary) >= 4:
+            break
+    for rid in summary_allowed:
+        if len(summary) >= 4:
+            break
+        if rid not in summary:
+            summary.append(rid)
+
+    attention = attention_allowed[:5]
+    recommendations: list[dict[str, str]] = []
+    for rid in attention[:4]:
+        row = index.get(rid) or {}
+        if rid.startswith("R"):
+            action = "monitor_forecast"
+        elif rid.startswith("C") and (row.get("br") or row.get("rr")):
+            action = "verify_reconstructed_counter"
+        elif rid.startswith("C") and row.get("st") in {"partial", "limited", "unavailable"}:
+            action = "collect_more_data"
+        else:
+            action = "monitor_source"
+        recommendations.append({"action": action, "evidence": rid})
+    return {"summary": summary[:4], "attention": attention, "recommendations": recommendations[:4]}
+
+
+def _source_label(source: dict[str, Any]) -> str:
+    path = str(source.get("n") or "source")
+    parts = [part for part in path.split("/") if part]
+    if len(parts) >= 3:
+        catalog, device, sensor = parts[-3], parts[-2], parts[-1]
+        if device and device != catalog:
+            return device
+        human = sensor.replace("_", " ")
+        if human.startswith("temp ") and human.endswith(" temperature"):
+            human = human[5:-12].strip()
+        elif human.startswith("temperature "):
+            human = human[12:].strip()
+        return human or device or catalog or "source"
+    if len(parts) >= 2:
+        return parts[-2]
+    return parts[-1] if parts else "source"
+
+
+def _fmt_number(value: Any, language: str = "fr", signed: bool = False) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    abs_number = abs(number)
+    decimals = 0 if abs_number >= 100 else (1 if abs_number >= 10 else 2)
+    text = f"{number:+.{decimals}f}" if signed else f"{number:.{decimals}f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    if language == "fr":
+        text = text.replace(".", ",")
+    return text
+
+
+def _stat_label(metric: str | None, stat: str | None, language: str) -> str:
+    fr = {
+        "mean": "moyenne", "max": "maximum", "min": "minimum", "p95": "P95",
+        "period_delta": "consommation de période" if metric == "energy_total" else "variation de période",
+        "integrated_energy_kwh": "énergie intégrée", "counter_end": "index de fin de compteur",
+        "resets_detected": "resets détectés", "first": "première valeur", "last": "dernière valeur",
+    }
+    en = {
+        "mean": "mean", "max": "maximum", "min": "minimum", "p95": "P95",
+        "period_delta": "period consumption" if metric == "energy_total" else "period change",
+        "integrated_energy_kwh": "integrated energy", "counter_end": "end meter reading",
+        "resets_detected": "detected resets", "first": "first value", "last": "last value",
+    }
+    return (en if language == "en" else fr).get(str(stat), str(stat or "value"))
+
+
+def _quality_suffix(comparison: dict[str, Any], language: str) -> str:
+    status = comparison.get("st") or "comparable"
+    bc = comparison.get("bc")
+    rc = comparison.get("rc")
+    if language == "en":
+        if status == "partial":
+            return f" The comparison is partial (coverage {bc if bc is not None else '?'}% / {rc if rc is not None else '?'}%)."
+        if status == "limited":
+            return f" The comparison is limited (coverage {bc if bc is not None else '?'}% / {rc if rc is not None else '?'}%)."
+        if status == "reconstructed":
+            return " The comparison uses a reconstructed counter after reset(s)."
+        return ""
+    if status == "partial":
+        return f" La comparaison est partielle (couverture {bc if bc is not None else '?'} % / {rc if rc is not None else '?'} %)."
+    if status == "limited":
+        return f" La comparaison est limitée (couverture {bc if bc is not None else '?'} % / {rc if rc is not None else '?'} %)."
+    if status == "reconstructed":
+        return " La comparaison utilise un compteur reconstruit après reset(s)."
+    return ""
+
+
+def _render_ledger_id(item_id: str, context: dict[str, Any], language: str, section: str) -> str | None:
+    index = _selection_index(context)
+    row = index.get(item_id)
+    if not row:
+        return None
+    sources = {item.get("i"): item for item in context.get("sources") or []}
+    comparisons = {item.get("i"): item for item in context.get("comparison_sets") or []}
+
+    if item_id.startswith("F"):
+        comparison = comparisons.get(row.get("c")) or {}
+        source = sources.get(row.get("s")) or sources.get(comparison.get("s")) or {}
+        label = _source_label(source)
+        metric = source.get("m")
+        unit = source.get("u") or ("kWh" if row.get("k") == "integrated_energy_kwh" else "")
+        stat = row.get("k")
+        stat_label = _stat_label(metric, stat, language)
+        if row.get("q") == "comparison":
+            base = _fmt_number(row.get("b"), language)
+            reference = _fmt_number(row.get("r"), language)
+            gap = _fmt_number(row.get("d"), language, signed=True)
+            pct = row.get("p")
+            pct_text = f" ({_fmt_number(pct, language, signed=True)} %)" if pct is not None else ""
+            if language == "en":
+                text = f"{label}: {stat_label} {base} {unit} versus {reference} {unit}; gap {gap} {unit}{pct_text}."
+            else:
+                text = f"{label} : {stat_label} {base} {unit} contre {reference} {unit} ; écart {gap} {unit}{pct_text}."
+            if comparison.get("st"):
+                text += _quality_suffix(comparison, language)
+            return text.replace("  ", " ").strip()
+        value = _fmt_number(row.get("v"), language)
+        if language == "en":
+            if metric == "temperature" and stat == "mean":
+                return f"The mean temperature for {label} is {value} {unit}."
+            if metric == "power" and stat == "mean":
+                return f"The mean power for {label} is {value} {unit}."
+            if metric == "energy_total" and stat == "period_delta":
+                return f"The period energy consumption for {label} is {value} {unit}."
+            return f"{label}: {stat_label} {value} {unit}.".replace("  ", " ")
+        if metric == "temperature" and stat == "mean":
+            return f"La température moyenne de {label} est de {value} {unit}."
+        if metric == "power" and stat == "mean":
+            return f"La puissance moyenne de {label} est de {value} {unit}."
+        if metric == "energy_total" and stat == "period_delta":
+            return f"La consommation d'énergie de {label} sur la période est de {value} {unit}."
+        return f"{label} : {stat_label} {value} {unit}.".replace("  ", " ")
+
+    if item_id.startswith("R"):
+        kind = row.get("kind")
+        supported = bool(row.get("full_period_comparison_supported"))
+        if kind == "energy_forecast_vs_actual":
+            forecast = _fmt_number(row.get("forecast_energy_kwh"), language)
+            actual = _fmt_number(row.get("actual_energy_kwh"), language)
+            fcov = _fmt_number(row.get("forecast_coverage_pct"), language)
+            acov = _fmt_number(row.get("actual_coverage_pct"), language)
+            if supported:
+                gap = _fmt_number(row.get("absolute_gap_kwh"), language, signed=True)
+                pct = _fmt_number(row.get("relative_gap_pct"), language, signed=True)
+                if language == "en":
+                    return f"Actual period energy is {actual} kWh versus {forecast} kWh forecast; gap {gap} kWh ({pct} %)."
+                return f"L'énergie réelle de la période est de {actual} kWh contre {forecast} kWh prévus ; écart {gap} kWh ({pct} %)."
+            if language == "en":
+                return f"Forecast integrated energy is {forecast} kWh ({fcov}% coverage) and actual energy is {actual} kWh ({acov}% coverage); coverage is insufficient for a full-period gap."
+            return f"L'énergie prévisionnelle intégrée est de {forecast} kWh (couverture {fcov} %) et l'énergie réelle de {actual} kWh (couverture {acov} %) ; la couverture est insuffisante pour calculer un écart de période complet."
+        if kind == "power_forecast_vs_actual":
+            forecast = _fmt_number(row.get("forecast_mean_w"), language)
+            actual = _fmt_number(row.get("actual_mean_w"), language)
+            if supported:
+                gap = _fmt_number(row.get("mean_gap_w"), language, signed=True)
+                pct = _fmt_number(row.get("mean_gap_pct"), language, signed=True)
+                if language == "en":
+                    return f"Mean measured power is {actual} W versus {forecast} W forecast; gap {gap} W ({pct} %)."
+                return f"La puissance moyenne mesurée est de {actual} W contre {forecast} W prévue ; écart {gap} W ({pct} %)."
+            fcov = _fmt_number(row.get("forecast_coverage_pct"), language)
+            acov = _fmt_number(row.get("actual_coverage_pct"), language)
+            if language == "en":
+                return f"Mean forecast power is {forecast} W ({fcov}% coverage) and measured power is {actual} W ({acov}% coverage); coverage is insufficient for a full-period gap."
+            return f"La puissance moyenne prévue est de {forecast} W (couverture {fcov} %) et la puissance moyenne mesurée de {actual} W (couverture {acov} %) ; la couverture est insuffisante pour un écart de période complet."
+
+    if item_id.startswith("C"):
+        source = sources.get(row.get("s")) or {}
+        label = _source_label(source)
+        status = row.get("st") or "comparable"
+        reasons = row.get("r") or []
+        reason = str(reasons[0]) if reasons else ""
+        if language == "en":
+            if status == "limited":
+                return f"{label}: comparison is limited. {reason}".strip()
+            if status == "partial":
+                return f"{label}: comparison is partial and should be interpreted cautiously. {reason}".strip()
+            if status == "reconstructed" or row.get("br") or row.get("rr"):
+                return f"{label}: the comparison includes a counter reconstructed after reset(s)."
+            return f"{label}: comparison quality requires attention. {reason}".strip()
+        if status == "limited":
+            return f"{label} : comparaison limitée. {reason}".strip()
+        if status == "partial":
+            return f"{label} : comparaison partielle à interpréter avec prudence. {reason}".strip()
+        if status == "reconstructed" or row.get("br") or row.get("rr"):
+            return f"{label} : la comparaison inclut un compteur reconstruit après reset(s)."
+        return f"{label} : la qualité de comparaison demande de la prudence. {reason}".strip()
+
+    if item_id.startswith("S"):
+        label = _source_label(row)
+        coverage = row.get("cov")
+        warnings = row.get("w") or []
+        if language == "en":
+            detail = f" Coverage: {_fmt_number(coverage, language)}%." if coverage is not None else ""
+            if warnings:
+                detail += f" Warning: {warnings[0]}"
+            return f"{label}: source quality requires attention.{detail}".strip()
+        detail = f" Couverture : {_fmt_number(coverage, language)} %." if coverage is not None else ""
+        if warnings:
+            detail += f" Avertissement : {warnings[0]}"
+        return f"{label} : la qualité de la source demande de la prudence.{detail}".strip()
+    return None
+
+
+def _render_recommendation(action: str, evidence: str, context: dict[str, Any], language: str) -> str:
+    index = _selection_index(context)
+    row = index.get(evidence) or {}
+    sources = {item.get("i"): item for item in context.get("sources") or []}
+    source = None
+    if evidence.startswith("F"):
+        source = sources.get(row.get("s"))
+    elif evidence.startswith("C"):
+        source = sources.get(row.get("s"))
+    elif evidence.startswith("S"):
+        source = row
+    elif evidence.startswith("R"):
+        source = sources.get(row.get("actual_source_id")) or sources.get(row.get("forecast_source_id"))
+    label = _source_label(source or {})
+
+    if language == "en":
+        texts = {
+            "collect_more_data": f"Continue collecting data for {label} before drawing stronger conclusions.",
+            "monitor_forecast": "Monitor forecast-versus-measured differences over several periods before concluding that there is a systematic bias.",
+            "monitor_source": f"Monitor {label} and reassess it when more representative data are available.",
+            "verify_reconstructed_counter": f"Keep monitoring {label} after counter reconstruction and check future resets.",
+        }
+    else:
+        texts = {
+            "collect_more_data": f"Poursuivre la collecte de données pour {label} avant de tirer des conclusions plus fortes.",
+            "monitor_forecast": "Surveiller l'écart entre prévision et mesure sur plusieurs périodes avant de conclure à un biais systématique.",
+            "monitor_source": f"Surveiller {label} et réévaluer la situation lorsque les données seront plus représentatives.",
+            "verify_reconstructed_counter": f"Continuer à surveiller {label} après reconstruction du compteur et contrôler les prochains resets.",
+        }
+    return texts.get(action, texts["monitor_source"])
+
+
+def _render_selection_analysis(context: dict[str, Any], selection: dict[str, Any], language: str) -> str:
+    language = "en" if language == "en" else "fr"
+    summary_heading = "SUMMARY" if language == "en" else "SYNTHÈSE"
+    attention_heading = "ATTENTION POINTS" if language == "en" else "POINTS D'ATTENTION"
+    recommendation_heading = "RECOMMENDATIONS" if language == "en" else "RECOMMANDATIONS"
+
+    summary = [
+        text for item_id in selection.get("summary") or []
+        if (text := _render_ledger_id(item_id, context, language, "summary"))
+    ]
+    attention = [
+        text for item_id in selection.get("attention") or []
+        if (text := _render_ledger_id(item_id, context, language, "attention"))
+    ]
+    recommendations = [
+        _render_recommendation(item.get("action"), item.get("evidence"), context, language)
+        for item in selection.get("recommendations") or []
+        if isinstance(item, dict)
+    ]
+
+    if not summary:
+        summary = ["No representative quantitative fact was selected." if language == "en" else "Aucun fait quantitatif représentatif n'a été sélectionné."]
+    if not attention:
+        attention = ["No notable attention point." if language == "en" else "Aucun point d'attention notable."]
+    if not recommendations:
+        recommendations = ["No specific recommendation." if language == "en" else "Aucune recommandation particulière."]
+
+    return "\n".join([
+        summary_heading,
+        " ".join(summary),
+        "",
+        attention_heading,
+        *[f"- {text}" for text in attention],
+        "",
+        recommendation_heading,
+        *[f"- {text}" for text in recommendations],
+    ]).strip()
 
 def _encoded_context(context: dict[str, Any]) -> str:
     return json.dumps(context, ensure_ascii=False, separators=(",", ":"))
@@ -864,7 +1339,7 @@ def build_budgeted_ai_context(
 ) -> tuple[str, dict[str, Any]]:
     """Return the complete semantic AI context using self-describing normalization.
 
-    0.2.0-rc.3 preserves every semantic current/comparison value as an atomic fact and adds deterministic cross-source relationships only when pairing is unambiguous. The language model no longer receives free-form source records that invite cross-source recombination. The hard limit is enforced
+    0.2.0-rc.4 preserves every semantic current/comparison value as an atomic fact and adds deterministic cross-source relationships only when pairing is unambiguous. The language model may select only ledger IDs; HA Reporting renders every quantitative sentence deterministically after the AI response. The hard limit is enforced
     by the caller; when the lossless context cannot fit, analysis fails explicitly
     instead of silently omitting data.
     """
@@ -967,115 +1442,51 @@ def _sanitize_ai_text(text: str, language: str = "fr") -> str:
 
 
 def _instructions(context_json: str, language: str = "fr") -> str:
+    """Ask the model to select ledger IDs only; HA Reporting writes the prose."""
     language = "en" if str(language).lower() == "en" else "fr"
     if language == "en":
-        return f"""You are analyzing a home-automation report calculated by HA Reporting.
-Answer directly and concisely in English without exposing internal reasoning.
-Do not invent or recalculate values: use only the supplied statistics.
-Clearly distinguish calculated facts from interpretation. Ignore technical identifiers when a readable name is available.
-Do not turn internal engine diagnostics into attention points. In particular, never mention that a value was not reconstructed, that no reset occurred, or that no fallback was used. Mention a reset/reconstruction only when it actually occurred and materially affects reliability or interpretation.
+        return f"""You are selecting evidence for a home-automation report calculated by HA Reporting.
+Do not write the report and do not expose internal reasoning.
+The context uses `ha-reporting-ai-context-v10`, a deterministic fact ledger.
 
-Mandatory rules for N/N-x comparisons:
-- An `unavailable` source does not support any conclusion about change.
-- Read `policy` first for each compared source.
-- If `policy` is `descriptive_gap_only` or `no_change_claim`, do NOT state that a quantity increased, decreased, went up, went down, or use equivalent wording that presents the gap as a real full-period trend.
-- Instead use wording such as: “for the available data, the calculated gap is ...” or “the calculated value is higher/lower by ...”, then explain why the gap cannot be interpreted as a complete-period trend.
-- Forbidden example: “consumption increased by 182%”. Expected style: “for the available data, the calculated gap is +182%, but it does not support a conclusion that annual consumption rose by that amount because the reference covers only 34.8% of the period”.
-- Forbidden example: “average power is down 8.6% from the previous year”. Expected style: “for the available data, calculated average power is 8.6% lower, but the comparison remains partial”.
-- Never use a relative percentage from an incomplete comparison to assert drift, overconsumption, or improvement.
-- Coverage quality is explicit: >=95% is representative, 80-95% is partial but can be discussed cautiously, and <80% is limited. Never describe a >=95% comparison as partial solely because sampling density is below 100%.
-- If a comparison value has `gap_pct_reason=near_zero_reference`, the relative percentage was deliberately suppressed because the reference is too close to zero. Report the absolute gap only; do not invent or estimate a percentage.
-- If `base_sparse_zero_uncertain` or `reference_sparse_zero_uncertain` is true, do not conclude that the device truly consumed zero or was inactive. State that the near-zero value is uncertain because the history is too sparse.
-- Sampling density is a diagnostic, not period coverage. Low event-driven density alone does not mean the full period is missing; treat it as a reliability warning only when the comparison status/policy says so.
-- Keep reconstruction and coverage strictly separate: `base_reconstructed=true` means N was reconstructed after one or more resets; `reference_coverage_pct` independently describes N-x reference coverage. Never merge these concepts into wording such as “partial reconstruction”.
-- If `base_reconstructed` is true, mention reconstruction only if useful to reliability. If absent/false, do not discuss resets or reconstruction. If `reference_coverage_pct` is below 80, separately state that the historical reference is partial and include its coverage. Do not claim the reference is reconstructed unless `reference_reconstructed` is true.
-- `ha-reporting-ai-context-v9` is a deterministic fact ledger. Every quantitative statement is an atomic item in `facts` with its own `id`, `source`, `metric`, `stat`, unit and quality metadata. All semantic current-period and N/N-x values are preserved, including partial/limited data.
-- Every quantitative sentence you write MUST be supported by exactly one `facts` item or one explicit `relationship`. Never merge two facts to manufacture a new comparison, device pair, percentage, direction, coverage or diagnosis.
-- Use the exact `source` from the supporting fact. Never invent a device or subsystem name (for example air conditioning) that is not present in a fact or relationship.
-- Respect `metric` and `unit`: temperature in °C is temperature, never consumption or power; energy in kWh is energy; power in W is power. Never change the physical quantity while paraphrasing.
-- Respect `stat`: `mean`, `max`, `p95`, `min`, `period_delta`, `counter_end` and `integrated_energy_kwh` are distinct. Never substitute one for another.
-- For cumulative counters, `period_delta` is the period change/consumption. `counter_end` is only the cumulative meter reading at the end and must NEVER be presented as period consumption.
-- A percentage may be stated only when the SAME fact or relationship explicitly contains `gap_pct`, `relative_gap_pct`, or `mean_gap_pct`. An absolute gap such as 0.25 kWh is 0.25 kWh, never 25%, 250%, or another inferred percentage.
-- For N/N-x facts, `trend_direction` is authoritative whenever present: `increase` can never be described as a decrease, and `decrease` can never be described as an increase. If the fact policy forbids a full-period trend, use descriptive gap wording only.
-- Coverage values belong only to the same fact or relationship. Never transplant coverage from a neighbouring fact.
-- Preserve source semantics: a source whose name contains `forecast` / `prevision` is a forecast, not a measured value.
-- `relationships` contains the only permitted cross-source comparisons and is calculated deterministically by HA Reporting. Treat it as authoritative and never recalculate or extend it.
-- For `power_forecast_vs_actual`, max/P95 differences are secondary context only. A large measured peak compared with a forecast peak does NOT by itself prove overload, bad calibration, sensor placement problems or a fault. Do not recommend checking calibration or overload solely from that peak gap unless a supplied warning/fact explicitly supports it.
-- Cross-source comparisons are allowed ONLY through `relationships`. Never compare two current-period totals, means, peaks or energies on your own when HA Reporting did not emit a relationship for them.
-- If a relationship has `comparison_policy=coverage_insufficient_for_period_gap` or `full_period_comparison_supported=false`, do not calculate, state, or imply an absolute/relative gap or a performance direction between its two period totals. You may report each value separately together with its coverage.
-- When an `energy_forecast_vs_actual` relationship is present, the SUMMARY must report actual period energy, integrated forecast energy, `absolute_gap_kwh`, and `relative_gap_pct` when available. This energy comparison has priority over isolated peak-power differences.
-- When `full_period_comparison_supported` is false, do not state a period gap. Report the separate values/coverages only if useful, and say that coverage does not support a full-period comparison.
-- When a `power_forecast_vs_actual` relationship is present, compare the mean forecast and measured power when useful. P95/max may be mentioned as secondary context, but do not use an isolated peak alone to characterize overall forecast quality.
-- Never omit an available `integrated_energy_kwh` from the main analysis when HA Reporting also provides a matching `energy_forecast_vs_actual` relationship.
-- Recommendations based only on a partial/reconstructed comparison must remain proportionate: prefer monitoring, continuing data collection, or checking again once coverage is sufficient. Do not ask the user to investigate causes unless current-period data independently supports a concrete anomaly.
+Your ONLY job is to select IDs already listed in `selection_policy`.
+Return exactly one JSON object and nothing else:
+{{"summary":["ID"],"attention":["ID"],"recommendations":[{{"action":"ACTION","evidence":"ID"}}]}}
 
-Produce exactly these three plain-text sections:
-SUMMARY
-2 to 4 sentences on the main facts of the period. Current-period facts may be stated directly; incomplete comparisons must follow the rules above.
+Rules:
+- `summary`: 1 to 4 eligible `F*` or `R*` IDs. Prefer current `mean`/`period_delta`/`integrated_energy_kwh`, comparison `mean`/`period_delta`, and explicit relationships.
+- `attention`: 0 to 5 eligible IDs. Prefer partial/limited/reconstructed comparison sets, quality-limited sources, or relationships whose full-period comparison is not supported.
+- `recommendations`: 0 to 4 objects. `action` must be one of `selection_policy.recommendation_actions`; `evidence` must be an attention-worthy ID from the context.
+- Return IDs only. Never return names, values, percentages, explanations, prose, markdown, code fences or extra keys.
+- Prefer representative current-period energy/mean facts and explicit `relationships` over isolated power peaks.
+- A `power_forecast_vs_actual` peak gap is context only and must not be selected as evidence for overload, calibration error or a fault.
+- If a relationship has `full_period_comparison_supported=false`, it may be selected as an attention/coverage limitation, but never as evidence of a period performance gap.
+- For N/N-x, prefer `comparable` facts for summary. Use `partial`, `limited`, `reconstructed` or sparse-zero items mainly as attention evidence.
+- Do not invent cross-source comparisons. Do not calculate anything.
 
-ATTENTION POINTS
-0 to 5 bullets beginning with "- ". Mention only items supported by the data, including coverage limitations when they affect interpretation. Write "- No notable attention point." when appropriate.
-
-RECOMMENDATIONS
-0 to 4 bullets beginning with "- ". Stay cautious and concrete. Do not invent a fault diagnosis.
-Write "- No specific recommendation." only when there is no other recommendation. Never combine that sentence with other bullets.
-
-Validated structured data from HA Reporting:
+Validated HA Reporting context:
 {context_json}
 """
+    return f"""Tu sélectionnes les éléments à mettre en avant dans un rapport domotique calculé par HA Reporting.
+N'écris pas le rapport et n'affiche aucun raisonnement interne.
+Le contexte utilise `ha-reporting-ai-context-v10`, un registre déterministe de faits.
 
-    return f"""Tu analyses un rapport domotique calculé par HA Reporting.
-Réponds directement et brièvement en français, sans afficher de raisonnement interne.
-N'invente aucun chiffre et ne recalcule pas les données : utilise exclusivement les statistiques fournies.
-Distingue clairement un fait calculé d'une interprétation. Ignore les identifiants techniques lorsqu'un nom lisible est disponible.
-Ne transforme pas les diagnostics internes du moteur en points d'attention. En particulier, ne mentionne jamais qu'une valeur « n'a pas été reconstruite », qu'aucun reset n'a eu lieu, ni l'absence d'un fallback. Mentionne un reset/reconstruction uniquement s'il s'est réellement produit et s'il affecte la fiabilité ou l'interprétation de la valeur.
+Ta SEULE tâche est de sélectionner des identifiants déjà présents dans `selection_policy`.
+Retourne exactement un objet JSON et rien d'autre :
+{{"summary":["ID"],"attention":["ID"],"recommendations":[{{"action":"ACTION","evidence":"ID"}}]}}
 
-Règles impératives pour les comparaisons N/N-x :
-- Une source `unavailable` ne permet aucune conclusion d'évolution.
-- Lis d'abord `policy` pour chaque source comparée.
-- Si `policy` vaut `descriptive_gap_only` ou `no_change_claim`, il est INTERDIT d'écrire qu'une grandeur « a augmenté », « a diminué », « est en hausse », « est en baisse » ou toute formulation équivalente qui présente l'écart comme une évolution réelle de la période complète.
-- Dans ce cas, écris plutôt : « sur les données disponibles, l'écart calculé est de ... », « la valeur calculée est supérieure/inférieure de ... », puis précise pourquoi cet écart n'est pas directement interprétable comme une évolution complète.
-- Exemple interdit : « la consommation a augmenté de 182 % ». Exemple attendu : « sur les données disponibles, l'écart calculé est de +182 %, mais il ne permet pas de conclure à une hausse annuelle de cette ampleur car la référence ne couvre que 34,8 % de la période ».
-- Exemple interdit : « la puissance moyenne est en baisse de 8,6 % par rapport à l'année précédente ». Exemple attendu : « sur les données disponibles, la puissance moyenne calculée est inférieure de 8,6 %, mais la comparaison reste partielle ».
-- N'utilise jamais un pourcentage relatif issu d'une comparaison incomplète pour affirmer une dérive, une surconsommation ou une amélioration.
-- La qualité de couverture est explicite : >=95 % est représentatif, 80-95 % est partiel mais exploitable avec prudence, et <80 % est limité. Ne qualifie jamais une comparaison >=95 % de partielle uniquement parce que la densité d'échantillonnage est inférieure à 100 %.
-- Si une valeur comparée contient `gap_pct_reason=near_zero_reference`, le pourcentage relatif a volontairement été supprimé car la référence est trop proche de zéro. Rapporte uniquement l'écart absolu ; n'invente et n'estime aucun pourcentage.
-- Si `base_sparse_zero_uncertain` ou `reference_sparse_zero_uncertain` vaut true, ne conclus pas que l'appareil a réellement consommé zéro ou qu'il était inactif. Indique que la valeur proche de zéro est incertaine car l'historique est trop clairsemé.
-- La densité d'échantillonnage est un diagnostic, pas la couverture de période. Une faible densité événementielle ne signifie pas à elle seule que la période est absente ; traite-la comme une limite de fiabilité uniquement lorsque le statut/policy de comparaison l'indique.
-- Distingue strictement reconstruction et couverture : `base_reconstructed=true` signifie que la valeur N a été reconstruite après un ou plusieurs resets ; `reference_coverage_pct` décrit séparément la couverture de la référence N-x. Ne fusionne jamais ces deux notions dans une expression comme « reconstruction partielle ».
-- Si `base_reconstructed` vaut true, tu peux signaler la reconstruction uniquement si elle est utile à la fiabilité de l'analyse. Si elle est absente/false, ne parle jamais de reset ou de reconstruction. Si `reference_coverage_pct` est inférieur à 80, dis séparément « la référence historique est partielle » avec sa couverture. N'affirme pas que la référence est reconstruite sauf si `reference_reconstructed` vaut true.
-- `ha-reporting-ai-context-v9` est un registre déterministe de faits. Chaque affirmation quantitative est un élément atomique de `facts` avec son propre `id`, sa `source`, sa `metric`, sa `stat`, son unité et ses métadonnées de qualité. Toutes les valeurs sémantiques courantes et N/N-x sont conservées, y compris les données partielles/limitées.
-- Chaque phrase quantitative que tu écris DOIT être étayée par exactement un élément de `facts` ou une `relationship` explicite. Ne fusionne jamais deux faits pour fabriquer une nouvelle comparaison, paire d'appareils, couverture, direction, pourcentage ou diagnostic.
-- Utilise exactement la `source` du fait qui étaye la phrase. N'invente jamais un appareil ou sous-système (par exemple une climatisation) absent des faits/relations.
-- Respecte `metric` et l'unité : une température en °C reste une température, jamais une consommation ou une puissance ; une énergie en kWh reste une énergie ; une puissance en W reste une puissance. Ne change jamais de grandeur physique en reformulant.
-- Respecte `stat` : `mean`, `max`, `p95`, `min`, `period_delta`, `counter_end` et `integrated_energy_kwh` sont distincts. Ne substitue jamais une statistique à une autre.
-- Pour un compteur cumulatif, `period_delta` est la variation/consommation de la période. `counter_end` est uniquement l'index cumulé en fin de période et ne doit JAMAIS être présenté comme consommation de période.
-- Un pourcentage ne peut être annoncé que si le MÊME fait ou la MÊME relation contient explicitement `gap_pct`, `relative_gap_pct` ou `mean_gap_pct`. Un écart absolu de 0,25 kWh reste 0,25 kWh, jamais 25 %, 250 % ou un pourcentage déduit.
-- Pour les faits N/N-x, `trend_direction` fait foi lorsqu'il existe : `increase` ne doit JAMAIS être décrit comme une baisse et `decrease` ne doit JAMAIS être décrit comme une hausse. Si la policy interdit une tendance de période complète, utilise uniquement une formulation descriptive de l'écart.
-- Une couverture appartient uniquement au même fait ou à la même relation. Ne récupère jamais la couverture d'un fait voisin.
-- Respecte la sémantique de la source : une source contenant `forecast` / `prevision` est une prévision, pas une mesure réelle.
-- `relationships` contient les seules comparaisons autorisées entre deux sources et est calculé de manière déterministe par HA Reporting. Considère ces valeurs comme faisant foi ; ne les recalcule pas et ne les étends pas.
-- Pour `power_forecast_vs_actual`, les écarts de max/P95 ne sont qu'un contexte secondaire. Un pic mesuré bien supérieur au pic prévu ne prouve à lui seul ni surcharge, ni mauvais calibrage, ni mauvais positionnement, ni panne. Ne recommande pas de vérifier calibrage/surcharge uniquement à partir de cet écart de pic sauf si un avertissement/fait fourni l'étaye explicitement.
-- Les comparaisons entre deux sources courantes sont autorisées UNIQUEMENT via `relationships`. Ne compare jamais de toi-même deux totaux, moyennes, pics ou énergies de la période courante si HA Reporting n'a pas émis de relation correspondante.
-- Si une relation contient `comparison_policy=coverage_insufficient_for_period_gap` ou `full_period_comparison_supported=false`, ne calcule, n'annonce et n'implique aucun écart absolu/relatif ni aucune direction de performance entre les deux totaux de période. Tu peux mentionner chaque valeur séparément avec sa couverture.
-- Lorsqu'une relation `energy_forecast_vs_actual` existe, la SYNTHÈSE doit indiquer l'énergie réelle de la période, l'énergie prévisionnelle intégrée, `absolute_gap_kwh` et `relative_gap_pct` lorsqu'ils sont disponibles. Cette comparaison énergétique est prioritaire sur les écarts de pics de puissance isolés.
-- Si `full_period_comparison_supported` vaut false, ne rapporte aucun écart de période. Mentionne séparément les valeurs/couvertures uniquement si c'est utile et indique que la couverture ne permet pas une comparaison sur la période complète.
-- Lorsqu'une relation `power_forecast_vs_actual` existe, compare la puissance moyenne prévue et mesurée lorsque c'est utile. P95/max peuvent servir de contexte secondaire, mais n'utilise pas un pic isolé pour qualifier à lui seul la qualité globale de la prévision.
-- N'omets jamais un `integrated_energy_kwh` disponible de l'analyse principale lorsque HA Reporting fournit aussi une relation `energy_forecast_vs_actual` correspondante.
-- Une recommandation fondée seulement sur une comparaison partielle/reconstruite doit rester proportionnée : privilégie « surveiller », « poursuivre la collecte » ou « recontrôler quand la couverture sera suffisante ». Ne demande pas d'en rechercher les causes sauf si les données de la période courante montrent, indépendamment de la comparaison, une anomalie étayée.
+Règles :
+- `summary` : 1 à 4 IDs `F*` ou `R*` éligibles. Privilégie les `mean`/`period_delta`/`integrated_energy_kwh` courants, les `mean`/`period_delta` de comparaison et les relations explicites.
+- `attention` : 0 à 5 IDs éligibles. Privilégie les comparaisons partielles/limitées/reconstruites, les sources de qualité limitée ou les relations dont la comparaison de période complète n’est pas supportée.
+- `recommendations` : 0 à 4 objets. `action` doit appartenir à `selection_policy.recommendation_actions` et `evidence` doit être un ID digne d’attention présent dans le contexte.
+- Retourne uniquement des IDs. N'écris jamais de nom, valeur, pourcentage, explication, prose, markdown, bloc de code ni clé supplémentaire.
+- Privilégie les énergies de période, moyennes représentatives et `relationships` explicites plutôt que les pics de puissance isolés.
+- Un écart de pic dans `power_forecast_vs_actual` est seulement contextuel : il ne doit jamais servir de preuve de surcharge, mauvais calibrage ou panne.
+- Si une relation contient `full_period_comparison_supported=false`, elle peut être sélectionnée comme limite de couverture, mais jamais comme preuve d'un écart de performance sur toute la période.
+- Pour N/N-x, privilégie les faits `comparable` dans la synthèse. Utilise surtout les éléments `partial`, `limited`, `reconstructed` ou sparse-zero dans les points d'attention.
+- N'invente aucune comparaison entre sources. Ne calcule rien.
 
-Produis exactement ces trois sections, en texte simple :
-SYNTHÈSE
-2 à 4 phrases sur les faits principaux de la période. Les faits de la période courante peuvent être formulés directement ; les comparaisons incomplètes doivent suivre les règles ci-dessus.
-
-POINTS D'ATTENTION
-0 à 5 puces commençant par "- ". Ne signale que des éléments réellement étayés par les données, y compris les limites de couverture si elles affectent l'interprétation. Écris "- Aucun point d'attention notable." si nécessaire.
-
-RECOMMANDATIONS
-0 à 4 puces commençant par "- ". Reste prudent et concret. N'invente pas de diagnostic de panne.
-Écris "- Aucune recommandation particulière." uniquement s'il n'y a aucune autre recommandation. Ne combine jamais cette phrase avec d'autres puces.
-
-Données structurées validées par HA Reporting :
+Contexte validé par HA Reporting :
 {context_json}
 """
 
@@ -1122,6 +1533,7 @@ def analyze_report_with_ai(
     ws = None
     try:
         context_json, context_meta = build_budgeted_ai_context(result)
+        context = json.loads(context_json)
         if len(context_json) > AI_MAX_CONTEXT_CHARS:
             if language == "en":
                 message = f"Lossless AI context remains too large after normalization ({len(context_json)} characters, limit {AI_MAX_CONTEXT_CHARS})"
@@ -1208,13 +1620,11 @@ def analyze_report_with_ai(
             response_payload = result_payload.get("response")
 
         data, conversation_id = _extract_ai_task_payload(response_payload)
-        if isinstance(data, (dict, list)):
-            text = json.dumps(data, ensure_ascii=False, indent=2)
-        else:
-            text = str(data or "").strip()
-        if not text:
-            raise RuntimeError("AI Task a retourné un texte vide")
-        text = _sanitize_ai_text(text, language)
+        selection, selection_valid = _validate_selection(data, context)
+        selection_fallback = not selection_valid
+        if selection_fallback:
+            selection = _fallback_selection(context)
+        text = _render_selection_analysis(context, selection, language)
 
         finished = time.time()
         return {
@@ -1225,6 +1635,8 @@ def analyze_report_with_ai(
             "conversation_id": conversation_id,
             "heartbeat_count": heartbeat_count,
             "text": text,
+            "selection": selection,
+            "selection_fallback": selection_fallback,
             "input": {
                 "context_characters": context_meta["characters"],
                 "context_target_characters": context_meta["target_characters"],
@@ -1237,6 +1649,7 @@ def analyze_report_with_ai(
                 "context_current_sources": context_meta["current_sources"],
                 "context_comparison_sources": context_meta["comparison_sources"],
                 "context_relationships": context_meta["relationships"],
+                "selection_protocol": "id_only_v1",
                 "omitted_current_sources": context_meta["omitted_current_sources"],
                 "omitted_comparison_sources": context_meta["omitted_comparison_sources"],
                 "sources": (result.get("summary") or {}).get("sources_total", 0),

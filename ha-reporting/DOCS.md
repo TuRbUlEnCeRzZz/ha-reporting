@@ -1,5 +1,34 @@
 # HA Reporting technical documentation
 
+## 0.2.0-rc.4 — Selection-only fact ledger
+
+RC4 changes the AI boundary again: the provider no longer writes the quantitative report. HA Reporting builds the complete deterministic `ha-reporting-ai-context-v10` ledger, the AI selects evidence IDs, and HA Reporting renders the final numbers and sentences itself.
+
+### Selection protocol
+
+The model must return one JSON object only:
+
+```json
+{
+  "summary": ["R1", "F42"],
+  "attention": ["C7"],
+  "recommendations": [
+    {"action": "collect_more_data", "evidence": "C7"}
+  ]
+}
+```
+
+`summary` and `attention` contain existing ledger IDs only. Recommendations use one of four allow-listed actions: `collect_more_data`, `monitor_forecast`, `monitor_source`, or `verify_reconstructed_counter`, each tied to validated evidence. Unsupported IDs and actions are discarded.
+
+### Deterministic rendering
+
+HA Reporting resolves the selected ID back to its source, metric, unit and statistic, then writes the quantitative sentence itself. A comparison fact therefore cannot borrow another device name, another source's coverage, another unit or another percentage. `period_delta` and `counter_end` remain separate by construction.
+
+Headline eligibility also excludes normal power `max`/`p95` facts. Those values remain in the lossless ledger and in the detailed report, but they cannot be promoted by the model into the main AI summary. This is specifically intended to keep smoothed forecast peaks from being treated as overload or calibration alarms.
+
+If the AI provider returns prose, malformed JSON or no valid summary ID, HA Reporting uses a deterministic fallback selection and still renders a grounded three-section analysis.
+
+
 ## 0.2.0-rc.3 — Fact-ledger AI contract and VictoriaMetrics maintenance inventory
 
 `0.2.0-rc.3` changes the model-facing contract instead of adding more prompt-only prohibitions. It also adds a read-only maintenance diagnostic for VictoriaMetrics.

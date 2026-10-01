@@ -14,7 +14,7 @@ from typing import Any
 from .base import ExportProvider, ExportProviderError
 
 
-USER_AGENT = "HA-Reporting/0.2.0-rc.3"
+USER_AGENT = "HA-Reporting/0.2.0-rc.4"
 SHARE_ROOT = Path("/share")
 _CONSUME_COPY_LOCK = threading.Lock()
 

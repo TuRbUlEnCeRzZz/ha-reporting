@@ -1,3 +1,15 @@
+## 0.2.0-rc.4
+
+- introduce `ha-reporting-ai-context-v10` with an **ID-only fact-ledger selection protocol**;
+- stop asking AI providers to write quantitative report prose; models now select validated fact/relationship IDs only;
+- render all numeric sentences deterministically inside HA Reporting from the selected ledger entries;
+- validate selected IDs against section-specific eligibility rules and discard unsupported IDs;
+- exclude raw power max/P95 facts from normal headline selection so isolated forecast peak gaps cannot dominate the analysis;
+- prevent cumulative `counter_end` readings from being selected as period-consumption summary facts;
+- add deterministic fallback selection when an AI provider returns malformed JSON, free-form prose or no valid summary IDs;
+- generate recommendation wording from a small allow-list of actions tied to validated evidence IDs;
+- keep the complete semantic fact ledger lossless and preserve RC3 VictoriaMetrics maintenance, authenticated downloads, notifications, PDF generation and Paperless behavior unchanged.
+
 ## 0.2.0-rc.3
 
 - introduce `ha-reporting-ai-context-v9` with a deterministic atomic fact ledger for AI interpretation;

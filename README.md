@@ -1,8 +1,8 @@
 # HA Reporting
 
-![HA Reporting](logo.png)
+![HA Reporting](ha-reporting/logo.png)
 
-**Current development version: 0.2.0-rc.3**
+**Current development version: 0.2.0-rc.4**
 
 HA Reporting is a reporting engine for **Home Assistant OS**. It turns Home Assistant sensor history stored in VictoriaMetrics into structured reports, period comparisons, optional AI commentary and locally generated PDF documents.
 
@@ -97,9 +97,27 @@ Beta.21 introduces the first HA Reporting internationalization layer.
 - Every report can override the default and generate renderer-owned content and AI instructions in French or English.
 - User-owned names such as report names, catalogue names, device names and entity IDs are not translated.
 
-From beta.21 onward, new and modified maintainer-facing repository content is written in **English**. See [CONTRIBUTING.md](../CONTRIBUTING.md).
+From beta.21 onward, new and modified maintainer-facing repository content is written in **English**. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## What is new in 0.2.0-rc.3
+## What is new in 0.2.0-rc.4
+
+`0.2.0-rc.4` changes the AI contract from free-form report writing to **selection-only fact-ledger analysis**. The language model now chooses evidence IDs; HA Reporting itself renders every quantitative sentence from the deterministic ledger.
+
+- introduces **`ha-reporting-ai-context-v10`** and the `id_only_v1` selection protocol;
+- the AI provider returns only `summary`, `attention` and recommendation evidence IDs in JSON;
+- HA Reporting validates those IDs against deterministic eligibility rules and discards unsupported selections;
+- device names, metric types, units, base/reference values, gaps and percentages are rendered by HA Reporting, not copied from model prose;
+- cumulative `counter_end` values cannot be selected as period-consumption summary facts;
+- raw power maxima/P95 values are excluded from normal headline selection, preventing forecast peak gaps from dominating EMHASS analysis;
+- if the AI provider returns malformed JSON, unsupported IDs or free-form prose, HA Reporting falls back to a deterministic ledger selection instead of publishing hallucinated quantitative text;
+- recommendation wording is generated from a small allow-list of actions tied to validated evidence IDs;
+- the full semantic fact ledger remains lossless: current-period, partial, limited and N/N-x data are preserved; raw time-series samples remain intentionally excluded;
+- the read-only VictoriaMetrics maintenance inventory introduced in RC3 remains unchanged and fully isolated from reporting catalogs;
+- authenticated Nabu Casa downloads, notifications, PDF generation and Paperless export remain unchanged.
+
+The goal of RC4 is not to make the language model perform better arithmetic. It removes arithmetic and numeric sentence construction from the model entirely. The model is used only to decide **which validated facts are worth highlighting**.
+
+## Previous 0.2.0-rc.3 milestone
 
 `0.2.0-rc.3` is the final hardening step currently planned before 0.2.0 stable. It addresses the remaining semantic mixing observed with a small local AI model and adds the first read-only VictoriaMetrics maintenance inventory.
 
@@ -171,16 +189,16 @@ These relationships are provider-agnostic. EMHASS is a useful real-world example
 
    `https://github.com/TuRbUlEnCeRzZz/ha-reporting`
 
-4. Refresh the store and verify that the offered version is **0.2.0-rc.3** before installing or updating.
+4. Refresh the store and verify that the offered version is **0.2.0-rc.4** before installing or updating.
 5. Start HA Reporting and open its interface through Home Assistant Ingress.
 
 ### From the ZIP: local installation
 
-1. Extract `ha-reporting-0.2.0-rc.3.zip` on your computer.
+1. Extract `ha-reporting-0.2.0-rc.4.zip` on your computer.
 2. Inside the extracted repository, locate the **`ha-reporting/`** directory containing `config.yaml`, `Dockerfile`, `run.sh` and `app/`.
 3. Copy that directory to **`/addons/ha-reporting`** on Home Assistant OS using your existing file-transfer method. Do not copy the whole repository into `/addons/ha-reporting`.
 4. Refresh the app store and rebuild/reinstall the local add-on.
-5. Start it and confirm **HA Reporting 0.2.0-rc.3** in the add-on log.
+5. Start it and confirm **HA Reporting 0.2.0-rc.4** in the add-on log.
 
 The first build can take some time on a Raspberry Pi 4 because dependencies are installed by Supervisor.
 
@@ -211,7 +229,7 @@ AI commentary can be wrong or over-interpret limited history. Treat it as commen
 
 ### AI context normalization
 
-0.2.0-rc.3 uses **`ha-reporting-ai-context-v8`**. The context remains lossless with respect to the semantic report data sent to AI: no current-period or comparison source is removed, including partially covered sources. Raw time-series samples are still intentionally excluded.
+0.2.0-rc.4 uses **`ha-reporting-ai-context-v10`**. The context remains lossless with respect to the semantic report data sent to AI: no current-period or comparison source is removed, including partially covered sources. Raw time-series samples are still intentionally excluded.
 
 Self-describing source records keep power values explicitly named as `max`, `p95` and `mean`; cumulative counters expose `period_delta` separately from `counter_end`; and an integrated power source exposes `integrated_energy_kwh`. Deterministic `relationships` are used for validated current-period cross-source comparisons such as forecast versus measured energy. N/N-x comparison records now carry a compact `id` and are treated as atomic: the AI may not mix fields, percentages, coverage or trend direction across two comparison records.
 
@@ -265,9 +283,9 @@ HA Reporting is experimental. Report accuracy depends on the quality and retenti
 
 Large reports and local AI inference can be slow on a Raspberry Pi 4. Supervisor builds also depend on upstream packages and system libraries.
 
-0.2.0-rc.3 has automated Python and JavaScript regression coverage, but automated desktop tests do not prove that every Home Assistant OS, ARM build, AI provider, VictoriaMetrics dataset or Paperless installation behaves identically. After upgrading, run at least one end-to-end report on the actual Home Assistant OS host before relying on scheduled delivery.
+0.2.0-rc.4 has automated Python and JavaScript regression coverage, but automated desktop tests do not prove that every Home Assistant OS, ARM build, AI provider, VictoriaMetrics dataset or Paperless installation behaves identically. After upgrading, run at least one end-to-end report on the actual Home Assistant OS host before relying on scheduled delivery.
 
-See [VALIDATION-0.2.0-rc.3.md](VALIDATION-0.2.0-rc.3.md) for the release-candidate validation notes and [DOCS.md](DOCS.md) for technical details.
+See [VALIDATION-0.2.0-rc.4.md](VALIDATION-0.2.0-rc.4.md) for the release-candidate validation notes and [ha-reporting/DOCS.md](ha-reporting/DOCS.md) for technical details.
 
 ## Repository layout
 
@@ -301,7 +319,7 @@ node --check ha-reporting/app/app.js
 node --check ha-reporting/app/i18n.js
 ```
 
-See [CONTRIBUTING.md](../CONTRIBUTING.md) for the repository language policy and [CHANGELOG.md](CHANGELOG.md) for release history.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the repository language policy and [ha-reporting/CHANGELOG.md](ha-reporting/CHANGELOG.md) for release history.
 
 ## Roadmap
 
@@ -312,17 +330,19 @@ Possible future directions include:
 - additional export and notification destinations;
 - continued PDF/layout improvements and reporting diagnostics;
 - further validation with larger installations and longer histories;
-- optional presets for common reporting use cases. EMHASS data can already be reported through normal sensors, but there is no dedicated EMHASS integration in 0.2.0-rc.3; the power-integration option is provider-agnostic.
+- optional presets for common reporting use cases. EMHASS data can already be reported through normal sensors, but there is no dedicated EMHASS integration in 0.2.0-rc.4; the power-integration option is provider-agnostic.
 
 These are possible directions, not delivery or maintenance commitments.
 
 ## Documentation
 
-- [Technical documentation](DOCS.md)
-- [Changelog](CHANGELOG.md)
+- [Technical documentation](ha-reporting/DOCS.md)
+- [Changelog](ha-reporting/CHANGELOG.md)
+- [0.2.0-rc.4 validation](VALIDATION-0.2.0-rc.4.md)
 - [0.2.0-rc.3 validation](VALIDATION-0.2.0-rc.3.md)
+- [0.2.0-rc.4 GitHub release notes](RELEASE-NOTES-0.2.0-rc.4.md)
 - [0.2.0-rc.3 GitHub release notes](RELEASE-NOTES-0.2.0-rc.3.md)
 - [0.2.0-rc.1 validation](VALIDATION-0.2.0-rc.1.md)
 - [0.2.0-rc.1 GitHub release notes](RELEASE-NOTES-0.2.0-rc.1.md)
 - [beta.26 validation](VALIDATION-beta26.md)
-- [Contributing](../CONTRIBUTING.md)
+- [Contributing](CONTRIBUTING.md)

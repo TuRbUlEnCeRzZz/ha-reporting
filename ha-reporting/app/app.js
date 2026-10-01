@@ -1133,13 +1133,22 @@ function formatAiContextInfo(ai){
   const t = (id, fallback) => (typeof window !== "undefined" && window.hrT) ? window.hrT(id) : fallback;
   const k = value => `${(Number(value || 0) / 1000).toFixed(1)} k`;
   let text = `${t("report.ai_context", "Contexte IA")} : ${k(chars)} / ${k(limit)} ${t("report.ai_context_characters", "caractères")}`;
-  if(original > chars + 100){
-    text += ` · ${t("report.ai_context_compacted_from", "normalisé depuis")} ${k(original)}`;
-  }
-  if(input.context_lossless === true || input.context_mode === "lossless_normalized"){
-    text += ` · ${t("report.ai_context_no_omission", "aucune source omise")}`;
-  }else if(omitted > 0){
-    text += ` · ${omitted} ${t("report.ai_context_sources_omitted", "sources routinières omises")}`;
+  if(input.context_mode === "deterministic_shortlist"){
+    const fullFacts = Number(input.context_full_facts || 0);
+    const shortlistFacts = Number(input.context_shortlisted_facts || 0);
+    if(fullFacts){
+      text += ` · ${t("report.ai_context_shortlist", "présélection IA")} ${shortlistFacts}/${fullFacts} ${t("report.ai_context_facts", "faits")}`;
+    }
+    text += ` · ${t("report.ai_context_report_retained", "données complètes conservées dans le rapport")}`;
+  }else{
+    if(original > chars + 100){
+      text += ` · ${t("report.ai_context_compacted_from", "normalisé depuis")} ${k(original)}`;
+    }
+    if(input.context_lossless === true || input.context_mode === "lossless_normalized"){
+      text += ` · ${t("report.ai_context_no_omission", "aucune source omise")}`;
+    }else if(omitted > 0){
+      text += ` · ${omitted} ${t("report.ai_context_sources_omitted", "sources routinières omises")}`;
+    }
   }
   return text;
 }

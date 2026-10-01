@@ -3,7 +3,7 @@ set -e
 
 bashio::log.level "$(bashio::config 'log_level')"
 bashio::log.info "------------------------------------------------"
-bashio::log.info " HA Reporting 0.2.0-rc.4"
+bashio::log.info " HA Reporting 0.2.0-rc.5"
 bashio::log.info "------------------------------------------------"
 bashio::log.info "Architecture: $(uname -m)"
 bashio::log.info "Ingress UI: port 8099"

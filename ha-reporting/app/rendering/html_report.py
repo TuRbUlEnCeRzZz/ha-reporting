@@ -343,19 +343,32 @@ def _ai_context_quality(ai: dict[str, Any], language: str = "fr") -> str:
         omitted = int(input_meta.get("omitted_current_sources") or 0) + int(input_meta.get("omitted_comparison_sources") or 0)
     except (TypeError, ValueError):
         omitted = 0
+    mode = input_meta.get("context_mode")
+    full_facts = int(input_meta.get("context_full_facts") or 0)
+    shortlisted_facts = int(input_meta.get("context_shortlisted_facts") or 0)
     if str(language).lower() == "en":
         text = f"AI context: {chars / 1000:.1f} k / {limit / 1000:.1f} k characters"
+        if mode == "deterministic_shortlist":
+            if full_facts:
+                text += f" · AI shortlist {shortlisted_facts}/{full_facts} facts"
+            text += " · full report data retained"
+            return text
         if original > chars + 100:
             text += f" · normalized from {original / 1000:.1f} k"
-        if input_meta.get("context_lossless") is True or input_meta.get("context_mode") == "lossless_normalized":
+        if input_meta.get("context_lossless") is True or mode == "lossless_normalized":
             text += " · no source omitted"
         elif omitted > 0:
             text += f" · {omitted} routine sources omitted"
         return text
     text = f"Contexte IA : {chars / 1000:.1f} k / {limit / 1000:.1f} k caractères"
+    if mode == "deterministic_shortlist":
+        if full_facts:
+            text += f" · présélection IA {shortlisted_facts}/{full_facts} faits"
+        text += " · données complètes conservées dans le rapport"
+        return text
     if original > chars + 100:
         text += f" · normalisé depuis {original / 1000:.1f} k"
-    if input_meta.get("context_lossless") is True or input_meta.get("context_mode") == "lossless_normalized":
+    if input_meta.get("context_lossless") is True or mode == "lossless_normalized":
         text += " · aucune source omise"
     elif omitted > 0:
         text += f" · {omitted} sources routinières omises"

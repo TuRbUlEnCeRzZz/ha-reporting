@@ -1,3 +1,17 @@
+## 0.2.0-rc.5
+
+- introduce `ha-reporting-ai-context-v11` with a deterministic model-facing shortlist built from the complete internal fact ledger;
+- deduplicate shared sources by Home Assistant entity identity so repeated room sensors do not consume duplicate AI context or inherit appliance labels;
+- add mandatory report-wide quality signals for source availability and N/N-x comparison representativeness;
+- exclude current-period values below 80% coverage from normal AI summary eligibility;
+- exclude limited/reconstructed/unavailable N/N-x facts from normal headline conclusions while retaining their quality evidence;
+- surface an explicit deterministic warning when a comparison target has zero representative comparisons;
+- shortlist representative/significant facts before AI Task execution while preserving the detailed report and full internal ledger;
+- keep routine max/P95/counter-end facts out of the LLM shortlist;
+- round coverage values in deterministic AI prose and deduplicate repeated rendered attention/recommendation lines;
+- expose full-ledger versus shortlisted fact/source counts in AI metadata;
+- keep VictoriaMetrics maintenance read-only and independent from HA Reporting catalogs.
+
 ## 0.2.0-rc.4
 
 - introduce `ha-reporting-ai-context-v10` with an **ID-only fact-ledger selection protocol**;

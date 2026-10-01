@@ -1,5 +1,29 @@
 # HA Reporting technical documentation
 
+## 0.2.0-rc.5 — Deterministic AI shortlist and quality signals
+
+RC5 keeps the RC4 rule that the language model selects evidence IDs only, but changes the model-facing payload. HA Reporting now builds the complete `ha-reporting-ai-context-v11` fact ledger internally and then creates a deterministic shortlist for the AI Task. The full report data remains available to the renderer and PDF.
+
+### Source deduplication
+
+Sources are keyed primarily by Home Assistant `entity_id` plus metric/unit. A sensor reused by several catalogue devices is therefore represented once in the AI ledger. The registry keeps the real entity/sensor identity and marks shared sources, which allows temperature and humidity wording to use the actual room sensor instead of the first device group that happened to reference it.
+
+### Quality signals
+
+RC5 adds compact `Q*` quality records. `report_source_availability` summarizes current-period source completeness. `comparison_quality` summarizes each N/N-x target. If a report has <80% source availability, the availability signal is mandatory in the summary. If an N/N-x target has no comparable or partial result, the comparison-quality signal is mandatory in the summary and attention logic.
+
+### Deterministic shortlist
+
+The LLM receives representative current `mean`/`period_delta`/`integrated_energy_kwh` facts, the most significant comparable/partial comparison facts, explicit forecast/measured relationships, a bounded set of quality-limited sources/comparisons and all mandatory quality signals. Routine `max`, `p95` and `counter_end` facts stay in the full internal ledger but are not sent as normal selection candidates.
+
+The shortlist is bounded by item counts rather than by silently dropping report sources: currently up to 28 headline facts, up to 8 additional comparison attention facts, up to 14 comparison-quality objects and up to 8 source-quality objects. This keeps large local-model prompts stable even when the report covers many months.
+
+### Deterministic rendering and metadata
+
+Coverage values are formatted through the same deterministic formatter used for other numbers, avoiding raw floating-point strings. Rendered attention/recommendation lines are deduplicated. AI metadata records full-ledger versus shortlisted source/comparison/fact counts and reports `context_mode: deterministic_shortlist`.
+
+---
+
 ## 0.2.0-rc.4 — Selection-only fact ledger
 
 RC4 changes the AI boundary again: the provider no longer writes the quantitative report. HA Reporting builds the complete deterministic `ha-reporting-ai-context-v10` ledger, the AI selects evidence IDs, and HA Reporting renders the final numbers and sentences itself.

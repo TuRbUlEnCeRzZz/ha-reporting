@@ -676,21 +676,38 @@ def _current_source_relationships(rows: list[dict[str, Any]]) -> list[dict[str, 
     return relationships
 
 
-def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
-    """Build the RC3 deterministic fact-ledger AI context.
+def _fact_ledger_context_v11(result: dict[str, Any]) -> dict[str, Any]:
+    """Build the complete deterministic RC5 fact ledger.
 
-    Repeated source/comparison metadata is normalized into registries. Each fact
-    is atomic and contains one named statistic only. Compact field aliases keep
-    the lossless ledger small enough for local models without returning to the
-    ambiguous multi-value positional rows used by older contexts.
+    RC5 keeps the complete semantic ledger internally, deduplicates repeated
+    entities by their real Home Assistant entity id, and adds deterministic
+    report/comparison quality signals. A smaller deterministic projection of this
+    ledger is sent to the LLM later; the report itself remains unchanged.
     """
     context: dict[str, Any] = {
-        "schema": "ha-reporting-ai-context-v10",
-        "lossless": True,
+        "schema": "ha-reporting-ai-context-v11",
+        "ledger_complete": True,
         "legend": {
-            "source": {"i":"id","n":"name","m":"metric","u":"unit","cat":"category","cov":"coverage_pct","den":"density_pct","st":"status","w":"warnings","rv":"runtime_verified"},
-            "comparison_set": {"i":"id","tg":"target","tp":"target_period","s":"source_id","st":"status","p":"policy","bc":"base_coverage_pct","rc":"reference_coverage_pct","bz":"base_sparse_zero_uncertain","rz":"reference_sparse_zero_uncertain","br":"base_reconstructed","rr":"reference_reconstructed","r":"reasons"},
-            "fact": {"i":"id","q":"scope(current|comparison)","s":"source_id","c":"comparison_id","k":"stat","v":"value","b":"base","r":"reference","d":"gap","p":"gap_pct","t":"trend_direction","pr":"gap_pct_reason"},
+            "source": {
+                "i":"id","e":"entity_id","sk":"sensor_key","d":"device","g":"catalog",
+                "m":"metric","u":"unit","cov":"coverage_pct","den":"density_pct",
+                "st":"status","w":"warnings","rv":"runtime_verified","sh":"shared_source",
+            },
+            "comparison_set": {
+                "i":"id","tg":"target","tp":"target_period","s":"source_id","st":"status",
+                "p":"policy","bc":"base_coverage_pct","rc":"reference_coverage_pct",
+                "bz":"base_sparse_zero_uncertain","rz":"reference_sparse_zero_uncertain",
+                "br":"base_reconstructed","rr":"reference_reconstructed","r":"reasons",
+            },
+            "fact": {
+                "i":"id","q":"scope(current|comparison)","s":"source_id","c":"comparison_id",
+                "k":"stat","v":"value","b":"base","r":"reference","d":"gap","p":"gap_pct",
+                "t":"trend_direction","pr":"gap_pct_reason",
+            },
+            "quality_signal": {
+                "i":"id","k":"kind","st":"status","ms":"mandatory_summary",
+                "ma":"mandatory_attention",
+            },
         },
         "semantics": {
             "fact": "atomic authoritative statement; never combine facts to create a new comparison",
@@ -700,29 +717,67 @@ def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
             "coverage_quality": ">=95 representative; 80-95 partial/cautious; <80 limited",
             "relationship": "only allowed cross-source comparison",
             "forecast_peak": "max gap is context only; it never proves overload, calibration error or a fault",
+            "projection": "the LLM receives a deterministic shortlist; all report data remains in HA Reporting",
         },
-        "report": [(result.get("report") or {}).get("name"), (result.get("resolved_period") or {}).get("label"), (result.get("resolved_period") or {}).get("timezone")],
+        "report": [
+            (result.get("report") or {}).get("name"),
+            (result.get("resolved_period") or {}).get("label"),
+            (result.get("resolved_period") or {}).get("timezone"),
+        ],
         "summary": result.get("summary") or {},
         "sources": [],
         "comparison_sets": [],
         "facts": [],
         "relationships": [],
-        "selection_policy": {"protocol":"id_only_v1","summary_prefixes":["F","R"],"attention_prefixes":["F","C","S","R"],"recommendation_actions":["collect_more_data","monitor_forecast","monitor_source","verify_reconstructed_counter"]},
-        "counts": {"current_sources": 0, "comparison_sources": 0},
+        "quality_signals": [],
+        "selection_policy": {},
+        "counts": {
+            "current_sources": 0,
+            "current_sources_unique": 0,
+            "comparison_sources": 0,
+            "comparison_sources_unique": 0,
+        },
     }
 
     fact_seq = 0
     source_by_key: dict[tuple[str, str, str], str] = {}
     source_rows_by_id: dict[str, dict[str, Any]] = {}
+    fact_by_key: dict[tuple[Any, ...], str] = {}
+    comparison_by_key: dict[tuple[Any, ...], str] = {}
 
-    def ensure_source(source_path: str, metric: Any, unit: Any, **metadata: Any) -> str:
-        key = (str(source_path or ""), str(metric or ""), str(unit or ""))
+    def source_identity(entity_id: Any, sensor_key: Any, metric: Any, unit: Any) -> tuple[str, str, str]:
+        identity = str(entity_id or "").strip() or str(sensor_key or "").strip()
+        return (identity, str(metric or ""), str(unit or ""))
+
+    def ensure_source(
+        *,
+        entity_id: Any,
+        sensor_key: Any,
+        metric: Any,
+        unit: Any,
+        device: Any = None,
+        catalog: Any = None,
+        **metadata: Any,
+    ) -> str:
+        key = source_identity(entity_id, sensor_key, metric, unit)
         source_id = source_by_key.get(key)
-        aliases = {"category":"cat","coverage_pct":"cov","density_pct":"den","status":"st","warnings":"w","runtime_verified":"rv"}
+        aliases = {
+            "coverage_pct":"cov","density_pct":"den","status":"st","warnings":"w",
+            "runtime_verified":"rv",
+        }
         if source_id is None:
             source_id = f"S{len(context['sources']) + 1}"
             source_by_key[key] = source_id
-            row: dict[str, Any] = {"i": source_id, "n": source_path, "m": metric, "u": unit}
+            row: dict[str, Any] = {
+                "i": source_id,
+                "e": str(entity_id or "").strip() or None,
+                "sk": str(sensor_key or "").strip() or None,
+                "d": str(device or "").strip() or None,
+                "g": str(catalog or "").strip() or None,
+                "m": metric,
+                "u": unit,
+            }
+            row = {k: v for k, v in row.items() if v is not None}
             for key_name, value in metadata.items():
                 if value is not None and value != []:
                     row[aliases.get(key_name, key_name)] = value
@@ -730,28 +785,41 @@ def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
             source_rows_by_id[source_id] = row
         else:
             row = source_rows_by_id[source_id]
+            new_device = str(device or "").strip()
+            if new_device and row.get("d") and row.get("d") != new_device:
+                row["sh"] = True
             for key_name, value in metadata.items():
                 alias = aliases.get(key_name, key_name)
                 if value is not None and value != [] and alias not in row:
                     row[alias] = value
         return source_id
 
-    def add_fact(**payload: Any) -> None:
+    def add_fact(*, dedup_key: tuple[Any, ...] | None = None, **payload: Any) -> str:
         nonlocal fact_seq
+        if dedup_key is not None and dedup_key in fact_by_key:
+            return fact_by_key[dedup_key]
         fact_seq += 1
-        aliases = {"scope":"q","source_id":"s","comparison_id":"c","stat":"k","value":"v","base":"b","reference":"r","gap":"d","gap_pct":"p","trend_direction":"t","gap_pct_reason":"pr"}
+        aliases = {
+            "scope":"q","source_id":"s","comparison_id":"c","stat":"k","value":"v",
+            "base":"b","reference":"r","gap":"d","gap_pct":"p","trend_direction":"t",
+            "gap_pct_reason":"pr",
+        }
         row: dict[str, Any] = {"i": f"F{fact_seq}"}
         for key, value in payload.items():
             if value is not None:
                 row[aliases.get(key, key)] = value
         context["facts"].append(row)
+        if dedup_key is not None:
+            fact_by_key[dedup_key] = row["i"]
+        return row["i"]
 
+    # Current-period sources/facts. Reused entities (for example one room
+    # temperature attached to several devices) are represented only once.
     for catalog in result.get("catalogs") or []:
         catalog_name = catalog.get("name")
         for device in catalog.get("devices") or []:
             info = device.get("device") or {}
             device_name = info.get("name")
-            category = info.get("category")
             device_rows: list[dict[str, Any]] = []
             for source in device.get("sources") or []:
                 context["counts"]["current_sources"] += 1
@@ -760,14 +828,23 @@ def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
                 quality = analysis.get("quality") or {}
                 validation = analysis.get("validation") or {}
                 metric = source.get("metric")
-                source_name = source.get("sensor_key") or source.get("entity_id")
-                source_path = "/".join(str(part) for part in (catalog_name, device_name, source_name) if part not in (None, ""))
+                sensor_key = source.get("sensor_key") or source.get("entity_id")
+                entity_id = source.get("entity_id")
                 coverage = quality.get("period_coverage_percent")
                 density = quality.get("sample_density_percent") if quality.get("density_applicable") else None
-                source_id = ensure_source(source_path, metric, source.get("unit"), category=category, coverage_pct=coverage, density_pct=density,
-                                          status=source.get("status") if source.get("status") != "ok" else None,
-                                          warnings=(validation.get("warnings") or []) or None,
-                                          runtime_verified=True if source.get("verification") else None)
+                source_id = ensure_source(
+                    entity_id=entity_id,
+                    sensor_key=sensor_key,
+                    metric=metric,
+                    unit=source.get("unit"),
+                    device=device_name,
+                    catalog=catalog_name,
+                    coverage_pct=coverage,
+                    density_pct=density,
+                    status=source.get("status") if source.get("status") != "ok" else None,
+                    warnings=(validation.get("warnings") or []) or None,
+                    runtime_verified=True if source.get("verification") else None,
+                )
 
                 values: dict[str, Any]
                 if metric == "power":
@@ -775,7 +852,11 @@ def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
                     if source.get("derive_energy") and stats.get("integrated_energy_kwh") is not None:
                         values["integrated_energy_kwh"] = stats.get("integrated_energy_kwh")
                 elif metric in {"temperature", "humidity", "voltage", "current", "energy_measurement"}:
-                    values = {"first": _stat_value(stats, "first"), "min": _stat_value(stats, "min"), "mean": stats.get("mean"), "max": _stat_value(stats, "max"), "last": _stat_value(stats, "last")}
+                    values = {
+                        "first": _stat_value(stats, "first"), "min": _stat_value(stats, "min"),
+                        "mean": stats.get("mean"), "max": _stat_value(stats, "max"),
+                        "last": _stat_value(stats, "last"),
+                    }
                 elif metric in {"energy_total", "runtime", "cycles"}:
                     values = {"period_delta": stats.get("delta"), "counter_end": _stat_value(stats, "last")}
                     if int(stats.get("resets_detected", 0) or 0) > 0:
@@ -785,11 +866,23 @@ def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
 
                 for stat, value in values.items():
                     if value is not None:
-                        add_fact(scope="current", source_id=source_id, stat=stat, value=value)
+                        add_fact(
+                            dedup_key=("current", source_id, stat),
+                            scope="current", source_id=source_id, stat=stat, value=value,
+                        )
 
-                device_rows.append({"source": source_path, "source_id": source_id, "metric": metric, "unit": source.get("unit"), "values": values, "coverage_pct": coverage})
+                # Relationship pairing remains device-local so unrelated meters
+                # are never joined merely because they share a metric type.
+                relation_name = "/".join(str(part) for part in (catalog_name, device_name, sensor_key) if part not in (None, ""))
+                device_rows.append({
+                    "source": relation_name, "source_id": source_id, "metric": metric,
+                    "unit": source.get("unit"), "values": values, "coverage_pct": coverage,
+                })
             context["relationships"].extend(_current_source_relationships(device_rows))
 
+    context["counts"]["current_sources_unique"] = len(context["sources"])
+
+    # N/N-x comparisons. Repeated shared entities are deduplicated per target.
     comparisons = result.get("comparisons") or {}
     for target in comparisons.get("targets") or []:
         target_label = target.get("label")
@@ -803,30 +896,41 @@ def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
                     interpretation = _comparison_interpretation(source)
                     base_quality = source.get("base_quality") or {}
                     reference_quality = source.get("reference_quality") or {}
-                    source_name = source.get("sensor_key") or source.get("entity_id")
-                    source_path = "/".join(str(part) for part in (catalog_name, device_name, source_name) if part not in (None, ""))
-                    source_id = ensure_source(source_path, source.get("metric"), source.get("unit"))
-                    comparison_id = f"C{len(context['comparison_sets']) + 1}"
-                    comparison_status = source.get("comparison_status")
-                    comparison_set = {
-                        "i": comparison_id, "tg": target_label, "tp": target_period, "s": source_id,
-                        "st": comparison_status if comparison_status != "comparable" else None,
-                        "p": interpretation.get("wording_policy"),
-                        "bc": base_quality.get("period_coverage_percent"), "rc": reference_quality.get("period_coverage_percent"),
-                        "bz": True if interpretation.get("base_sparse_zero_uncertain") else None,
-                        "rz": True if interpretation.get("reference_sparse_zero_uncertain") else None,
-                        "br": True if interpretation.get("base_reconstructed") else None,
-                        "rr": True if interpretation.get("reference_reconstructed") else None,
-                        "r": (source.get("reasons") or []) or None,
-                    }
-                    context["comparison_sets"].append({k: v for k, v in comparison_set.items() if v is not None})
+                    sensor_key = source.get("sensor_key") or source.get("entity_id")
+                    source_id = ensure_source(
+                        entity_id=source.get("entity_id"), sensor_key=sensor_key,
+                        metric=source.get("metric"), unit=source.get("unit"),
+                        device=device_name, catalog=catalog_name,
+                    )
+                    comparison_key = (str(target_label or ""), str(target_period or ""), source_id)
+                    comparison_id = comparison_by_key.get(comparison_key)
+                    if comparison_id is None:
+                        comparison_id = f"C{len(context['comparison_sets']) + 1}"
+                        comparison_by_key[comparison_key] = comparison_id
+                        comparison_status = source.get("comparison_status")
+                        comparison_set = {
+                            "i": comparison_id, "tg": target_label, "tp": target_period, "s": source_id,
+                            "st": comparison_status if comparison_status != "comparable" else None,
+                            "p": interpretation.get("wording_policy"),
+                            "bc": base_quality.get("period_coverage_percent"),
+                            "rc": reference_quality.get("period_coverage_percent"),
+                            "bz": True if interpretation.get("base_sparse_zero_uncertain") else None,
+                            "rz": True if interpretation.get("reference_sparse_zero_uncertain") else None,
+                            "br": True if interpretation.get("base_reconstructed") else None,
+                            "rr": True if interpretation.get("reference_reconstructed") else None,
+                            "r": (source.get("reasons") or []) or None,
+                        }
+                        context["comparison_sets"].append({k: v for k, v in comparison_set.items() if v is not None})
                     for item in source.get("values") or []:
                         if not isinstance(item, dict):
                             continue
+                        raw_stat = str(item.get("key") or item.get("label") or "value")
+                        stat_name = "period_delta" if raw_stat == "delta" and source.get("metric") in {"energy_total", "runtime", "cycles"} else raw_stat
                         kwargs: dict[str, Any] = {
                             "scope":"comparison", "comparison_id":comparison_id,
-                            "stat":str(item.get("key") or item.get("label") or "value"),
-                            "base":item.get("base"), "reference":item.get("reference"), "gap":item.get("absolute_change"),
+                            "stat":stat_name,
+                            "base":item.get("base"), "reference":item.get("reference"),
+                            "gap":item.get("absolute_change"),
                         }
                         if interpretation.get("wording_policy") == "full_period_change_allowed":
                             kwargs["trend_direction"] = _trend_from_gap(item.get("absolute_change"))
@@ -834,41 +938,111 @@ def _lossless_ai_context_v5(result: dict[str, Any]) -> dict[str, Any]:
                             kwargs["gap_pct"] = item.get("relative_change_percent")
                         if item.get("relative_change_reason"):
                             kwargs["gap_pct_reason"] = item.get("relative_change_reason")
-                        add_fact(**kwargs)
+                        add_fact(
+                            dedup_key=("comparison", comparison_id, kwargs["stat"]),
+                            **kwargs,
+                        )
 
-    for index, relationship in enumerate(context["relationships"], start=1):
-        relationship["id"] = f"R{index}"
+    context["counts"]["comparison_sources_unique"] = len(context["comparison_sets"])
+
+    # Resolve relationship source IDs after source deduplication.
+    dedup_relationships: list[dict[str, Any]] = []
+    seen_relationships: set[tuple[Any, ...]] = set()
+    for relationship in context["relationships"]:
         forecast_name = relationship.get("forecast_source")
         actual_name = relationship.get("actual_source")
-        if forecast_name:
-            for row in context["sources"]:
-                if row.get("n") == forecast_name:
-                    relationship["forecast_source_id"] = row.get("i")
-                    break
-        if actual_name:
-            for row in context["sources"]:
-                if row.get("n") == actual_name:
-                    relationship["actual_source_id"] = row.get("i")
-                    break
+        forecast_id = None
+        actual_id = None
+        for row in context["sources"]:
+            # The relationship names end with the sensor key; matching this way
+            # avoids retaining long catalog/device paths in the source registry.
+            sensor_key = str(row.get("sk") or "")
+            if forecast_name and sensor_key and str(forecast_name).endswith("/" + sensor_key):
+                forecast_id = row.get("i")
+            if actual_name and sensor_key and str(actual_name).endswith("/" + sensor_key):
+                actual_id = row.get("i")
+        relationship["forecast_source_id"] = forecast_id
+        relationship["actual_source_id"] = actual_id
+        relationship.pop("forecast_source", None)
+        relationship.pop("actual_source", None)
         if relationship.get("kind") == "power_forecast_vs_actual":
             relationship["max_interpretation"] = "context_only_not_a_fault_indicator"
+        key = (
+            relationship.get("kind"), forecast_id, actual_id,
+            relationship.get("full_period_comparison_supported"),
+        )
+        if key in seen_relationships:
+            continue
+        seen_relationships.add(key)
+        dedup_relationships.append(relationship)
+    context["relationships"] = dedup_relationships
+    for index, relationship in enumerate(context["relationships"], start=1):
+        relationship["id"] = f"R{index}"
+
+    # Global deterministic quality facts. These are small but crucial: the model
+    # must not describe a partial year as representative or pretend a N/N-x
+    # comparison is useful when every comparison is limited/unavailable.
+    qseq = 0
+    report_summary = result.get("summary") or {}
+    total = int(report_summary.get("sources_total") or 0)
+    ok = int(report_summary.get("sources_ok") or 0)
+    no_data = int(report_summary.get("sources_no_data") or 0)
+    errors = int(report_summary.get("sources_error") or 0)
+    invalid = int(report_summary.get("sources_invalid") or 0)
+    availability_pct = (ok / total * 100.0) if total else 100.0
+    qseq += 1
+    context["quality_signals"].append({
+        "i": f"Q{qseq}", "k": "report_source_availability",
+        "st": "good" if availability_pct >= 95.0 else ("partial" if availability_pct >= 80.0 else "limited"),
+        "total": total, "ok": ok, "no_data": no_data, "errors": errors, "invalid": invalid,
+        "availability_pct": _rounded_derived(availability_pct, 1),
+        "ms": True if availability_pct < 80.0 else None,
+        "ma": True if availability_pct < 95.0 else None,
+    })
+
+    for target in comparisons.get("targets") or []:
+        summary = target.get("summary") or {}
+        target_total = int(summary.get("sources_total") or 0)
+        comparable = int(summary.get("sources_comparable") or 0)
+        partial = int(summary.get("sources_partial") or 0)
+        limited = int(summary.get("sources_limited") or 0)
+        reconstructed = int(summary.get("sources_reconstructed") or 0)
+        unavailable = int(summary.get("sources_unavailable") or 0)
+        representative = comparable + partial
+        qseq += 1
+        no_representative = bool(target_total and representative == 0)
+        weak = bool(target_total and representative / target_total < 0.5)
+        context["quality_signals"].append({
+            "i": f"Q{qseq}", "k": "comparison_quality",
+            "st": "no_representative" if no_representative else ("limited" if weak else "good"),
+            "target": target.get("label"),
+            "target_period": (target.get("resolved_period") or {}).get("label"),
+            "total": target_total, "comparable": comparable, "partial": partial,
+            "limited": limited, "reconstructed": reconstructed, "unavailable": unavailable,
+            "representative": representative,
+            "ms": True if no_representative else None,
+            "ma": True if no_representative or weak else None,
+        })
 
     _populate_selection_policy(context)
     return context
 
-
-
 def _populate_selection_policy(context: dict[str, Any]) -> None:
-    """Declare the compact RC4 id-only selection protocol.
-
-    Allowed IDs are derived deterministically at validation time instead of being
-    serialized as long lists. This keeps large reports lossless and under the
-    context budget while preserving every fact and comparison.
-    """
+    """Declare the RC5 shortlist/id-only selection protocol."""
+    mandatory_summary = [
+        str(row.get("i")) for row in context.get("quality_signals") or []
+        if row.get("i") and row.get("ms")
+    ]
+    mandatory_attention = [
+        str(row.get("i")) for row in context.get("quality_signals") or []
+        if row.get("i") and row.get("ma")
+    ]
     context["selection_policy"] = {
-        "protocol": "id_only_v1",
-        "summary_prefixes": ["F", "R"],
-        "attention_prefixes": ["F", "C", "S", "R"],
+        "protocol": "id_only_v2_shortlist",
+        "summary_prefixes": ["F", "R", "Q"],
+        "attention_prefixes": ["F", "C", "S", "R", "Q"],
+        "mandatory_summary": mandatory_summary,
+        "mandatory_attention": mandatory_attention,
         "recommendation_actions": [
             "collect_more_data",
             "monitor_forecast",
@@ -879,18 +1053,33 @@ def _populate_selection_policy(context: dict[str, Any]) -> None:
 
 
 def _allowed_selection_ids(context: dict[str, Any]) -> tuple[set[str], set[str], set[str]]:
-    """Return deterministic allowed ID sets without serializing them into context."""
+    """Return deterministic allowed ID sets for the projected ledger.
+
+    RC5 deliberately refuses low-coverage current values and limited/reconstructed
+    N/N-x facts as normal summary evidence. Those facts remain available as
+    attention evidence through their source/comparison quality IDs.
+    """
     sources = {row.get("i"): row for row in context.get("sources") or []}
     comparisons = {row.get("i"): row for row in context.get("comparison_sets") or []}
     summary: set[str] = set()
     attention: set[str] = set()
 
+    for quality in context.get("quality_signals") or []:
+        qid = quality.get("i")
+        if not qid:
+            continue
+        if quality.get("ms"):
+            summary.add(str(qid))
+        if quality.get("ma") or quality.get("st") not in {None, "good"}:
+            attention.add(str(qid))
+
     for relationship in context.get("relationships") or []:
         rid = relationship.get("id")
         if not rid:
             continue
-        summary.add(str(rid))
-        if not relationship.get("full_period_comparison_supported", True):
+        if relationship.get("full_period_comparison_supported", True):
+            summary.add(str(rid))
+        else:
             attention.add(str(rid))
 
     for fact in context.get("facts") or []:
@@ -904,16 +1093,17 @@ def _allowed_selection_ids(context: dict[str, Any]) -> tuple[set[str], set[str],
         metric = source.get("m")
         comparison = comparisons.get(fact.get("c")) or {}
         if scope == "current":
-            if stat in {"mean", "period_delta", "integrated_energy_kwh"}:
-                summary.add(fid)
-            elif metric == "temperature" and stat in {"min", "max"}:
+            coverage = _as_number(source.get("cov"))
+            representative = coverage is None or coverage >= 80.0
+            if representative and stat in {"mean", "period_delta", "integrated_energy_kwh"}:
                 summary.add(fid)
         elif scope == "comparison":
-            if stat in {"mean", "period_delta"}:
+            status = comparison.get("st") or "comparable"
+            if status in {"comparable", "partial"} and stat in {"mean", "period_delta"}:
                 summary.add(fid)
-            if comparison.get("st") in {"partial", "limited", "reconstructed"}:
+            if status in {"partial", "limited", "reconstructed"} and stat in {"mean", "period_delta"}:
                 attention.add(fid)
-            elif fact.get("p") is not None:
+            elif fact.get("p") is not None and stat in {"mean", "period_delta"}:
                 try:
                     if abs(float(fact.get("p"))) >= 20:
                         attention.add(fid)
@@ -934,8 +1124,8 @@ def _allowed_selection_ids(context: dict[str, Any]) -> tuple[set[str], set[str],
 
     for source in context.get("sources") or []:
         sid = source.get("i")
-        coverage = source.get("cov")
-        if sid and (source.get("st") or source.get("w") or (isinstance(coverage, (int, float)) and coverage < 80)):
+        coverage = _as_number(source.get("cov"))
+        if sid and (source.get("st") or source.get("w") or (coverage is not None and coverage < 80.0)):
             attention.add(str(sid))
 
     return summary, attention, set(attention)
@@ -943,13 +1133,160 @@ def _allowed_selection_ids(context: dict[str, Any]) -> tuple[set[str], set[str],
 
 def _selection_index(context: dict[str, Any]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
-    for key in ("sources", "comparison_sets", "facts", "relationships"):
+    for key in ("sources", "comparison_sets", "facts", "relationships", "quality_signals"):
         for row in context.get(key) or []:
             rid = row.get("i") or row.get("id")
             if rid:
                 out[str(rid)] = row
     return out
 
+
+def _fact_score(fact: dict[str, Any], sources: dict[str, dict[str, Any]], comparisons: dict[str, dict[str, Any]]) -> float:
+    """Score one deterministic fact for RC5's LLM shortlist."""
+    stat = str(fact.get("k") or "")
+    score = {"period_delta": 100.0, "integrated_energy_kwh": 96.0, "mean": 90.0}.get(stat, 10.0)
+    source = sources.get(fact.get("s")) or {}
+    metric = source.get("m")
+    if metric == "energy_total":
+        score += 18.0
+    elif metric == "power":
+        score += 10.0
+    elif metric == "temperature":
+        score += 4.0
+    coverage = _as_number(source.get("cov"))
+    if coverage is not None:
+        score += 15.0 if coverage >= 95.0 else (5.0 if coverage >= 80.0 else -40.0)
+    if fact.get("q") == "comparison":
+        comparison = comparisons.get(fact.get("c")) or {}
+        status = comparison.get("st") or "comparable"
+        score += {"comparable": 25.0, "partial": 10.0, "limited": -50.0, "reconstructed": -30.0, "unavailable": -100.0}.get(status, 0.0)
+        pct = _as_number(fact.get("p"))
+        if pct is not None:
+            score += min(abs(pct), 200.0) / 8.0
+        gap = _as_number(fact.get("d"))
+        if gap is not None and pct is None:
+            score += min(abs(gap), 100.0) / 20.0
+    return score
+
+
+def _comparison_attention_score(row: dict[str, Any]) -> float:
+    status = row.get("st") or "comparable"
+    score = {"reconstructed": 100.0, "limited": 90.0, "partial": 60.0, "unavailable": 35.0}.get(status, 0.0)
+    if row.get("br") or row.get("rr"):
+        score += 30.0
+    for key in ("bc", "rc"):
+        coverage = _as_number(row.get(key))
+        if coverage is not None:
+            score += max(0.0, 80.0 - coverage) / 4.0
+    if row.get("r"):
+        score += 5.0
+    return score
+
+
+def _project_ai_context(full: dict[str, Any]) -> dict[str, Any]:
+    """Return a deterministic RC5 shortlist for the LLM.
+
+    The complete ledger stays inside HA Reporting. The model sees only facts that
+    can materially improve the synthesis or explain quality limitations. This is
+    the main RC5 latency optimization for local CPU inference.
+    """
+    sources = {row.get("i"): row for row in full.get("sources") or []}
+    comparisons = {row.get("i"): row for row in full.get("comparison_sets") or []}
+    facts = list(full.get("facts") or [])
+    relationships = list(full.get("relationships") or [])
+    quality_signals = list(full.get("quality_signals") or [])
+
+    # Top representative current/comparison facts. Power peaks/P95/counter_end
+    # never enter the shortlist because they are not normal summary candidates.
+    summary_allowed, attention_allowed, _ = _allowed_selection_ids(full)
+    summary_facts = [f for f in facts if str(f.get("i")) in summary_allowed]
+    summary_facts.sort(key=lambda f: (-_fact_score(f, sources, comparisons), str(f.get("i"))))
+    selected_fact_ids = {str(f.get("i")) for f in summary_facts[:28]}
+
+    # Keep a small set of high-impact comparable changes as attention candidates.
+    attention_facts = [
+        f for f in facts
+        if str(f.get("i")) in attention_allowed and f.get("q") == "comparison"
+    ]
+    attention_facts.sort(key=lambda f: (-_fact_score(f, sources, comparisons), str(f.get("i"))))
+    selected_fact_ids.update(str(f.get("i")) for f in attention_facts[:8])
+
+    # Keep the most useful comparison-quality objects, prioritizing limited and
+    # reconstructed cases. Unavailable entries are summarized globally instead
+    # of flooding the LLM with dozens of near-identical rows.
+    attention_comparisons = [
+        row for row in comparisons.values()
+        if str(row.get("i")) in attention_allowed and row.get("st") != "unavailable"
+    ]
+    attention_comparisons.sort(key=lambda r: (-_comparison_attention_score(r), str(r.get("i"))))
+    selected_comparison_ids = {str(row.get("i")) for row in attention_comparisons[:14]}
+    for fact in facts:
+        if str(fact.get("i")) in selected_fact_ids and fact.get("c"):
+            selected_comparison_ids.add(str(fact.get("c")))
+
+    # Source-quality warnings: only the worst few are needed because global Q*
+    # signals already describe the report-wide completeness.
+    quality_sources = []
+    for row in sources.values():
+        sid = str(row.get("i"))
+        if sid not in attention_allowed:
+            continue
+        coverage = _as_number(row.get("cov"))
+        severity = 100.0 - (coverage if coverage is not None else 100.0)
+        if row.get("st"):
+            severity += 25.0
+        if row.get("w"):
+            severity += 10.0
+        quality_sources.append((severity, sid, row))
+    quality_sources.sort(key=lambda item: (-item[0], item[1]))
+    selected_source_alert_ids = {item[1] for item in quality_sources[:8]}
+
+    selected_source_ids = set(selected_source_alert_ids)
+    for fact in facts:
+        if str(fact.get("i")) in selected_fact_ids:
+            sid = fact.get("s")
+            if sid:
+                selected_source_ids.add(str(sid))
+            cid = fact.get("c")
+            if cid:
+                comp = comparisons.get(cid) or {}
+                if comp.get("s"):
+                    selected_source_ids.add(str(comp.get("s")))
+    for cid in selected_comparison_ids:
+        comp = comparisons.get(cid) or {}
+        if comp.get("s"):
+            selected_source_ids.add(str(comp.get("s")))
+    for relationship in relationships:
+        for key in ("forecast_source_id", "actual_source_id"):
+            if relationship.get(key):
+                selected_source_ids.add(str(relationship.get(key)))
+
+    projected = {
+        "schema": full.get("schema"),
+        "ledger_complete": False,
+        "projection": "deterministic_shortlist_v1",
+        "legend": full.get("legend"),
+        "semantics": full.get("semantics"),
+        "report": full.get("report"),
+        "summary": full.get("summary"),
+        "sources": [row for row in full.get("sources") or [] if str(row.get("i")) in selected_source_ids],
+        "comparison_sets": [row for row in full.get("comparison_sets") or [] if str(row.get("i")) in selected_comparison_ids],
+        "facts": [row for row in facts if str(row.get("i")) in selected_fact_ids],
+        "relationships": relationships,
+        "quality_signals": quality_signals,
+        "selection_policy": {},
+        "counts": dict(full.get("counts") or {}),
+        "ledger_stats": {
+            "full_sources": len(full.get("sources") or []),
+            "shortlisted_sources": len(selected_source_ids),
+            "full_comparison_sets": len(full.get("comparison_sets") or []),
+            "shortlisted_comparison_sets": len(selected_comparison_ids),
+            "full_facts": len(facts),
+            "shortlisted_facts": len(selected_fact_ids),
+        },
+    }
+    _populate_selection_policy(projected)
+    return projected
 
 def _extract_json_object(value: Any) -> dict[str, Any] | None:
     if isinstance(value, dict):
@@ -983,7 +1320,7 @@ def _extract_json_object(value: Any) -> dict[str, Any] | None:
 
 
 def _validate_selection(data: Any, context: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    """Validate an id-only AI selection. Any free-form prose is discarded."""
+    """Validate an id-only AI selection and inject mandatory quality facts."""
     parsed = _extract_json_object(data) or {}
     policy = context.get("selection_policy") or {}
     summary_allowed, attention_allowed, evidence_allowed = _allowed_selection_ids(context)
@@ -1002,6 +1339,32 @@ def _validate_selection(data: Any, context: dict[str, Any]) -> tuple[dict[str, A
                 break
         return selected
 
+    model_summary = ids("summary", summary_allowed, 4)
+    model_attention = ids("attention", attention_allowed, 5)
+    model_valid = bool(model_summary)
+
+    mandatory_summary = [
+        str(item) for item in (policy.get("mandatory_summary") or [])
+        if str(item) in summary_allowed
+    ]
+    mandatory_attention = [
+        str(item) for item in (policy.get("mandatory_attention") or [])
+        if str(item) in attention_allowed
+    ]
+
+    summary: list[str] = []
+    for item in mandatory_summary + model_summary:
+        if item not in summary:
+            summary.append(item)
+        if len(summary) >= 4:
+            break
+    attention: list[str] = []
+    for item in mandatory_attention + model_attention:
+        if item not in attention:
+            attention.append(item)
+        if len(attention) >= 5:
+            break
+
     recommendations: list[dict[str, str]] = []
     raw_recommendations = parsed.get("recommendations")
     if isinstance(raw_recommendations, list):
@@ -1017,14 +1380,11 @@ def _validate_selection(data: Any, context: dict[str, Any]) -> tuple[dict[str, A
             if len(recommendations) >= 4:
                 break
 
-    selection = {
-        "summary": ids("summary", summary_allowed, 4),
-        "attention": ids("attention", attention_allowed, 5),
+    return {
+        "summary": summary,
+        "attention": attention,
         "recommendations": recommendations,
-    }
-    valid = bool(selection["summary"])
-    return selection, valid
-
+    }, model_valid
 
 def _fallback_selection(context: dict[str, Any]) -> dict[str, Any]:
     """Deterministic fallback if the model does not return valid JSON IDs."""
@@ -1033,31 +1393,48 @@ def _fallback_selection(context: dict[str, Any]) -> dict[str, Any]:
     ordered_ids = list(index)
     summary_allowed = [item for item in ordered_ids if item in summary_set]
     attention_allowed = [item for item in ordered_ids if item in attention_set]
+    policy = context.get("selection_policy") or {}
 
     summary: list[str] = []
+    for item in policy.get("mandatory_summary") or []:
+        item = str(item)
+        if item in summary_set and item not in summary:
+            summary.append(item)
+
     # Prefer validated energy and power forecast relationships for EMHASS-like reports.
     for kind in ("energy_forecast_vs_actual", "power_forecast_vs_actual"):
         for rid in summary_allowed:
             row = index.get(rid) or {}
             if row.get("kind") == kind and row.get("full_period_comparison_supported"):
-                summary.append(rid)
+                if rid not in summary:
+                    summary.append(rid)
                 break
-    # Then choose representative comparison means/period totals, followed by current means.
+
+    # Then choose representative comparison means/period totals, followed by
+    # representative current facts. Low-quality facts are excluded upstream.
     for rid in summary_allowed:
+        if len(summary) >= 4:
+            break
         if rid in summary:
             continue
         row = index.get(rid) or {}
         if rid.startswith("F") and row.get("q") == "comparison" and row.get("k") in {"period_delta", "mean"}:
             summary.append(rid)
-        if len(summary) >= 4:
-            break
     for rid in summary_allowed:
         if len(summary) >= 4:
             break
         if rid not in summary:
             summary.append(rid)
 
-    attention = attention_allowed[:5]
+    attention: list[str] = []
+    fallback_attention = [item for item in attention_allowed if not str(item).startswith("F")]
+    for item in (policy.get("mandatory_attention") or []) + fallback_attention:
+        item = str(item)
+        if item in attention_set and item not in attention:
+            attention.append(item)
+        if len(attention) >= 5:
+            break
+
     recommendations: list[dict[str, str]] = []
     for rid in attention[:4]:
         row = index.get(rid) or {}
@@ -1065,6 +1442,8 @@ def _fallback_selection(context: dict[str, Any]) -> dict[str, Any]:
             action = "monitor_forecast"
         elif rid.startswith("C") and (row.get("br") or row.get("rr")):
             action = "verify_reconstructed_counter"
+        elif rid.startswith("Q"):
+            action = "collect_more_data"
         elif rid.startswith("C") and row.get("st") in {"partial", "limited", "unavailable"}:
             action = "collect_more_data"
         else:
@@ -1072,24 +1451,52 @@ def _fallback_selection(context: dict[str, Any]) -> dict[str, Any]:
         recommendations.append({"action": action, "evidence": rid})
     return {"summary": summary[:4], "attention": attention, "recommendations": recommendations[:4]}
 
+def _source_label(source: dict[str, Any], language: str = "fr") -> str:
+    """Return a human-oriented label without leaking grouping artefacts.
 
-def _source_label(source: dict[str, Any]) -> str:
-    path = str(source.get("n") or "source")
-    parts = [part for part in path.split("/") if part]
-    if len(parts) >= 3:
-        catalog, device, sensor = parts[-3], parts[-2], parts[-1]
-        if device and device != catalog:
-            return device
-        human = sensor.replace("_", " ")
-        if human.startswith("temp ") and human.endswith(" temperature"):
-            human = human[5:-12].strip()
-        elif human.startswith("temperature "):
-            human = human[12:].strip()
-        return human or device or catalog or "source"
-    if len(parts) >= 2:
-        return parts[-2]
-    return parts[-1] if parts else "source"
+    Temperature/humidity sources prefer their real sensor identity so a shared
+    room sensor is not described as if it belonged to the first appliance group
+    that referenced it. Other device-specific metrics keep the configured device
+    name where that is more readable.
+    """
+    language = "en" if str(language).lower() == "en" else "fr"
+    sensor_key = str(source.get("sk") or source.get("e") or source.get("n") or "source")
+    metric = str(source.get("m") or "")
+    device = str(source.get("d") or "").strip()
+    catalog = str(source.get("g") or "").strip()
+    lowered = sensor_key.casefold()
 
+    if "p_load_forecast" in lowered or _is_forecast_source(sensor_key):
+        return "EMHASS forecast" if language == "en" else "Prévision EMHASS"
+    if "total_active_power" in lowered or lowered.endswith("active_power"):
+        return "Total electrical power" if language == "en" else "Puissance électrique totale"
+    if "total_active_energy" in lowered or lowered.endswith("active_energy"):
+        return "Total electrical energy" if language == "en" else "Énergie électrique totale"
+
+    def human_sensor(value: str) -> str:
+        text = value
+        if text.startswith("sensor."):
+            text = text[7:]
+        for prefix in ("sensor_temp_", "temp_", "temperature_"):
+            if text.startswith(prefix):
+                text = text[len(prefix):]
+                break
+        for suffix in ("_temperature", "_humidity", "_power", "_puissance", "_energy", "_energie"):
+            if text.endswith(suffix):
+                text = text[:-len(suffix)]
+                break
+        text = text.replace("_", " ").strip()
+        return text or value
+
+    if metric in {"temperature", "humidity"} or source.get("sh"):
+        label = human_sensor(sensor_key)
+        return label[0].upper() + label[1:] if label else "Source"
+    if device and device.casefold() not in {"emhass", "devices", "device"}:
+        return device
+    label = human_sensor(sensor_key)
+    if label and label != "source":
+        return label[0].upper() + label[1:]
+    return device or catalog or ("Source" if language == "en" else "Source")
 
 def _fmt_number(value: Any, language: str = "fr", signed: bool = False) -> str:
     try:
@@ -1128,16 +1535,16 @@ def _quality_suffix(comparison: dict[str, Any], language: str) -> str:
     rc = comparison.get("rc")
     if language == "en":
         if status == "partial":
-            return f" The comparison is partial (coverage {bc if bc is not None else '?'}% / {rc if rc is not None else '?'}%)."
+            return f" The comparison is partial (coverage {_fmt_number(bc, language) if bc is not None else '?'}% / {_fmt_number(rc, language) if rc is not None else '?'}%)."
         if status == "limited":
-            return f" The comparison is limited (coverage {bc if bc is not None else '?'}% / {rc if rc is not None else '?'}%)."
+            return f" The comparison is limited (coverage {_fmt_number(bc, language) if bc is not None else '?'}% / {_fmt_number(rc, language) if rc is not None else '?'}%)."
         if status == "reconstructed":
             return " The comparison uses a reconstructed counter after reset(s)."
         return ""
     if status == "partial":
-        return f" La comparaison est partielle (couverture {bc if bc is not None else '?'} % / {rc if rc is not None else '?'} %)."
+        return f" La comparaison est partielle (couverture {_fmt_number(bc, language) if bc is not None else '?'} % / {_fmt_number(rc, language) if rc is not None else '?'} %)."
     if status == "limited":
-        return f" La comparaison est limitée (couverture {bc if bc is not None else '?'} % / {rc if rc is not None else '?'} %)."
+        return f" La comparaison est limitée (couverture {_fmt_number(bc, language) if bc is not None else '?'} % / {_fmt_number(rc, language) if rc is not None else '?'} %)."
     if status == "reconstructed":
         return " La comparaison utilise un compteur reconstruit après reset(s)."
     return ""
@@ -1151,10 +1558,37 @@ def _render_ledger_id(item_id: str, context: dict[str, Any], language: str, sect
     sources = {item.get("i"): item for item in context.get("sources") or []}
     comparisons = {item.get("i"): item for item in context.get("comparison_sets") or []}
 
+    if item_id.startswith("Q"):
+        kind = row.get("k")
+        if kind == "report_source_availability":
+            total = int(row.get("total") or 0)
+            ok = int(row.get("ok") or 0)
+            no_data = int(row.get("no_data") or 0)
+            errors = int(row.get("errors") or 0)
+            invalid = int(row.get("invalid") or 0)
+            pct = _fmt_number(row.get("availability_pct"), language)
+            if language == "en":
+                return f"Report source availability is {ok}/{total} ({pct}%); {no_data} have no data, {errors} errors and {invalid} invalid sources."
+            return f"Disponibilité des sources du rapport : {ok}/{total} ({pct} %) ; {no_data} sans données, {errors} en erreur et {invalid} invalides."
+        if kind == "comparison_quality":
+            target = row.get("target") or ("reference" if language == "en" else "référence")
+            comparable = int(row.get("comparable") or 0)
+            partial = int(row.get("partial") or 0)
+            limited = int(row.get("limited") or 0)
+            reconstructed = int(row.get("reconstructed") or 0)
+            unavailable = int(row.get("unavailable") or 0)
+            if row.get("st") == "no_representative":
+                if language == "en":
+                    return f"{target}: no representative N/N-x comparison is available ({comparable} comparable, {partial} partial, {limited} limited, {reconstructed} reconstructed, {unavailable} unavailable)."
+                return f"{target} : aucune comparaison N/N-x représentative n'est disponible ({comparable} comparable, {partial} partielle, {limited} limitées, {reconstructed} reconstruites, {unavailable} indisponibles)."
+            if language == "en":
+                return f"{target}: comparison quality is mixed ({comparable} comparable, {partial} partial, {limited} limited, {reconstructed} reconstructed, {unavailable} unavailable)."
+            return f"{target} : qualité de comparaison hétérogène ({comparable} comparables, {partial} partielles, {limited} limitées, {reconstructed} reconstruites, {unavailable} indisponibles)."
+
     if item_id.startswith("F"):
         comparison = comparisons.get(row.get("c")) or {}
         source = sources.get(row.get("s")) or sources.get(comparison.get("s")) or {}
-        label = _source_label(source)
+        label = _source_label(source, language)
         metric = source.get("m")
         unit = source.get("u") or ("kWh" if row.get("k") == "integrated_energy_kwh" else "")
         stat = row.get("k")
@@ -1223,7 +1657,7 @@ def _render_ledger_id(item_id: str, context: dict[str, Any], language: str, sect
 
     if item_id.startswith("C"):
         source = sources.get(row.get("s")) or {}
-        label = _source_label(source)
+        label = _source_label(source, language)
         status = row.get("st") or "comparable"
         reasons = row.get("r") or []
         reason = str(reasons[0]) if reasons else ""
@@ -1244,7 +1678,7 @@ def _render_ledger_id(item_id: str, context: dict[str, Any], language: str, sect
         return f"{label} : la qualité de comparaison demande de la prudence. {reason}".strip()
 
     if item_id.startswith("S"):
-        label = _source_label(row)
+        label = _source_label(row, language)
         coverage = row.get("cov")
         warnings = row.get("w") or []
         if language == "en":
@@ -1266,13 +1700,33 @@ def _render_recommendation(action: str, evidence: str, context: dict[str, Any], 
     source = None
     if evidence.startswith("F"):
         source = sources.get(row.get("s"))
+        if source is None and row.get("c"):
+            comparisons = {item.get("i"): item for item in context.get("comparison_sets") or []}
+            comparison = comparisons.get(row.get("c")) or {}
+            source = sources.get(comparison.get("s"))
     elif evidence.startswith("C"):
         source = sources.get(row.get("s"))
     elif evidence.startswith("S"):
         source = row
     elif evidence.startswith("R"):
         source = sources.get(row.get("actual_source_id")) or sources.get(row.get("forecast_source_id"))
-    label = _source_label(source or {})
+    elif evidence.startswith("Q"):
+        source = None
+    label = _source_label(source or {}, language)
+
+    if evidence.startswith("Q"):
+        if row.get("k") == "report_source_availability":
+            return (
+                "Continue collecting missing source history before treating the report as fully representative."
+                if language == "en" else
+                "Poursuivre la collecte des historiques manquants avant de considérer le rapport comme pleinement représentatif."
+            )
+        if row.get("k") == "comparison_quality":
+            return (
+                "Wait for a more representative reference period before drawing N/N-x conclusions."
+                if language == "en" else
+                "Attendre une période de référence plus représentative avant de tirer des conclusions N/N-x."
+            )
 
     if language == "en":
         texts = {
@@ -1297,19 +1751,31 @@ def _render_selection_analysis(context: dict[str, Any], selection: dict[str, Any
     attention_heading = "ATTENTION POINTS" if language == "en" else "POINTS D'ATTENTION"
     recommendation_heading = "RECOMMENDATIONS" if language == "en" else "RECOMMANDATIONS"
 
-    summary = [
+    def dedupe(items: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for text in items:
+            key = " ".join(str(text).casefold().split())
+            if key and key not in seen:
+                seen.add(key)
+                out.append(text)
+        return out
+
+    summary = dedupe([
         text for item_id in selection.get("summary") or []
         if (text := _render_ledger_id(item_id, context, language, "summary"))
-    ]
-    attention = [
+    ])
+    attention = dedupe([
         text for item_id in selection.get("attention") or []
         if (text := _render_ledger_id(item_id, context, language, "attention"))
-    ]
-    recommendations = [
+    ])
+    summary_keys = {" ".join(text.casefold().split()) for text in summary}
+    attention = [text for text in attention if " ".join(text.casefold().split()) not in summary_keys]
+    recommendations = dedupe([
         _render_recommendation(item.get("action"), item.get("evidence"), context, language)
         for item in selection.get("recommendations") or []
         if isinstance(item, dict)
-    ]
+    ])
 
     if not summary:
         summary = ["No representative quantitative fact was selected." if language == "en" else "Aucun fait quantitatif représentatif n'a été sélectionné."]
@@ -1337,29 +1803,41 @@ def build_budgeted_ai_context(
     result: dict[str, Any],
     target_chars: int = AI_TARGET_CONTEXT_CHARS,
 ) -> tuple[str, dict[str, Any]]:
-    """Return the complete semantic AI context using self-describing normalization.
+    """Return RC5's deterministic shortlist while retaining the full ledger internally.
 
-    0.2.0-rc.4 preserves every semantic current/comparison value as an atomic fact and adds deterministic cross-source relationships only when pairing is unambiguous. The language model may select only ledger IDs; HA Reporting renders every quantitative sentence deterministically after the AI response. The hard limit is enforced
-    by the caller; when the lossless context cannot fit, analysis fails explicitly
-    instead of silently omitting data.
+    The report data and complete fact ledger are preserved in HA Reporting. Only a
+    deterministic shortlist of representative/significant facts is sent to the
+    language model, which materially reduces local CPU inference time without
+    allowing the model to invent values or comparisons.
     """
     legacy_json = _encoded_context(compact_report_context(result))
-    context = _lossless_ai_context_v5(result)
+    full_context = _fact_ledger_context_v11(result)
+    full_context_json = _encoded_context(full_context)
+    context = _project_ai_context(full_context)
     context_json = _encoded_context(context)
+    stats = context.get("ledger_stats") or {}
     metadata = {
         "schema": context.get("schema"),
-        "mode": "lossless_self_describing",
-        "lossless": True,
+        "mode": "deterministic_shortlist",
+        "lossless": False,
+        "report_data_lossless": True,
         "characters": len(context_json),
         "target_characters": target_chars,
         "limit_characters": AI_MAX_CONTEXT_CHARS,
         "legacy_characters": len(legacy_json),
-        "full_compact_characters": len(context_json),
+        "full_compact_characters": len(full_context_json),
         "omitted_current_sources": 0,
         "omitted_comparison_sources": 0,
-        "current_sources": (context.get("counts") or {}).get("current_sources", 0),
-        "comparison_sources": (context.get("counts") or {}).get("comparison_sources", 0),
+        "current_sources": (full_context.get("counts") or {}).get("current_sources", 0),
+        "comparison_sources": (full_context.get("counts") or {}).get("comparison_sources", 0),
         "relationships": len(context.get("relationships") or []),
+        "full_sources": stats.get("full_sources", 0),
+        "shortlisted_sources": stats.get("shortlisted_sources", 0),
+        "full_comparison_sets": stats.get("full_comparison_sets", 0),
+        "shortlisted_comparison_sets": stats.get("shortlisted_comparison_sets", 0),
+        "full_facts": stats.get("full_facts", 0),
+        "shortlisted_facts": stats.get("shortlisted_facts", 0),
+        "quality_signals": len(context.get("quality_signals") or []),
     }
     return context_json, metadata
 
@@ -1447,15 +1925,15 @@ def _instructions(context_json: str, language: str = "fr") -> str:
     if language == "en":
         return f"""You are selecting evidence for a home-automation report calculated by HA Reporting.
 Do not write the report and do not expose internal reasoning.
-The context uses `ha-reporting-ai-context-v10`, a deterministic fact ledger.
+The context uses `ha-reporting-ai-context-v11`, a deterministic shortlisted fact ledger.
 
 Your ONLY job is to select IDs already listed in `selection_policy`.
 Return exactly one JSON object and nothing else:
 {{"summary":["ID"],"attention":["ID"],"recommendations":[{{"action":"ACTION","evidence":"ID"}}]}}
 
 Rules:
-- `summary`: 1 to 4 eligible `F*` or `R*` IDs. Prefer current `mean`/`period_delta`/`integrated_energy_kwh`, comparison `mean`/`period_delta`, and explicit relationships.
-- `attention`: 0 to 5 eligible IDs. Prefer partial/limited/reconstructed comparison sets, quality-limited sources, or relationships whose full-period comparison is not supported.
+- `summary`: 1 to 4 eligible `F*`, `R*` or mandatory `Q*` IDs. Prefer current `mean`/`period_delta`/`integrated_energy_kwh`, representative comparison `mean`/`period_delta`, explicit relationships, and mandatory quality signals.
+- `attention`: 0 to 5 eligible IDs. Prefer mandatory `Q*` quality signals, partial/limited/reconstructed comparison sets, quality-limited sources, or relationships whose full-period comparison is not supported.
 - `recommendations`: 0 to 4 objects. `action` must be one of `selection_policy.recommendation_actions`; `evidence` must be an attention-worthy ID from the context.
 - Return IDs only. Never return names, values, percentages, explanations, prose, markdown, code fences or extra keys.
 - Prefer representative current-period energy/mean facts and explicit `relationships` over isolated power peaks.
@@ -1463,21 +1941,22 @@ Rules:
 - If a relationship has `full_period_comparison_supported=false`, it may be selected as an attention/coverage limitation, but never as evidence of a period performance gap.
 - For N/N-x, prefer `comparable` facts for summary. Use `partial`, `limited`, `reconstructed` or sparse-zero items mainly as attention evidence.
 - Do not invent cross-source comparisons. Do not calculate anything.
+- This is a deterministic shortlist of the full HA Reporting ledger. Do not infer anything about omitted routine facts.
 
 Validated HA Reporting context:
 {context_json}
 """
     return f"""Tu sélectionnes les éléments à mettre en avant dans un rapport domotique calculé par HA Reporting.
 N'écris pas le rapport et n'affiche aucun raisonnement interne.
-Le contexte utilise `ha-reporting-ai-context-v10`, un registre déterministe de faits.
+Le contexte utilise `ha-reporting-ai-context-v11`, un registre déterministe de faits présélectionnés.
 
 Ta SEULE tâche est de sélectionner des identifiants déjà présents dans `selection_policy`.
 Retourne exactement un objet JSON et rien d'autre :
 {{"summary":["ID"],"attention":["ID"],"recommendations":[{{"action":"ACTION","evidence":"ID"}}]}}
 
 Règles :
-- `summary` : 1 à 4 IDs `F*` ou `R*` éligibles. Privilégie les `mean`/`period_delta`/`integrated_energy_kwh` courants, les `mean`/`period_delta` de comparaison et les relations explicites.
-- `attention` : 0 à 5 IDs éligibles. Privilégie les comparaisons partielles/limitées/reconstruites, les sources de qualité limitée ou les relations dont la comparaison de période complète n’est pas supportée.
+- `summary` : 1 à 4 IDs `F*`, `R*` ou `Q*` obligatoires éligibles. Privilégie les `mean`/`period_delta`/`integrated_energy_kwh` courants, les `mean`/`period_delta` de comparaison représentative, les relations explicites et les signaux globaux de qualité obligatoires.
+- `attention` : 0 à 5 IDs éligibles. Privilégie les signaux `Q*` obligatoires, les comparaisons partielles/limitées/reconstruites, les sources de qualité limitée ou les relations dont la comparaison de période complète n’est pas supportée.
 - `recommendations` : 0 à 4 objets. `action` doit appartenir à `selection_policy.recommendation_actions` et `evidence` doit être un ID digne d’attention présent dans le contexte.
 - Retourne uniquement des IDs. N'écris jamais de nom, valeur, pourcentage, explication, prose, markdown, bloc de code ni clé supplémentaire.
 - Privilégie les énergies de période, moyennes représentatives et `relationships` explicites plutôt que les pics de puissance isolés.
@@ -1485,6 +1964,7 @@ Règles :
 - Si une relation contient `full_period_comparison_supported=false`, elle peut être sélectionnée comme limite de couverture, mais jamais comme preuve d'un écart de performance sur toute la période.
 - Pour N/N-x, privilégie les faits `comparable` dans la synthèse. Utilise surtout les éléments `partial`, `limited`, `reconstructed` ou sparse-zero dans les points d'attention.
 - N'invente aucune comparaison entre sources. Ne calcule rien.
+- Ce contexte est une présélection déterministe du registre complet HA Reporting. N'infère rien à propos des faits routiniers non transmis au modèle.
 
 Contexte validé par HA Reporting :
 {context_json}
@@ -1536,9 +2016,9 @@ def analyze_report_with_ai(
         context = json.loads(context_json)
         if len(context_json) > AI_MAX_CONTEXT_CHARS:
             if language == "en":
-                message = f"Lossless AI context remains too large after normalization ({len(context_json)} characters, limit {AI_MAX_CONTEXT_CHARS})"
+                message = f"AI shortlist context remains too large ({len(context_json)} characters, limit {AI_MAX_CONTEXT_CHARS})"
             else:
-                message = f"Contexte IA sans omission encore trop volumineux après normalisation ({len(context_json)} caractères, limite {AI_MAX_CONTEXT_CHARS})"
+                message = f"Présélection IA encore trop volumineuse ({len(context_json)} caractères, limite {AI_MAX_CONTEXT_CHARS})"
             raise RuntimeError(message)
 
         service_data: dict[str, Any] = {
@@ -1641,15 +2121,24 @@ def analyze_report_with_ai(
                 "context_characters": context_meta["characters"],
                 "context_target_characters": context_meta["target_characters"],
                 "context_limit_characters": context_meta["limit_characters"],
-                "context_original_characters": context_meta["legacy_characters"],
+                "context_original_characters": context_meta["full_compact_characters"],
+                "context_legacy_characters": context_meta["legacy_characters"],
                 "context_full_compact_characters": context_meta["full_compact_characters"],
                 "context_mode": context_meta["mode"],
                 "context_schema": context_meta["schema"],
                 "context_lossless": context_meta["lossless"],
+                "report_data_lossless": context_meta["report_data_lossless"],
+                "context_full_sources": context_meta["full_sources"],
+                "context_shortlisted_sources": context_meta["shortlisted_sources"],
+                "context_full_comparison_sets": context_meta["full_comparison_sets"],
+                "context_shortlisted_comparison_sets": context_meta["shortlisted_comparison_sets"],
+                "context_full_facts": context_meta["full_facts"],
+                "context_shortlisted_facts": context_meta["shortlisted_facts"],
+                "context_quality_signals": context_meta["quality_signals"],
                 "context_current_sources": context_meta["current_sources"],
                 "context_comparison_sources": context_meta["comparison_sources"],
                 "context_relationships": context_meta["relationships"],
-                "selection_protocol": "id_only_v1",
+                "selection_protocol": "id_only_v2_shortlist",
                 "omitted_current_sources": context_meta["omitted_current_sources"],
                 "omitted_comparison_sources": context_meta["omitted_comparison_sources"],
                 "sources": (result.get("summary") or {}).get("sources_total", 0),

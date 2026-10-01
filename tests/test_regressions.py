@@ -28,6 +28,7 @@ from analysis.ai_report import (
     _extract_service_response, _extract_ai_task_payload, _instructions,
     _sanitize_ai_text, analyze_report_with_ai, _format_timeout_duration,
     _validate_selection, _render_selection_analysis, _allowed_selection_ids,
+    _fallback_selection, _fact_ledger_context_v11,
 )
 from document_store import validate_output_config, render_filename
 from exporters.base import ExportProviderError
@@ -475,7 +476,7 @@ class Beta26ComparisonQualityTests(unittest.TestCase):
 
     def test_rc4_prompt_uses_selection_only_contract(self):
         prompt=_instructions('{}')
-        self.assertIn('ha-reporting-ai-context-v10',prompt)
+        self.assertIn('ha-reporting-ai-context-v11',prompt)
         self.assertIn('`attention`',prompt)
         self.assertIn('recommendation_actions',prompt)
         self.assertIn('Ne calcule rien',prompt)
@@ -622,7 +623,7 @@ class AiAnalysisTests(unittest.TestCase):
 
     def test_ai_prompt_requires_id_only_selection_protocol(self):
         prompt=_instructions('{}')
-        self.assertIn('ha-reporting-ai-context-v10',prompt)
+        self.assertIn('ha-reporting-ai-context-v11',prompt)
         self.assertIn('selection_policy',prompt)
         self.assertIn('Retourne uniquement des IDs',prompt)
         self.assertIn("N'invente aucune comparaison entre sources",prompt)
@@ -665,28 +666,32 @@ class AiAnalysisTests(unittest.TestCase):
         context=json.loads(context_json)
         self.assertLessEqual(len(context_json),AI_MAX_CONTEXT_CHARS)
         self.assertGreater(meta['legacy_characters'],meta['characters'])
-        self.assertEqual(meta['mode'],'lossless_self_describing')
-        self.assertTrue(meta['lossless'])
+        self.assertGreater(meta['full_compact_characters'],meta['characters'])
+        self.assertEqual(meta['mode'],'deterministic_shortlist')
+        self.assertFalse(meta['lossless'])
+        self.assertTrue(meta['report_data_lossless'])
         self.assertEqual(meta['omitted_current_sources'],0)
         self.assertEqual(meta['omitted_comparison_sources'],0)
         self.assertEqual(context['counts']['current_sources'],421)
         self.assertEqual(context['counts']['comparison_sources'],420)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v10')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v11')
+        self.assertLess(meta['shortlisted_facts'],meta['full_facts'])
+        self.assertLess(meta['shortlisted_sources'],meta['full_sources'])
         encoded=json.dumps(context,ensure_ascii=False)
         self.assertIn('critical_power',encoded)
         self.assertIn('Low coverage',encoded)
-        self.assertNotIn('entity_id',encoded)
+        self.assertNotIn('preview',encoded)
 
     def test_beta22_context_keeps_small_report_without_source_omission(self):
         context_json,meta=build_budgeted_ai_context(self.sample())
         context=json.loads(context_json)
         self.assertLessEqual(len(context_json),AI_TARGET_CONTEXT_CHARS)
-        self.assertEqual(meta['mode'],'lossless_self_describing')
-        self.assertTrue(meta['lossless'])
+        self.assertEqual(meta['mode'],'deterministic_shortlist')
+        self.assertTrue(meta['report_data_lossless'])
         self.assertEqual(meta['omitted_current_sources'],0)
         self.assertEqual(meta['omitted_comparison_sources'],0)
         self.assertEqual(context['counts']['current_sources'],1)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v10')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v11')
         self.assertNotIn('preview',context_json)
 
     def test_beta24_context_uses_named_semantics_and_integrated_energy(self):
@@ -701,15 +706,15 @@ class AiAnalysisTests(unittest.TestCase):
                         'validation':{'warnings':[]}}
         }
         sample['catalogs'][0]['devices'][0]['sources'].append(energy)
-        context_json,meta=build_budgeted_ai_context(sample)
-        context=json.loads(context_json)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v10')
-        power=next(src for src in context['sources'] if src['n'].endswith('/frigo_power'))
+        context=_fact_ledger_context_v11(sample)
+        meta={"omitted_current_sources":0}
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v11')
+        power=next(src for src in context['sources'] if src.get('sk')=='frigo_power')
         pfacts={f['k']:f['v'] for f in context['facts'] if f.get('s')==power['i'] and f.get('q')=='current'}
         self.assertEqual(pfacts['max'],120)
         self.assertEqual(pfacts['mean'],50)
         self.assertAlmostEqual(pfacts['integrated_energy_kwh'],1.234)
-        counter=next(src for src in context['sources'] if src['n'].endswith('/meter'))
+        counter=next(src for src in context['sources'] if src.get('sk')=='meter')
         cfacts={f['k']:f['v'] for f in context['facts'] if f.get('s')==counter['i'] and f.get('q')=='current'}
         self.assertEqual(cfacts['period_delta'],8.22)
         self.assertEqual(cfacts['counter_end'],3788.82)
@@ -746,7 +751,7 @@ class AiAnalysisTests(unittest.TestCase):
         sample['summary']={'sources_total':3,'sources_ok':3}
         context_json,meta=build_budgeted_ai_context(sample)
         context=json.loads(context_json)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v10')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v11')
         self.assertEqual(meta['relationships'],2)
         energy=next(item for item in context['relationships'] if item['kind']=='energy_forecast_vs_actual')
         self.assertAlmostEqual(energy['forecast_energy_kwh'],6.89)
@@ -882,9 +887,9 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertTrue(call['return_response'])
         self.assertEqual(call['service_data']['entity_id'],'ai_task.local')
         self.assertIn("n'affiche aucun raisonnement interne",call['service_data']['instructions'])
-        self.assertIn('ha-reporting-ai-context-v10',call['service_data']['instructions'])
-        self.assertEqual(result['input']['context_mode'],'lossless_self_describing')
-        self.assertTrue(result['input']['context_lossless'])
+        self.assertIn('ha-reporting-ai-context-v11',call['service_data']['instructions'])
+        self.assertEqual(result['input']['context_mode'],'deterministic_shortlist')
+        self.assertTrue(result['input']['report_data_lossless'])
         self.assertLessEqual(result['input']['context_characters'],AI_TARGET_CONTEXT_CHARS)
 
     def test_ai_task_call_uses_configured_timeout(self):
@@ -1140,7 +1145,7 @@ class Beta12ExportProviderTests(unittest.TestCase):
         self.assertTrue(status['reachable'])
         self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
         self.assertEqual(seen['auth'],'Token secret')
-        self.assertIn('0.2.0-rc.4',seen['ua'])
+        self.assertIn('0.2.0-rc.5',seen['ua'])
 
     def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
         import tempfile
@@ -1519,7 +1524,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.2.0-rc.4')
+        self.assertEqual(config['version'],'0.2.0-rc.5')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertTrue(config['hassio_api'])
@@ -1639,16 +1644,16 @@ class Rc4FactLedgerTests(unittest.TestCase):
         sample={'report':{'name':'Monthly'},'resolved_period':{'label':'N','timezone':'UTC'},'summary':{},'catalogs':[],
                 'comparisons':{'targets':[{'label':'N-1','resolved_period':{'label':'R'},'summary':{},
                                            'catalogs':[{'name':'Home','devices':[{'name':'Devices','sources':comparisons}]}]}]}}
-        return json.loads(build_budgeted_ai_context(sample)[0])
+        return _fact_ledger_context_v11(sample)
 
     def test_v9_comparison_facts_are_atomic_and_keep_authoritative_direction(self):
         base=self.source('dryer_power',coverage=97.6,density=99.3,max={'value':658},p95=546,mean=20.5)
         ref=self.source('dryer_power',coverage=100,density=99.3,max={'value':749},p95=540,mean=17.5)
         context=self.context_for([ComparisonEngine()._compare_source(base,ref)])
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v10')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v11')
         comp=context['comparison_sets'][0]
         src=next(item for item in context['sources'] if item['i']==comp['s'])
-        self.assertTrue(src['n'].endswith('/dryer_power'))
+        self.assertEqual(src.get('sk'),'dryer_power')
         mean=next(f for f in context['facts'] if f.get('c')==comp['i'] and f.get('k')=='mean')
         self.assertEqual(mean['t'],'increase')
         self.assertGreater(mean['p'],0)
@@ -1796,7 +1801,7 @@ class Rc4SelectionOnlyRenderingTests(unittest.TestCase):
             'catalogs':[{'name':'EMHASS','devices':[{'device':{'name':'EMHASS','category':'energy'},'sources':[self.source('actual_power',247)]}]}],
             'comparisons':{'targets':[]},
         }
-        context=json.loads(build_budgeted_ai_context(sample)[0])
+        context=_fact_ledger_context_v11(sample)
         max_fact=next(f for f in context['facts'] if f.get('k')=='max')
         mean_fact=next(f for f in context['facts'] if f.get('k')=='mean')
         summary_allowed,_,_=_allowed_selection_ids(context)
@@ -1815,7 +1820,7 @@ class Rc4SelectionOnlyRenderingTests(unittest.TestCase):
                              'statistics':{'delta':8.22,'last':{'value':3788.82}},'validation':{'warnings':[]}}}
             ]}]}], 'comparisons':{'targets':[]},
         }
-        context=json.loads(build_budgeted_ai_context(sample)[0])
+        context=_fact_ledger_context_v11(sample)
         facts={f['k']:f['i'] for f in context['facts']}
         summary_allowed,_,_=_allowed_selection_ids(context)
         self.assertIn(facts['period_delta'],summary_allowed)
@@ -1843,3 +1848,140 @@ class Rc4SelectionOnlyRenderingTests(unittest.TestCase):
         self.assertTrue(result['selection_fallback'])
         self.assertNotIn('9999',result['text'])
         self.assertIn('247 W',result['text'])
+
+class Rc5ShortlistOptimizationTests(unittest.TestCase):
+    @staticmethod
+    def source(sensor_key, metric='power', unit='W', coverage=100.0, mean=5.0, delta=1.0):
+        quality={
+            'period_coverage_percent':coverage,
+            'sample_density_percent':100 if metric=='power' else None,
+            'density_applicable':metric=='power',
+        }
+        if metric=='power':
+            statistics={'max':{'value':100.0},'p95':80.0,'mean':mean}
+        elif metric=='temperature':
+            statistics={'min':{'value':20.0},'mean':mean,'max':{'value':30.0}}
+        else:
+            statistics={'delta':delta,'last':{'value':100.0}}
+        return {
+            'status':'ok','sensor_key':sensor_key,'entity_id':f'sensor.{sensor_key}',
+            'metric':metric,'unit':unit,
+            'analysis':{'quality':quality,'statistics':statistics,'validation':{'warnings':[]}},
+        }
+
+    def base_result(self, sources, summary=None, devices=None):
+        if devices is None:
+            devices=[{'device':{'name':'Device','category':'test'},'sources':sources}]
+        return {
+            'report':{'name':'Test','language':'fr'},
+            'resolved_period':{'label':'N','timezone':'UTC'},
+            'summary':summary or {'sources_total':len(sources),'sources_ok':len(sources),'sources_no_data':0,'sources_error':0,'sources_invalid':0},
+            'catalogs':[{'name':'Home','devices':devices}],
+            'comparisons':{'targets':[]},
+        }
+
+    def test_v11_deduplicates_shared_entity_and_uses_real_sensor_label(self):
+        temp=self.source('sensor_temp_bureau_temperature','temperature','°C',100,23.5)
+        result=self.base_result([], summary={'sources_total':2,'sources_ok':2,'sources_no_data':0,'sources_error':0,'sources_invalid':0}, devices=[
+            {'device':{'name':'Imprimante 3D bureau','category':'test'},'sources':[copy.deepcopy(temp)]},
+            {'device':{'name':'Dryer bureau','category':'test'},'sources':[copy.deepcopy(temp)]},
+        ])
+        full=_fact_ledger_context_v11(result)
+        self.assertEqual(len(full['sources']),1)
+        self.assertTrue(full['sources'][0].get('sh'))
+        self.assertEqual(full['counts']['current_sources'],2)
+        self.assertEqual(full['counts']['current_sources_unique'],1)
+        mean=next(f for f in full['facts'] if f.get('k')=='mean')
+        text=_render_selection_analysis(full,{'summary':[mean['i']],'attention':[],'recommendations':[]},'fr')
+        self.assertIn('Bureau',text)
+        self.assertNotIn('Imprimante 3D bureau',text)
+        self.assertNotIn('Dryer bureau',text)
+
+    def test_v11_low_coverage_current_data_forces_global_quality_signal(self):
+        energy=self.source('printer_energy','energy_total','kWh',41.1,delta=68.8)
+        result=self.base_result([energy],summary={
+            'sources_total':78,'sources_ok':42,'sources_no_data':36,'sources_error':0,'sources_invalid':0,
+        })
+        context=json.loads(build_budgeted_ai_context(result)[0])
+        q=next(row for row in context['quality_signals'] if row['k']=='report_source_availability')
+        self.assertTrue(q.get('ms'))
+        self.assertTrue(q.get('ma'))
+        summary_allowed,_,_=_allowed_selection_ids(context)
+        self.assertIn(q['i'],summary_allowed)
+        self.assertFalse(any(f['i'] in summary_allowed for f in context['facts']))
+        text=_render_selection_analysis(context,_fallback_selection(context),'fr')
+        self.assertIn('42/78',text)
+        self.assertIn('36 sans données',text)
+        self.assertNotIn('68,8 kWh',text)
+
+    def test_v11_no_representative_nnx_is_mandatory_summary(self):
+        result=self.base_result([self.source('actual_power')])
+        result['comparisons']={'targets':[{
+            'label':'N-1 année','resolved_period':{'label':'2025'},
+            'summary':{'sources_total':78,'sources_comparable':0,'sources_partial':0,'sources_limited':37,'sources_reconstructed':0,'sources_unavailable':41},
+            'catalogs':[],
+        }]}
+        context=json.loads(build_budgeted_ai_context(result)[0])
+        q=next(row for row in context['quality_signals'] if row['k']=='comparison_quality')
+        self.assertEqual(q['st'],'no_representative')
+        self.assertIn(q['i'],context['selection_policy']['mandatory_summary'])
+        text=_render_selection_analysis(context,_fallback_selection(context),'fr')
+        self.assertIn("aucune comparaison N/N-x représentative",text)
+        self.assertIn('37 limitées',text)
+        self.assertIn('41 indisponibles',text)
+
+    def test_v11_large_ledger_is_shortlisted_without_losing_report_data(self):
+        devices=[]
+        for index in range(160):
+            devices.append({'device':{'name':f'Device {index}','category':'test'},'sources':[
+                self.source(f'device_{index}_power','power','W',100,mean=10+index),
+            ]})
+        result=self.base_result([],summary={'sources_total':160,'sources_ok':160,'sources_no_data':0,'sources_error':0,'sources_invalid':0},devices=devices)
+        context_json,meta=build_budgeted_ai_context(result)
+        self.assertEqual(meta['mode'],'deterministic_shortlist')
+        self.assertTrue(meta['report_data_lossless'])
+        self.assertGreater(meta['full_facts'],meta['shortlisted_facts'])
+        self.assertLessEqual(meta['shortlisted_facts'],36)
+        self.assertGreater(meta['full_compact_characters'],meta['characters'])
+        self.assertLess(len(context_json),AI_TARGET_CONTEXT_CHARS)
+
+    def test_v11_coverage_is_rounded_in_deterministic_rendering(self):
+        base=self.source('dryer_power',coverage=94.58477094906532,mean=3.92)
+        reference=self.source('dryer_power',coverage=93.86332978643789,mean=4.56)
+        comp=ComparisonEngine()._compare_source(base,reference)
+        result=self.base_result([])
+        result['comparisons']={'targets':[{
+            'label':'N-1','resolved_period':{'label':'R'},
+            'summary':{'sources_total':1,'sources_comparable':0,'sources_partial':1,'sources_limited':0,'sources_reconstructed':0,'sources_unavailable':0},
+            'catalogs':[{'name':'Home','devices':[{'name':'Imprimante 3D bureau','sources':[comp]}]}],
+        }]}
+        context=json.loads(build_budgeted_ai_context(result)[0])
+        fact=next(f for f in context['facts'] if f.get('q')=='comparison' and f.get('k')=='mean')
+        text=_render_selection_analysis(context,{'summary':[fact['i']],'attention':[],'recommendations':[]},'fr')
+        self.assertIn('94,6 % / 93,9 %',text)
+        self.assertNotIn('94,58477094906532',text)
+
+    def test_v11_projection_omits_peaks_but_full_ledger_retains_them(self):
+        result=self.base_result([self.source('power')])
+        full=_fact_ledger_context_v11(result)
+        projected=json.loads(build_budgeted_ai_context(result)[0])
+        self.assertIn('max',{f.get('k') for f in full['facts']})
+        self.assertIn('p95',{f.get('k') for f in full['facts']})
+        self.assertNotIn('max',{f.get('k') for f in projected['facts']})
+        self.assertNotIn('p95',{f.get('k') for f in projected['facts']})
+
+    def test_v11_render_deduplicates_identical_attention_lines(self):
+        a=self.source('power_a',coverage=70,mean=1)
+        b=self.source('power_b',coverage=70,mean=1)
+        ca=ComparisonEngine()._compare_source(a,self.source('power_a',coverage=70,mean=1))
+        cb=ComparisonEngine()._compare_source(b,self.source('power_b',coverage=70,mean=1))
+        result=self.base_result([])
+        result['comparisons']={'targets':[{
+            'label':'N-1','resolved_period':{'label':'R'},
+            'summary':{'sources_total':2,'sources_comparable':0,'sources_partial':0,'sources_limited':2,'sources_reconstructed':0,'sources_unavailable':0},
+            'catalogs':[{'name':'Home','devices':[{'name':'TV PC salon','sources':[ca,cb]}]}],
+        }]}
+        context=json.loads(build_budgeted_ai_context(result)[0])
+        cids=[row['i'] for row in context['comparison_sets']]
+        text=_render_selection_analysis(context,{'summary':[],'attention':cids,'recommendations':[]},'fr')
+        self.assertEqual(text.count('TV PC salon : comparaison limitée.'),1)

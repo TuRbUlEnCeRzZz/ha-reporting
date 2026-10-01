@@ -1,4 +1,4 @@
-/* HA Reporting i18n foundation (0.2.0-rc.4).
+/* HA Reporting i18n foundation (0.2.0-rc.5).
  *
  * The legacy beta.20 UI still contains French source strings in a number of
  * rendering functions.  beta.21 centralizes translations here and translates
@@ -89,6 +89,9 @@ const HR_I18N_MESSAGES = {
   "report.ai_context_compacted_from": {fr:"normalisé depuis", en:"normalized from"},
   "report.ai_context_sources_omitted": {fr:"sources routinières omises", en:"routine sources omitted"},
   "report.ai_context_no_omission": {fr:"aucune source omise", en:"no source omitted"},
+  "report.ai_context_shortlist": {fr:"présélection IA", en:"AI shortlist"},
+  "report.ai_context_facts": {fr:"faits", en:"facts"},
+  "report.ai_context_report_retained": {fr:"données complètes conservées dans le rapport", en:"full report data retained"},
   "report.output": {fr:"Sortie du rapport", en:"Report output"},
   "report.output_help": {fr:"Le PDF natif est toujours généré et conservé localement. Le nom peut utiliser des variables pour préparer de futurs workflows d'export.", en:"The native PDF is always generated and stored locally. The filename can use variables for future export workflows."},
   "report.language": {fr:"Langue du rapport", en:"Report language"},

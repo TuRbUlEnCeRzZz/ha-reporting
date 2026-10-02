@@ -2,7 +2,7 @@
 
 ![HA Reporting](logo.png)
 
-**Current development version: 0.2.0-rc.5**
+**Current development version: 0.2.0-rc.6**
 
 HA Reporting is a reporting engine for **Home Assistant OS**. It turns Home Assistant sensor history stored in VictoriaMetrics into structured reports, period comparisons, optional AI commentary and locally generated PDF documents.
 
@@ -99,42 +99,21 @@ Beta.21 introduces the first HA Reporting internationalization layer.
 
 From beta.21 onward, new and modified maintainer-facing repository content is written in **English**. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-## What is new in 0.2.0-rc.5
+## What is new in 0.2.0-rc.6
 
-`0.2.0-rc.5` keeps the RC4 selection-only fact ledger and optimizes what is sent to local LLMs. HA Reporting now builds the complete deterministic ledger internally, then sends a much smaller **deterministic shortlist** containing only representative facts, significant comparisons and quality signals. The detailed report data is unchanged.
+`0.2.0-rc.6` is a focused stabilization release on top of RC5. It keeps the deterministic shortlist architecture and fixes the last issues found in daily, monthly and annual real-world reports.
 
-- introduces **`ha-reporting-ai-context-v11`** and the `id_only_v2_shortlist` protocol;
-- deduplicates repeated sources by real Home Assistant `entity_id`, preventing shared room sensors from being repeated under several appliances;
-- adds mandatory report-wide quality signals for source availability and N/N-x comparison quality;
-- prevents current-period values with <80% coverage from becoming normal AI summary facts;
-- prevents `limited`, `reconstructed` and unavailable N/N-x facts from becoming normal summary conclusions;
-- detects comparison sets with no representative N/N-x result and surfaces that limitation deterministically;
-- shortlists only representative/significant facts for the LLM while retaining the full fact ledger inside HA Reporting;
-- removes routine peak/P95/counter-end facts from the model shortlist while keeping them in the detailed report and internal ledger;
-- improves human-facing source labels so shared room-temperature sensors are not attributed to the first appliance group that references them;
-- rounds coverage values in deterministic AI prose to readable values such as `94.6%` instead of raw floating-point precision;
-- deduplicates repeated rendered attention/recommendation lines;
-- keeps RC4 deterministic numeric rendering, RC3 VictoriaMetrics maintenance, authenticated Nabu Casa downloads, notifications, PDF generation and Paperless workflows unchanged.
+- Derived `integrated_energy_kwh` facts are now always rendered as **kWh**, never with the `W` unit inherited from the underlying power sensor.
+- Validated forecast-versus-actual energy and mean-power relationships are **mandatory summary evidence**, so a complete EMHASS comparison cannot be omitted by the model.
+- Unsupported forecast relationships remain attention-only when period coverage is insufficient; RC6 does not fabricate a full-period gap.
+- Recommendation actions targeting the same real source are merged into one concise recommendation, preserving both data-quality and reconstructed-counter guidance where applicable.
+- The RC5 deterministic shortlist, report-wide quality signals, source deduplication and lossless report rendering remain unchanged.
 
-The main RC5 goal is **latency** on local CPU inference: the LLM no longer needs to read every routine fact in monthly or annual reports. All report data remains available in the PDF/UI; only the model-facing selection context is reduced.
+## Previous 0.2.0-rc.5 milestone
 
-## Previous 0.2.0-rc.4 milestone
+`0.2.0-rc.5` introduced the deterministic model-facing shortlist on top of the RC4 selection-only fact ledger. It added report-wide quality signals, source deduplication and bounded fact/comparison shortlisting to reduce local-LLM latency without removing data from the report.
 
-`0.2.0-rc.4` changes the AI contract from free-form report writing to **selection-only fact-ledger analysis**. The language model now chooses evidence IDs; HA Reporting itself renders every quantitative sentence from the deterministic ledger.
-
-- introduces **`ha-reporting-ai-context-v10`** and the `id_only_v1` selection protocol;
-- the AI provider returns only `summary`, `attention` and recommendation evidence IDs in JSON;
-- HA Reporting validates those IDs against deterministic eligibility rules and discards unsupported selections;
-- device names, metric types, units, base/reference values, gaps and percentages are rendered by HA Reporting, not copied from model prose;
-- cumulative `counter_end` values cannot be selected as period-consumption summary facts;
-- raw power maxima/P95 values are excluded from normal headline selection, preventing forecast peak gaps from dominating EMHASS analysis;
-- if the AI provider returns malformed JSON, unsupported IDs or free-form prose, HA Reporting falls back to a deterministic ledger selection instead of publishing hallucinated quantitative text;
-- recommendation wording is generated from a small allow-list of actions tied to validated evidence IDs;
-- the full semantic fact ledger remains lossless: current-period, partial, limited and N/N-x data are preserved; raw time-series samples remain intentionally excluded;
-- the read-only VictoriaMetrics maintenance inventory introduced in RC3 remains unchanged and fully isolated from reporting catalogs;
-- authenticated Nabu Casa downloads, notifications, PDF generation and Paperless export remain unchanged.
-
-The goal of RC4 is not to make the language model perform better arithmetic. It removes arithmetic and numeric sentence construction from the model entirely. The model is used only to decide **which validated facts are worth highlighting**.
+See [RELEASE-NOTES-0.2.0-rc.5.md](RELEASE-NOTES-0.2.0-rc.5.md) and [VALIDATION-0.2.0-rc.5.md](VALIDATION-0.2.0-rc.5.md) for the detailed RC5 milestone.
 
 ## Previous 0.2.0-rc.3 milestone
 
@@ -208,16 +187,16 @@ These relationships are provider-agnostic. EMHASS is a useful real-world example
 
    `https://github.com/TuRbUlEnCeRzZz/ha-reporting`
 
-4. Refresh the store and verify that the offered version is **0.2.0-rc.5** before installing or updating.
+4. Refresh the store and verify that the offered version is **0.2.0-rc.6** before installing or updating.
 5. Start HA Reporting and open its interface through Home Assistant Ingress.
 
 ### From the ZIP: local installation
 
-1. Extract `ha-reporting-0.2.0-rc.5.zip` on your computer.
+1. Extract `ha-reporting-0.2.0-rc.6.zip` on your computer.
 2. Inside the extracted repository, locate the **`ha-reporting/`** directory containing `config.yaml`, `Dockerfile`, `run.sh` and `app/`.
 3. Copy that directory to **`/addons/ha-reporting`** on Home Assistant OS using your existing file-transfer method. Do not copy the whole repository into `/addons/ha-reporting`.
 4. Refresh the app store and rebuild/reinstall the local add-on.
-5. Start it and confirm **HA Reporting 0.2.0-rc.5** in the add-on log.
+5. Start it and confirm **HA Reporting 0.2.0-rc.6** in the add-on log.
 
 The first build can take some time on a Raspberry Pi 4 because dependencies are installed by Supervisor.
 
@@ -248,13 +227,13 @@ AI commentary can be wrong or over-interpret limited history. Treat it as commen
 
 ### AI context normalization
 
-0.2.0-rc.5 uses **`ha-reporting-ai-context-v11`**. HA Reporting first creates the complete deterministic fact ledger internally, including current-period values, comparisons, partial data and quality metadata. It then builds a deterministic shortlist for the LLM. The shortlist contains representative current facts, the most meaningful N/N-x facts, explicit forecast/measured relationships and mandatory quality signals.
+0.2.0-rc.6 uses **`ha-reporting-ai-context-v12`**. HA Reporting first creates the complete deterministic fact ledger internally, including current-period values, comparisons, partial data and quality metadata. It then builds a deterministic shortlist for the LLM. The shortlist contains representative current facts, the most meaningful N/N-x facts, explicit forecast/measured relationships and mandatory quality signals.
 
 The detailed report and internal ledger are not trimmed. Only the model-facing selection context is reduced. Shared Home Assistant entities are deduplicated by `entity_id`, so one room sensor reused in several device groups does not consume repeated AI context or get mislabeled as an appliance property.
 
 Current-period facts with <80% coverage are excluded from normal summary eligibility. Limited/reconstructed N/N-x comparisons remain available as quality/attention evidence but cannot become headline trend conclusions. When a comparison target has no representative comparison at all, HA Reporting injects a mandatory deterministic quality fact before the AI selection is rendered.
 
-The preferred operating size is 90,000 characters and the application-side guard remains 220,000 characters. RC5 is designed to keep monthly/annual local-model prompts far below those values by shortlisting facts rather than dropping report data. The completed AI result records both full-ledger and shortlist counts so the optimization remains visible and auditable.
+The preferred operating size is 90,000 characters and the application-side guard remains 220,000 characters. RC6 keeps monthly/annual local-model prompts far below those values by shortlisting facts rather than dropping report data. The completed AI result records both full-ledger and shortlist counts so the optimization remains visible and auditable.
 
 ## Paperless-ngx
 
@@ -302,9 +281,9 @@ HA Reporting is experimental. Report accuracy depends on the quality and retenti
 
 Large reports and local AI inference can be slow on a Raspberry Pi 4. Supervisor builds also depend on upstream packages and system libraries.
 
-0.2.0-rc.5 has automated Python and JavaScript regression coverage, but automated desktop tests do not prove that every Home Assistant OS, ARM build, AI provider, VictoriaMetrics dataset or Paperless installation behaves identically. After upgrading, run at least one end-to-end report on the actual Home Assistant OS host before relying on scheduled delivery.
+0.2.0-rc.6 has automated Python and JavaScript regression coverage, but automated desktop tests do not prove that every Home Assistant OS, ARM build, AI provider, VictoriaMetrics dataset or Paperless installation behaves identically. After upgrading, run at least one end-to-end report on the actual Home Assistant OS host before relying on scheduled delivery.
 
-See [VALIDATION-0.2.0-rc.5.md](VALIDATION-0.2.0-rc.5.md) for the release-candidate validation notes and [DOCS.md](DOCS.md) for technical details.
+See [VALIDATION-0.2.0-rc.6.md](VALIDATION-0.2.0-rc.6.md) for the release-candidate validation notes and [DOCS.md](DOCS.md) for technical details.
 
 ## Repository layout
 
@@ -349,7 +328,7 @@ Possible future directions include:
 - additional export and notification destinations;
 - continued PDF/layout improvements and reporting diagnostics;
 - further validation with larger installations and longer histories;
-- optional presets for common reporting use cases. EMHASS data can already be reported through normal sensors, but there is no dedicated EMHASS integration in 0.2.0-rc.5; the power-integration option is provider-agnostic.
+- optional presets for common reporting use cases. EMHASS data can already be reported through normal sensors, but there is no dedicated EMHASS integration in 0.2.0-rc.6; the power-integration option is provider-agnostic.
 
 These are possible directions, not delivery or maintenance commitments.
 
@@ -357,10 +336,10 @@ These are possible directions, not delivery or maintenance commitments.
 
 - [Technical documentation](DOCS.md)
 - [Changelog](CHANGELOG.md)
-- [0.2.0-rc.5 validation](VALIDATION-0.2.0-rc.5.md)
+- [0.2.0-rc.6 validation](VALIDATION-0.2.0-rc.6.md)
 - [0.2.0-rc.4 validation](VALIDATION-0.2.0-rc.4.md)
 - [0.2.0-rc.3 validation](VALIDATION-0.2.0-rc.3.md)
-- [0.2.0-rc.5 GitHub release notes](RELEASE-NOTES-0.2.0-rc.5.md)
+- [0.2.0-rc.6 GitHub release notes](RELEASE-NOTES-0.2.0-rc.6.md)
 - [0.2.0-rc.4 GitHub release notes](RELEASE-NOTES-0.2.0-rc.4.md)
 - [0.2.0-rc.3 GitHub release notes](RELEASE-NOTES-0.2.0-rc.3.md)
 - [0.2.0-rc.1 validation](VALIDATION-0.2.0-rc.1.md)

@@ -677,15 +677,15 @@ def _current_source_relationships(rows: list[dict[str, Any]]) -> list[dict[str, 
 
 
 def _fact_ledger_context_v11(result: dict[str, Any]) -> dict[str, Any]:
-    """Build the complete deterministic RC5 fact ledger.
+    """Build the complete deterministic RC6 fact ledger.
 
-    RC5 keeps the complete semantic ledger internally, deduplicates repeated
+    RC6 keeps the complete semantic ledger internally, deduplicates repeated
     entities by their real Home Assistant entity id, and adds deterministic
     report/comparison quality signals. A smaller deterministic projection of this
     ledger is sent to the LLM later; the report itself remains unchanged.
     """
     context: dict[str, Any] = {
-        "schema": "ha-reporting-ai-context-v11",
+        "schema": "ha-reporting-ai-context-v12",
         "ledger_complete": True,
         "legend": {
             "source": {
@@ -1028,8 +1028,8 @@ def _fact_ledger_context_v11(result: dict[str, Any]) -> dict[str, Any]:
     return context
 
 def _populate_selection_policy(context: dict[str, Any]) -> None:
-    """Declare the RC5 shortlist/id-only selection protocol."""
-    mandatory_summary = [
+    """Declare the RC6 shortlist/id-only selection protocol."""
+    mandatory_quality_summary = [
         str(row.get("i")) for row in context.get("quality_signals") or []
         if row.get("i") and row.get("ms")
     ]
@@ -1037,8 +1037,30 @@ def _populate_selection_policy(context: dict[str, Any]) -> None:
         str(row.get("i")) for row in context.get("quality_signals") or []
         if row.get("i") and row.get("ma")
     ]
+    # RC6: a validated forecast-vs-actual relation is authoritative and must not
+    # be dropped by the LLM shortlist selection. Prefer energy before power so
+    # the period-energy relationship survives even when other mandatory quality
+    # signals consume part of the four-line summary budget.
+    validated_relationships = [
+        row for row in context.get("relationships") or []
+        if row.get("id") and row.get("full_period_comparison_supported")
+    ]
+    validated_relationships.sort(
+        key=lambda row: (
+            0 if row.get("kind") == "energy_forecast_vs_actual" else 1,
+            str(row.get("id")),
+        )
+    )
+    mandatory_summary: list[str] = []
+    for row in validated_relationships:
+        rid = str(row.get("id"))
+        if rid not in mandatory_summary:
+            mandatory_summary.append(rid)
+    for qid in mandatory_quality_summary:
+        if qid not in mandatory_summary:
+            mandatory_summary.append(qid)
     context["selection_policy"] = {
-        "protocol": "id_only_v2_shortlist",
+        "protocol": "id_only_v3_relationship_priority",
         "summary_prefixes": ["F", "R", "Q"],
         "attention_prefixes": ["F", "C", "S", "R", "Q"],
         "mandatory_summary": mandatory_summary,
@@ -1055,7 +1077,7 @@ def _populate_selection_policy(context: dict[str, Any]) -> None:
 def _allowed_selection_ids(context: dict[str, Any]) -> tuple[set[str], set[str], set[str]]:
     """Return deterministic allowed ID sets for the projected ledger.
 
-    RC5 deliberately refuses low-coverage current values and limited/reconstructed
+    RC6 deliberately refuses low-coverage current values and limited/reconstructed
     N/N-x facts as normal summary evidence. Those facts remain available as
     attention evidence through their source/comparison quality IDs.
     """
@@ -1142,7 +1164,7 @@ def _selection_index(context: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _fact_score(fact: dict[str, Any], sources: dict[str, dict[str, Any]], comparisons: dict[str, dict[str, Any]]) -> float:
-    """Score one deterministic fact for RC5's LLM shortlist."""
+    """Score one deterministic fact for RC6's LLM shortlist."""
     stat = str(fact.get("k") or "")
     score = {"period_delta": 100.0, "integrated_energy_kwh": 96.0, "mean": 90.0}.get(stat, 10.0)
     source = sources.get(fact.get("s")) or {}
@@ -1184,11 +1206,11 @@ def _comparison_attention_score(row: dict[str, Any]) -> float:
 
 
 def _project_ai_context(full: dict[str, Any]) -> dict[str, Any]:
-    """Return a deterministic RC5 shortlist for the LLM.
+    """Return a deterministic RC6 shortlist for the LLM.
 
     The complete ledger stays inside HA Reporting. The model sees only facts that
     can materially improve the synthesis or explain quality limitations. This is
-    the main RC5 latency optimization for local CPU inference.
+    the main RC6 latency optimization for local CPU inference.
     """
     sources = {row.get("i"): row for row in full.get("sources") or []}
     comparisons = {row.get("i"): row for row in full.get("comparison_sets") or []}
@@ -1590,8 +1612,10 @@ def _render_ledger_id(item_id: str, context: dict[str, Any], language: str, sect
         source = sources.get(row.get("s")) or sources.get(comparison.get("s")) or {}
         label = _source_label(source, language)
         metric = source.get("m")
-        unit = source.get("u") or ("kWh" if row.get("k") == "integrated_energy_kwh" else "")
         stat = row.get("k")
+        # integrated_energy_kwh is a derived ENERGY fact even when the source
+        # itself is a power sensor expressed in W. Never inherit the source unit.
+        unit = "kWh" if stat == "integrated_energy_kwh" else (source.get("u") or "")
         stat_label = _stat_label(metric, stat, language)
         if row.get("q") == "comparison":
             base = _fmt_number(row.get("b"), language)
@@ -1745,6 +1769,94 @@ def _render_recommendation(action: str, evidence: str, context: dict[str, Any], 
     return texts.get(action, texts["monitor_source"])
 
 
+def _recommendation_source_identity(evidence: str, context: dict[str, Any]) -> tuple[str, str] | None:
+    """Return a stable source identity and label for recommendation merging."""
+    index = _selection_index(context)
+    row = index.get(evidence) or {}
+    sources = {item.get("i"): item for item in context.get("sources") or []}
+    comparisons = {item.get("i"): item for item in context.get("comparison_sets") or []}
+    source = None
+    if evidence.startswith("F"):
+        source = sources.get(row.get("s"))
+        if source is None and row.get("c"):
+            source = sources.get((comparisons.get(row.get("c")) or {}).get("s"))
+    elif evidence.startswith("C"):
+        source = sources.get(row.get("s"))
+    elif evidence.startswith("S"):
+        source = row
+    elif evidence.startswith("R"):
+        # Forecast relationships are intentionally grouped as their own semantic
+        # topic rather than folded into the actual meter recommendation.
+        return (f"relationship:{evidence}", "")
+    elif evidence.startswith("Q"):
+        return (f"quality:{evidence}", "")
+    if not source:
+        return None
+    identity = str(source.get("e") or source.get("sk") or source.get("i") or evidence)
+    return identity, str(source.get("i") or "")
+
+
+def _merged_recommendation_lines(selection: dict[str, Any], context: dict[str, Any], language: str) -> list[str]:
+    """Merge multiple recommendation actions that target the same real source."""
+    raw = [item for item in selection.get("recommendations") or [] if isinstance(item, dict)]
+    groups: list[dict[str, Any]] = []
+    by_key: dict[str, dict[str, Any]] = {}
+    for item in raw:
+        action = str(item.get("action") or "")
+        evidence = str(item.get("evidence") or "")
+        identity = _recommendation_source_identity(evidence, context)
+        key = identity[0] if identity else f"evidence:{evidence}"
+        group = by_key.get(key)
+        if group is None:
+            group = {"key": key, "actions": [], "items": []}
+            by_key[key] = group
+            groups.append(group)
+        if action and action not in group["actions"]:
+            group["actions"].append(action)
+        group["items"].append(item)
+
+    lines: list[str] = []
+    for group in groups:
+        items = group["items"]
+        actions = set(group["actions"])
+        first = items[0]
+        evidence = str(first.get("evidence") or "")
+        # Quality and relationship recommendations keep their dedicated wording.
+        if group["key"].startswith(("quality:", "relationship:")) or len(actions) <= 1:
+            text = _render_recommendation(str(first.get("action") or ""), evidence, context, language)
+            if text:
+                lines.append(text)
+            continue
+
+        # For one real source, preserve both the data-quality and reset guidance
+        # in a single sentence instead of emitting two near-duplicate bullets.
+        index = _selection_index(context)
+        row = index.get(evidence) or {}
+        sources = {item.get("i"): item for item in context.get("sources") or []}
+        comparisons = {item.get("i"): item for item in context.get("comparison_sets") or []}
+        source = None
+        if evidence.startswith("C"):
+            source = sources.get(row.get("s"))
+        elif evidence.startswith("F"):
+            source = sources.get(row.get("s")) or sources.get((comparisons.get(row.get("c")) or {}).get("s"))
+        elif evidence.startswith("S"):
+            source = row
+        label = _source_label(source or {}, language)
+        has_reset = "verify_reconstructed_counter" in actions
+        has_quality = bool(actions & {"collect_more_data", "monitor_source"})
+        if language == "en":
+            if has_reset and has_quality:
+                lines.append(f"Monitor {label}; reassess it when the data are more representative and check future resets after counter reconstruction.")
+            else:
+                lines.append(_render_recommendation(str(first.get("action") or ""), evidence, context, language))
+        else:
+            if has_reset and has_quality:
+                lines.append(f"Surveiller {label} ; réévaluer la situation lorsque les données seront plus représentatives et contrôler les prochains resets après reconstruction du compteur.")
+            else:
+                lines.append(_render_recommendation(str(first.get("action") or ""), evidence, context, language))
+    return [line for line in lines if line]
+
+
 def _render_selection_analysis(context: dict[str, Any], selection: dict[str, Any], language: str) -> str:
     language = "en" if language == "en" else "fr"
     summary_heading = "SUMMARY" if language == "en" else "SYNTHÈSE"
@@ -1771,11 +1883,7 @@ def _render_selection_analysis(context: dict[str, Any], selection: dict[str, Any
     ])
     summary_keys = {" ".join(text.casefold().split()) for text in summary}
     attention = [text for text in attention if " ".join(text.casefold().split()) not in summary_keys]
-    recommendations = dedupe([
-        _render_recommendation(item.get("action"), item.get("evidence"), context, language)
-        for item in selection.get("recommendations") or []
-        if isinstance(item, dict)
-    ])
+    recommendations = dedupe(_merged_recommendation_lines(selection, context, language))
 
     if not summary:
         summary = ["No representative quantitative fact was selected." if language == "en" else "Aucun fait quantitatif représentatif n'a été sélectionné."]
@@ -1803,7 +1911,7 @@ def build_budgeted_ai_context(
     result: dict[str, Any],
     target_chars: int = AI_TARGET_CONTEXT_CHARS,
 ) -> tuple[str, dict[str, Any]]:
-    """Return RC5's deterministic shortlist while retaining the full ledger internally.
+    """Return RC6's deterministic shortlist while retaining the full ledger internally.
 
     The report data and complete fact ledger are preserved in HA Reporting. Only a
     deterministic shortlist of representative/significant facts is sent to the
@@ -1925,7 +2033,7 @@ def _instructions(context_json: str, language: str = "fr") -> str:
     if language == "en":
         return f"""You are selecting evidence for a home-automation report calculated by HA Reporting.
 Do not write the report and do not expose internal reasoning.
-The context uses `ha-reporting-ai-context-v11`, a deterministic shortlisted fact ledger.
+The context uses `ha-reporting-ai-context-v12`, a deterministic shortlisted fact ledger.
 
 Your ONLY job is to select IDs already listed in `selection_policy`.
 Return exactly one JSON object and nothing else:
@@ -1948,7 +2056,7 @@ Validated HA Reporting context:
 """
     return f"""Tu sélectionnes les éléments à mettre en avant dans un rapport domotique calculé par HA Reporting.
 N'écris pas le rapport et n'affiche aucun raisonnement interne.
-Le contexte utilise `ha-reporting-ai-context-v11`, un registre déterministe de faits présélectionnés.
+Le contexte utilise `ha-reporting-ai-context-v12`, un registre déterministe de faits présélectionnés.
 
 Ta SEULE tâche est de sélectionner des identifiants déjà présents dans `selection_policy`.
 Retourne exactement un objet JSON et rien d'autre :
@@ -2138,7 +2246,7 @@ def analyze_report_with_ai(
                 "context_current_sources": context_meta["current_sources"],
                 "context_comparison_sources": context_meta["comparison_sources"],
                 "context_relationships": context_meta["relationships"],
-                "selection_protocol": "id_only_v2_shortlist",
+                "selection_protocol": "id_only_v3_relationship_priority",
                 "omitted_current_sources": context_meta["omitted_current_sources"],
                 "omitted_comparison_sources": context_meta["omitted_comparison_sources"],
                 "sources": (result.get("summary") or {}).get("sources_total", 0),

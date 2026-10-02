@@ -476,7 +476,7 @@ class Beta26ComparisonQualityTests(unittest.TestCase):
 
     def test_rc4_prompt_uses_selection_only_contract(self):
         prompt=_instructions('{}')
-        self.assertIn('ha-reporting-ai-context-v11',prompt)
+        self.assertIn('ha-reporting-ai-context-v12',prompt)
         self.assertIn('`attention`',prompt)
         self.assertIn('recommendation_actions',prompt)
         self.assertIn('Ne calcule rien',prompt)
@@ -623,7 +623,7 @@ class AiAnalysisTests(unittest.TestCase):
 
     def test_ai_prompt_requires_id_only_selection_protocol(self):
         prompt=_instructions('{}')
-        self.assertIn('ha-reporting-ai-context-v11',prompt)
+        self.assertIn('ha-reporting-ai-context-v12',prompt)
         self.assertIn('selection_policy',prompt)
         self.assertIn('Retourne uniquement des IDs',prompt)
         self.assertIn("N'invente aucune comparaison entre sources",prompt)
@@ -674,7 +674,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertEqual(meta['omitted_comparison_sources'],0)
         self.assertEqual(context['counts']['current_sources'],421)
         self.assertEqual(context['counts']['comparison_sources'],420)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v11')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v12')
         self.assertLess(meta['shortlisted_facts'],meta['full_facts'])
         self.assertLess(meta['shortlisted_sources'],meta['full_sources'])
         encoded=json.dumps(context,ensure_ascii=False)
@@ -691,7 +691,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertEqual(meta['omitted_current_sources'],0)
         self.assertEqual(meta['omitted_comparison_sources'],0)
         self.assertEqual(context['counts']['current_sources'],1)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v11')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v12')
         self.assertNotIn('preview',context_json)
 
     def test_beta24_context_uses_named_semantics_and_integrated_energy(self):
@@ -708,7 +708,7 @@ class AiAnalysisTests(unittest.TestCase):
         sample['catalogs'][0]['devices'][0]['sources'].append(energy)
         context=_fact_ledger_context_v11(sample)
         meta={"omitted_current_sources":0}
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v11')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v12')
         power=next(src for src in context['sources'] if src.get('sk')=='frigo_power')
         pfacts={f['k']:f['v'] for f in context['facts'] if f.get('s')==power['i'] and f.get('q')=='current'}
         self.assertEqual(pfacts['max'],120)
@@ -751,7 +751,7 @@ class AiAnalysisTests(unittest.TestCase):
         sample['summary']={'sources_total':3,'sources_ok':3}
         context_json,meta=build_budgeted_ai_context(sample)
         context=json.loads(context_json)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v11')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v12')
         self.assertEqual(meta['relationships'],2)
         energy=next(item for item in context['relationships'] if item['kind']=='energy_forecast_vs_actual')
         self.assertAlmostEqual(energy['forecast_energy_kwh'],6.89)
@@ -887,7 +887,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertTrue(call['return_response'])
         self.assertEqual(call['service_data']['entity_id'],'ai_task.local')
         self.assertIn("n'affiche aucun raisonnement interne",call['service_data']['instructions'])
-        self.assertIn('ha-reporting-ai-context-v11',call['service_data']['instructions'])
+        self.assertIn('ha-reporting-ai-context-v12',call['service_data']['instructions'])
         self.assertEqual(result['input']['context_mode'],'deterministic_shortlist')
         self.assertTrue(result['input']['report_data_lossless'])
         self.assertLessEqual(result['input']['context_characters'],AI_TARGET_CONTEXT_CHARS)
@@ -1145,7 +1145,7 @@ class Beta12ExportProviderTests(unittest.TestCase):
         self.assertTrue(status['reachable'])
         self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
         self.assertEqual(seen['auth'],'Token secret')
-        self.assertIn('0.2.0-rc.5',seen['ua'])
+        self.assertIn('0.2.0-rc.6',seen['ua'])
 
     def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
         import tempfile
@@ -1524,7 +1524,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.2.0-rc.5')
+        self.assertEqual(config['version'],'0.2.0-rc.6')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertTrue(config['hassio_api'])
@@ -1650,7 +1650,7 @@ class Rc4FactLedgerTests(unittest.TestCase):
         base=self.source('dryer_power',coverage=97.6,density=99.3,max={'value':658},p95=546,mean=20.5)
         ref=self.source('dryer_power',coverage=100,density=99.3,max={'value':749},p95=540,mean=17.5)
         context=self.context_for([ComparisonEngine()._compare_source(base,ref)])
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v11')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v12')
         comp=context['comparison_sets'][0]
         src=next(item for item in context['sources'] if item['i']==comp['s'])
         self.assertEqual(src.get('sk'),'dryer_power')
@@ -1985,3 +1985,104 @@ class Rc5ShortlistOptimizationTests(unittest.TestCase):
         cids=[row['i'] for row in context['comparison_sets']]
         text=_render_selection_analysis(context,{'summary':[],'attention':cids,'recommendations':[]},'fr')
         self.assertEqual(text.count('TV PC salon : comparaison limitée.'),1)
+
+class Rc6RelationshipPriorityTests(unittest.TestCase):
+    @staticmethod
+    def forecast_source():
+        return {
+            'status':'ok','sensor_key':'p_load_forecast','entity_id':'sensor.p_load_forecast',
+            'metric':'power','unit':'W','derive_energy':True,
+            'analysis':{
+                'quality':{'period_coverage_percent':97.2,'sample_density_percent':17.9,'density_applicable':True},
+                'statistics':{'max':{'value':484},'p95':460,'mean':286,'integrated_energy_kwh':6.85},
+                'validation':{'warnings':[]},
+            },
+        }
+
+    @staticmethod
+    def actual_power_source():
+        return {
+            'status':'ok','sensor_key':'introduction_electrique_appartement_couloir_total_active_power',
+            'entity_id':'sensor.introduction_electrique_appartement_couloir_total_active_power',
+            'metric':'power','unit':'W',
+            'analysis':{
+                'quality':{'period_coverage_percent':100.0,'sample_density_percent':100.0,'density_applicable':True},
+                'statistics':{'max':{'value':2818},'p95':652,'mean':247},
+                'validation':{'warnings':[]},
+            },
+        }
+
+    @staticmethod
+    def actual_energy_source():
+        return {
+            'status':'ok','sensor_key':'introduction_electrique_appartement_couloir_total_active_energy',
+            'entity_id':'sensor.introduction_electrique_appartement_couloir_total_active_energy',
+            'metric':'energy_total','unit':'kWh',
+            'analysis':{
+                'quality':{'period_coverage_percent':100.0,'sample_density_percent':None,'density_applicable':False},
+                'statistics':{'delta':5.92,'last':{'value':3801}},
+                'validation':{'warnings':[]},
+            },
+        }
+
+    def context(self):
+        result={
+            'report':{'name':'Daily EMHASS','language':'fr'},
+            'resolved_period':{'label':'N','timezone':'Europe/Zurich'},
+            'summary':{'sources_total':3,'sources_ok':3,'sources_no_data':0,'sources_error':0,'sources_invalid':0},
+            'catalogs':[{'name':'EMHASS','devices':[{'device':{'name':'EMHASS','category':'energy'},'sources':[
+                self.forecast_source(), self.actual_power_source(), self.actual_energy_source(),
+            ]}]}],
+            'comparisons':{'targets':[]},
+        }
+        return json.loads(build_budgeted_ai_context(result)[0])
+
+    def test_integrated_energy_renders_kwh_not_power_unit(self):
+        context=self.context()
+        fact=next(f for f in context['facts'] if f.get('k')=='integrated_energy_kwh')
+        text=_render_selection_analysis(context,{'summary':[fact['i']],'attention':[],'recommendations':[]},'fr')
+        self.assertIn('6,85 kWh',text)
+        self.assertNotIn('6,85 W',text)
+
+    def test_validated_forecast_relationships_are_mandatory_summary(self):
+        context=self.context()
+        mandatory=context['selection_policy']['mandatory_summary']
+        energy=next(r for r in context['relationships'] if r['kind']=='energy_forecast_vs_actual')
+        power=next(r for r in context['relationships'] if r['kind']=='power_forecast_vs_actual')
+        self.assertIn(energy['id'],mandatory)
+        self.assertIn(power['id'],mandatory)
+        selection,valid=_validate_selection({'summary':[],'attention':[],'recommendations':[]},context)
+        self.assertFalse(valid)
+        self.assertEqual(selection['summary'][:2],[energy['id'],power['id']])
+        text=_render_selection_analysis(context,selection,'fr')
+        self.assertIn("L'énergie réelle de la période est de 5,92 kWh contre 6,85 kWh prévus",text)
+        self.assertIn('La puissance moyenne mesurée est de 247 W contre 286 W prévue',text)
+
+    def test_recommendations_for_same_source_are_merged(self):
+        base=self.actual_energy_source()
+        reference=copy.deepcopy(base)
+        base['analysis']['quality']['period_coverage_percent']=70.0
+        reference['analysis']['quality']['period_coverage_percent']=70.0
+        base['analysis']['statistics']={'delta':5.0,'last':{'value':10.0},'resets':1}
+        reference['analysis']['statistics']={'delta':4.0,'last':{'value':5.0},'resets':1}
+        comparison=ComparisonEngine()._compare_source(base,reference)
+        result={
+            'report':{'name':'Monthly','language':'fr'},'resolved_period':{'label':'N','timezone':'UTC'},
+            'summary':{'sources_total':1,'sources_ok':1,'sources_no_data':0,'sources_error':0,'sources_invalid':0},
+            'catalogs':[],
+            'comparisons':{'targets':[{'label':'N-1','resolved_period':{'label':'R'},
+                'summary':{'sources_total':1,'sources_comparable':0,'sources_partial':0,'sources_limited':1,'sources_reconstructed':1,'sources_unavailable':0},
+                'catalogs':[{'name':'Home','devices':[{'name':'Lave-vaisselle cuisine','sources':[comparison]}]}]}]},
+        }
+        context=json.loads(build_budgeted_ai_context(result)[0])
+        cid=context['comparison_sets'][0]['i']
+        selection={'summary':[],'attention':[cid],'recommendations':[
+            {'action':'collect_more_data','evidence':cid},
+            {'action':'verify_reconstructed_counter','evidence':cid},
+        ]}
+        text=_render_selection_analysis(context,selection,'fr')
+        rec_section=text.split('RECOMMANDATIONS',1)[1]
+        bullets=[line for line in rec_section.splitlines() if line.startswith('- ')]
+        self.assertEqual(len(bullets),1)
+        self.assertIn('réévaluer',bullets[0])
+        self.assertIn('resets',bullets[0])

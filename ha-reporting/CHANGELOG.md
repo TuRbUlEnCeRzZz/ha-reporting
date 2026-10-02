@@ -1,3 +1,12 @@
+## 0.2.0-rc.6
+
+- fix deterministic rendering of `integrated_energy_kwh` so derived forecast energy is always displayed in kWh instead of inheriting the source power unit;
+- introduce `ha-reporting-ai-context-v12` and `id_only_v3_relationship_priority`;
+- make validated forecast-versus-actual energy and mean-power relationships mandatory summary evidence so complete EMHASS comparisons cannot be omitted by the model;
+- keep unsupported forecast relationships attention-only when coverage is insufficient for a full-period gap;
+- merge multiple recommendation actions that target the same real source, preserving data-quality and reconstructed-counter guidance in one concise line;
+- keep RC5 deterministic shortlisting, quality signals, source deduplication, read-only VictoriaMetrics maintenance and lossless report data unchanged.
+
 ## 0.2.0-rc.5
 
 - introduce `ha-reporting-ai-context-v11` with a deterministic model-facing shortlist built from the complete internal fact ledger;

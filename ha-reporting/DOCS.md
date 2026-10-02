@@ -1,5 +1,25 @@
 # HA Reporting technical documentation
 
+## 0.2.0-rc.6 — Relationship-priority stabilization
+
+RC6 keeps RC5's deterministic shortlist and ID-only selection boundary, while tightening the last real-world issues found in daily, monthly and annual reports. The complete report dataset and full fact ledger remain unchanged; only deterministic selection/rendering policy is refined.
+
+### Correct derived-energy units
+
+`integrated_energy_kwh` is a derived energy fact produced from a power source. RC6 renders that fact with the semantic unit **kWh** regardless of the original power sensor unit (`W` or `kW`). This prevents deterministic prose such as `6.85 W` for an integrated-energy value that is correctly stored and displayed elsewhere as `6.85 kWh`.
+
+### Mandatory validated forecast relationships
+
+The AI contract is now `ha-reporting-ai-context-v12` with selection protocol `id_only_v3_relationship_priority`. Any `energy_forecast_vs_actual` or `power_forecast_vs_actual` relationship whose `full_period_comparison_supported` flag is true is injected into `selection_policy.mandatory_summary`. Energy is ordered before mean power.
+
+This means a daily/monthly EMHASS report with sufficient coverage must surface the deterministic forecast-versus-measured relationship even if the LLM would otherwise select unrelated current-period facts. Relationships with insufficient coverage remain attention-only and never gain a calculated full-period gap.
+
+### Recommendation merging
+
+Recommendations are grouped by the real Home Assistant source identity before rendering. If one source is simultaneously limited/partial and reconstructed after resets, HA Reporting emits one combined recommendation rather than two near-duplicate bullets. Quality-wide (`Q*`) and relationship (`R*`) recommendations remain independent semantic topics.
+
+---
+
 ## 0.2.0-rc.5 — Deterministic AI shortlist and quality signals
 
 RC5 keeps the RC4 rule that the language model selects evidence IDs only, but changes the model-facing payload. HA Reporting now builds the complete `ha-reporting-ai-context-v11` fact ledger internally and then creates a deterministic shortlist for the AI Task. The full report data remains available to the renderer and PDF.

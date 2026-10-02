@@ -18,7 +18,7 @@
   </button>
   <div>
     <h1>HA Reporting</h1>
-    <div class="subtitle">0.2.0-rc.7</div>
+    <div class="subtitle">0.2.0-rc.8</div>
   </div>
 </header>
 
@@ -71,6 +71,23 @@
     </div>
     <div id="automationTimezone" class="muted automationTimezone"></div>
     <p id="automationRefreshStatus" class="muted" role="status">Connexion au suivi…</p>
+    <div class="listControls" aria-label="Tri et affichage des automatisations">
+      <label>Trier par
+        <select id="automationSortKey">
+          <option value="next_run">Prochaine exécution</option>
+          <option value="created_at">Date de création</option>
+          <option value="name">Nom</option>
+          <option value="last_run">Dernier lancement</option>
+          <option value="last_finish">Dernière fin</option>
+          <option value="duration">Durée</option>
+          <option value="status">Statut</option>
+        </select>
+      </label>
+      <button id="automationSortDirection" class="sortDirectionButton" type="button" aria-label="Tri croissant">↑</button>
+      <div class="listControlSpacer"></div>
+      <button id="collapseAllAutomationsButton" type="button">Tout réduire</button>
+      <button id="expandAllAutomationsButton" type="button">Tout déployer</button>
+    </div>
     <div id="automationList"></div>
 
     <div id="automationHistoryCard" class="card hidden">
@@ -202,6 +219,22 @@
         <p class="muted">PDF natifs générés et conservés localement par HA Reporting.</p>
       </div>
       <div class="toolbarButtons"><button id="refreshDocumentsButton">Actualiser</button></div>
+    </div>
+    <div class="listControls" aria-label="Tri et affichage des documents">
+      <label>Trier par
+        <select id="documentSortKey">
+          <option value="generated_at">Date de génération</option>
+          <option value="name">Nom</option>
+          <option value="period_start">Début de période</option>
+          <option value="period_end">Fin de période</option>
+          <option value="report_type">Type de rapport</option>
+          <option value="size">Taille</option>
+        </select>
+      </label>
+      <button id="documentSortDirection" class="sortDirectionButton" type="button" aria-label="Tri décroissant">↓</button>
+      <div class="listControlSpacer"></div>
+      <button id="collapseAllDocumentsButton" type="button">Tout réduire</button>
+      <button id="expandAllDocumentsButton" type="button">Tout déployer</button>
     </div>
     <div id="documentList"></div>
   </section>

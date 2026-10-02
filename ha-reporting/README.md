@@ -2,7 +2,7 @@
 
 ![HA Reporting](logo.png)
 
-**Current development version: 0.2.0-rc.7**
+**Current development version: 0.2.0-rc.8**
 
 HA Reporting is a reporting engine for **Home Assistant OS**. It turns Home Assistant sensor history stored in VictoriaMetrics into structured reports, period comparisons, optional AI commentary and locally generated PDF documents.
 
@@ -99,22 +99,26 @@ Beta.21 introduces the first HA Reporting internationalization layer.
 
 From beta.21 onward, new and modified maintainer-facing repository content is written in **English**. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-## What is new in 0.2.0-rc.7
+## What is new in 0.2.0-rc.8
 
-`0.2.0-rc.7` is the final context-control and presentation release candidate planned before 0.2.0 stable. It keeps the RC6 deterministic fact-ledger safeguards and makes the amount of AI evidence configurable without giving the model any additional authority over calculations.
+`0.2.0-rc.8` is the final UX and AI-selection hardening release candidate planned before 0.2.0 stable. It keeps the RC7 configurable context levels and deterministic fact-ledger boundary, while improving day-to-day navigation and preventing reconstructed-counter recommendations from being attached to unrelated evidence.
 
-- adds **Settings → Artificial intelligence → AI context level**;
-- provides four global modes: **Optimized**, **Extended**, **Complete** and **Automatic**;
-- keeps Optimized as the default for small local models and CPU inference;
-- lets Extended expose a substantially larger deterministic shortlist to more capable models;
-- lets Complete send the full deterministic ledger when it fits the application safety limit;
-- lets Automatic choose Complete, Extended or Optimized from report complexity;
-- records requested/effective context level in report AI metadata so automatic or safety fallbacks remain visible;
-- introduces **`ha-reporting-ai-context-v13`** and **`id_only_v4_context_levels`** while retaining the same ID-only AI output contract;
-- suppresses redundant standalone forecast/actual facts when the validated relationship already appears in the summary;
-- keeps forecast-versus-measured values at coherent display precision when the deterministic gap contains decimals;
-- when an annual N/N-x reference has no representative comparison, prioritizes current **total electrical energy** before individual appliance facts;
-- leaves statistics, units, allowed relationships, fact validation and deterministic prose generation under HA Reporting control in every context mode.
+- makes **Automations** cards collapsible/expandable with persisted per-card state;
+- keeps an automation that is currently running expanded so live progress remains visible;
+- adds automation sorting by **creation date, name, next run, last start, last finish, duration and status**, with ascending/descending order;
+- adds **Collapse all / Expand all** controls and persists the selected sort order;
+- applies the same compact, collapsible and sortable list pattern to **Documents**, including generation date, period start/end, report type and size;
+- persists a `created_at` timestamp for new automations and conservatively infers it from the oldest known execution for legacy definitions when possible;
+- makes **Automatic** AI context selection more conservative: large monthly/annual reports stay on Optimized unless the user explicitly chooses Extended;
+- introduces **`ha-reporting-ai-context-v14`** and **`id_only_v5_recommendation_guard`**;
+- validates recommendation semantics so `verify_reconstructed_counter` is accepted only when its own evidence explicitly proves reconstructed/reset handling;
+- keeps calculations, units, allowed relationships, ID-only selection and final numeric prose fully deterministic.
+
+## Previous 0.2.0-rc.7 milestone
+
+`0.2.0-rc.7` introduced configurable AI context depth with **Optimized**, **Extended**, **Complete** and **Automatic** modes while preserving the deterministic ID-only fact-ledger contract. It also improved relationship summary presentation and annual total-energy prioritization.
+
+See [RELEASE-NOTES-0.2.0-rc.7.md](RELEASE-NOTES-0.2.0-rc.7.md) and [VALIDATION-0.2.0-rc.7.md](VALIDATION-0.2.0-rc.7.md) for the RC7 milestone.
 
 ## Previous 0.2.0-rc.6 milestone
 
@@ -200,16 +204,16 @@ These relationships are provider-agnostic. EMHASS is a useful real-world example
 
    `https://github.com/TuRbUlEnCeRzZz/ha-reporting`
 
-4. Refresh the store and verify that the offered version is **0.2.0-rc.7** before installing or updating.
+4. Refresh the store and verify that the offered version is **0.2.0-rc.8** before installing or updating.
 5. Start HA Reporting and open its interface through Home Assistant Ingress.
 
 ### From the ZIP: local installation
 
-1. Extract `ha-reporting-0.2.0-rc.7.zip` on your computer.
+1. Extract `ha-reporting-0.2.0-rc.8.zip` on your computer.
 2. Inside the extracted repository, locate the **`ha-reporting/`** directory containing `config.yaml`, `Dockerfile`, `run.sh` and `app/`.
 3. Copy that directory to **`/addons/ha-reporting`** on Home Assistant OS using your existing file-transfer method. Do not copy the whole repository into `/addons/ha-reporting`.
 4. Refresh the app store and rebuild/reinstall the local add-on.
-5. Start it and confirm **HA Reporting 0.2.0-rc.7** in the add-on log.
+5. Start it and confirm **HA Reporting 0.2.0-rc.8** in the add-on log.
 
 The first build can take some time on a Raspberry Pi 4 because dependencies are installed by Supervisor.
 
@@ -240,14 +244,14 @@ AI commentary can be wrong or over-interpret limited history. Treat it as commen
 
 ### AI context normalization
 
-0.2.0-rc.7 uses **`ha-reporting-ai-context-v13`** with the **`id_only_v4_context_levels`** selection protocol. HA Reporting always builds the complete deterministic fact ledger internally. Calculations, units, comparison eligibility, forecast/measured relationships and final numeric sentences remain controlled by HA Reporting rather than the language model.
+0.2.0-rc.8 uses **`ha-reporting-ai-context-v14`** with the **`id_only_v5_recommendation_guard`** selection protocol. HA Reporting always builds the complete deterministic fact ledger internally. Calculations, units, comparison eligibility, forecast/measured relationships and final numeric sentences remain controlled by HA Reporting rather than the language model.
 
 The global **Settings → Artificial intelligence → AI context level** setting changes only how much validated evidence the model can inspect:
 
 - **Optimized** — RC6-sized shortlist, recommended for small local models and CPU inference.
 - **Extended** — a substantially larger shortlist for more capable or accelerated models.
 - **Complete** — the full deterministic ledger when it fits the application safety limit.
-- **Automatic** — Complete for small contexts, Extended for medium contexts and Optimized for large contexts.
+- **Automatic** — conservative adaptive mode: Complete for small contexts, Extended only for medium contexts, and Optimized for substantial monthly/annual contexts.
 
 If Complete or Extended would exceed the application-side safety limit, HA Reporting deterministically falls back to a smaller effective mode and records both the requested and effective mode in the report metadata. This prevents a larger future model from being artificially restricted to today's CPU-oriented shortlist while preserving the same safety contract.
 
@@ -301,9 +305,9 @@ HA Reporting is experimental. Report accuracy depends on the quality and retenti
 
 Large reports and local AI inference can be slow on a Raspberry Pi 4. Supervisor builds also depend on upstream packages and system libraries.
 
-0.2.0-rc.7 has automated Python and JavaScript regression coverage, but automated desktop tests do not prove that every Home Assistant OS, ARM build, AI provider, VictoriaMetrics dataset or Paperless installation behaves identically. After upgrading, run at least one end-to-end report on the actual Home Assistant OS host before relying on scheduled delivery.
+0.2.0-rc.8 has automated Python and JavaScript regression coverage, but automated desktop tests do not prove that every Home Assistant OS, ARM build, AI provider, VictoriaMetrics dataset or Paperless installation behaves identically. After upgrading, run at least one end-to-end report on the actual Home Assistant OS host before relying on scheduled delivery.
 
-See [VALIDATION-0.2.0-rc.7.md](VALIDATION-0.2.0-rc.7.md) for the release-candidate validation notes and [DOCS.md](DOCS.md) for technical details.
+See [VALIDATION-0.2.0-rc.8.md](VALIDATION-0.2.0-rc.8.md) for the release-candidate validation notes and [DOCS.md](DOCS.md) for technical details.
 
 ## Repository layout
 
@@ -348,7 +352,7 @@ Possible future directions include:
 - additional export and notification destinations;
 - continued PDF/layout improvements and reporting diagnostics;
 - further validation with larger installations and longer histories;
-- optional presets for common reporting use cases. EMHASS data can already be reported through normal sensors, but there is no dedicated EMHASS integration in 0.2.0-rc.7; the power-integration option is provider-agnostic.
+- optional presets for common reporting use cases. EMHASS data can already be reported through normal sensors, but there is no dedicated EMHASS integration in 0.2.0-rc.8; the power-integration option is provider-agnostic.
 
 These are possible directions, not delivery or maintenance commitments.
 
@@ -356,10 +360,12 @@ These are possible directions, not delivery or maintenance commitments.
 
 - [Technical documentation](DOCS.md)
 - [Changelog](CHANGELOG.md)
+- [0.2.0-rc.8 validation](VALIDATION-0.2.0-rc.8.md)
 - [0.2.0-rc.7 validation](VALIDATION-0.2.0-rc.7.md)
 - [0.2.0-rc.6 validation](VALIDATION-0.2.0-rc.6.md)
 - [0.2.0-rc.4 validation](VALIDATION-0.2.0-rc.4.md)
 - [0.2.0-rc.3 validation](VALIDATION-0.2.0-rc.3.md)
+- [0.2.0-rc.8 GitHub release notes](RELEASE-NOTES-0.2.0-rc.8.md)
 - [0.2.0-rc.7 GitHub release notes](RELEASE-NOTES-0.2.0-rc.7.md)
 - [0.2.0-rc.6 GitHub release notes](RELEASE-NOTES-0.2.0-rc.6.md)
 - [0.2.0-rc.4 GitHub release notes](RELEASE-NOTES-0.2.0-rc.4.md)

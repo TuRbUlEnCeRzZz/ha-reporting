@@ -1,5 +1,34 @@
 # HA Reporting technical documentation
 
+## 0.2.0-rc.8 — Collapsible lists and recommendation evidence guard
+
+RC8 keeps the RC7 configurable context levels and deterministic ID-only contract, but applies two final stabilization layers before the planned 0.2.0 stable release.
+
+### Automations and Documents UX
+
+The **Automations** and **Documents** pages now share the same list interaction model:
+
+- each card can be collapsed or expanded;
+- per-card expansion state is persisted in browser local storage;
+- **Collapse all** and **Expand all** actions are available;
+- sort field and ascending/descending direction are persisted;
+- Automations can be sorted by creation date, name, next run, last start, last finish, duration or status;
+- Documents can be sorted by generation date, name, period start/end, report type or size.
+
+An automation that is currently executing remains expanded so progress and diagnostics stay visible. New automations persist a `created_at` timestamp. Legacy definitions without that field conservatively infer creation time from the oldest retained execution when possible.
+
+### Conservative Automatic AI context
+
+RC7 showed that Extended context can provide more secondary observations on a local 8B model, but at a substantial latency cost and with more low-priority noise. RC8 therefore makes `automatic` conservative: small reports may use `complete`, medium reports may use `extended`, and substantial monthly/annual ledgers stay on `optimized` unless the user explicitly selects Extended or Complete.
+
+The context contract is **`ha-reporting-ai-context-v14`** with protocol **`id_only_v5_recommendation_guard`**. The model still selects IDs only and never owns numeric calculations or sentence rendering.
+
+### Recommendation evidence guard
+
+`verify_reconstructed_counter` is now accepted only when the selected evidence itself proves reconstructed/reset handling (`st=reconstructed`, `br=true` or `rr=true`). A reset fact from another metric of the same device cannot be borrowed to justify the recommendation. The same guard is enforced both when validating the model response and when rendering/merging recommendation lines.
+
+---
+
 ## 0.2.0-rc.7 — Configurable AI context depth
 
 RC7 keeps the deterministic ID-only fact-ledger contract but decouples **model capability** from the small-model shortlist used in RC6. The new global AI context setting is stored independently from report definitions and is applied whenever an AI Task analysis starts.

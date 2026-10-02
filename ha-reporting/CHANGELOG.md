@@ -1,3 +1,14 @@
+## 0.2.0-rc.8
+
+- add collapsible/expandable Automation cards with persisted per-card state and automatic expansion while a job is running;
+- add Automation sorting by creation date, name, next run, last start, last finish, duration and status, including ascending/descending order and Collapse all / Expand all controls;
+- persist `created_at` for new automations and infer it from the oldest retained history entry for legacy definitions when possible;
+- apply the same collapsible/sortable UX pattern to Documents with generation date, name, period start/end, report type and size sorting;
+- make Automatic AI context selection more conservative so substantial monthly/annual reports prefer Optimized unless a larger mode is selected explicitly;
+- introduce `ha-reporting-ai-context-v14` and `id_only_v5_recommendation_guard`;
+- reject `verify_reconstructed_counter` recommendations unless the selected evidence itself proves reconstructed/reset handling;
+- keep deterministic calculations, units, comparison eligibility, forecast relationships, numeric prose, VictoriaMetrics maintenance, downloads, exports and scheduler semantics unchanged.
+
 ## 0.2.0-rc.7
 
 - add global AI context levels under Settings: Optimized, Extended, Complete and Automatic;

@@ -7,7 +7,7 @@ const i18nSource = fs.readFileSync(path.join(__dirname, '../ha-reporting/app/i18
 const indexSource = fs.readFileSync(path.join(__dirname, '../ha-reporting/app/index.html'), 'utf8');
 const sandbox = {};
 vm.createContext(sandbox);
-for (const name of ['signedValue','esc','formatSeriesNumber','localDateTime','qualityBadge','metricCardData','reportSourceCardData','renderExecutedSource','comparisonStatusLabel','comparisonSourceCard','formatAiContextInfo','renderAiAnalysis','periodTypeLabel','periodModeLabel','comparisonCountLabel','formatDurationCompact']) {
+for (const name of ['signedValue','esc','formatSeriesNumber','localDateTime','qualityBadge','metricCardData','reportSourceCardData','renderExecutedSource','comparisonStatusLabel','comparisonSourceCard','formatAiContextInfo','renderAiAnalysis','periodTypeLabel','periodModeLabel','comparisonCountLabel','formatDurationCompact','timestampValue','compareNullable']) {
   const match = source.match(new RegExp(`^function ${name}\\([^]*?^}`, 'm'));
   assert.ok(match, name);
   vm.runInContext(match[0], sandbox);
@@ -56,6 +56,9 @@ check(() => assert.equal(i18nFrenchSandbox.window.hrTranslateValue('Report langu
 check(() => assert.equal(sandbox.formatDurationCompact(1200),'20 min'));
 check(() => assert.equal(sandbox.formatDurationCompact(5400),'1 h 30 min'));
 check(() => assert.equal(sandbox.formatDurationCompact(7200),'2 h'));
+check(() => assert.ok(sandbox.timestampValue('2026-10-02T12:00:00+02:00') > 0));
+check(() => assert.equal(sandbox.compareNullable('Alpha','Beta','asc') < 0,true));
+check(() => assert.equal(sandbox.compareNullable(20,10,'desc') < 0,true));
 check(() => assert.match(indexSource, /<option value="5400">1 h 30 min<\/option>/));
 check(() => assert.match(indexSource, /<option value="7200">2 h<\/option>/));
 check(() => assert.match(indexSource, /<th>State class<\/th>/));
@@ -98,6 +101,10 @@ check(() => assert.match(source, /function generateNativePdf\(/));
 check(() => assert.match(source, /function currentUiTheme\(/));
 check(() => assert.match(source, /JSON\.stringify\(\{theme:currentUiTheme\(\)\}\)/));
 check(() => assert.match(source, /function showDocuments\(/));
+check(() => assert.match(source, /function toggleDocumentCard\(/));
+check(() => assert.match(source, /function sortedDocuments\(/));
+check(() => assert.match(indexSource, /id="documentSortKey"/));
+check(() => assert.match(indexSource, /id="collapseAllDocumentsButton"/));
 check(() => assert.match(source, /reportFilenameTemplate/));
 check(() => assert.match(source, /api\/document\/\$\{encodeURIComponent\(id\)\}\/download/));
 check(() => assert.match(source, /async function downloadDocument\(id\)/));
@@ -133,6 +140,11 @@ check(() => assert.match(source, /function duplicateReportDefinition\(/));
 check(() => assert.match(source, /exportProvidersPage:"tabSettings"/));
 check(() => assert.match(source, /--hr-page-background-image/));
 check(() => assert.match(source, /automationNotifyEntity/));
+check(() => assert.match(source, /function toggleAutomationCard\(/));
+check(() => assert.match(source, /function sortedScheduledAutomations\(/));
+check(() => assert.match(source, /last_finished_at/));
+check(() => assert.match(indexSource, /id="automationSortKey"/));
+check(() => assert.match(indexSource, /id="expandAllAutomationsButton"/));
 check(() => assert.match(source, /automationTtsEntity/));
 check(() => assert.match(source, /automationMediaPlayer/));
 check(() => assert.match(source, /reportLanguage/));
@@ -145,4 +157,6 @@ check(() => assert.match(i18nSource, /"nav\.settings"/));
 check(() => assert.match(i18nSource, /function hrDetectLanguage\(/));
 check(() => assert.match(i18nSource, /function hrDefaultReportLanguage\(/));
 check(() => assert.match(i18nSource, /MutationObserver/));
+check(() => assert.equal(i18nSandbox.window.hrT('list.collapse_all'),'Collapse all'));
+check(() => assert.equal(i18nSandbox.window.hrT('automation.last_finish'),'Last finish'));
 console.log(`${checks} JavaScript UI checks passed`);

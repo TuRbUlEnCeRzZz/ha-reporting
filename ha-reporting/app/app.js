@@ -4,6 +4,12 @@ let reports = [];
 let documents = [];
 let exportProviders = [];
 let scheduledAutomations = [];
+let automationSortKey = readUiPreference("ha_reporting_automation_sort_key", "next_run");
+let automationSortDirection = readUiPreference("ha_reporting_automation_sort_direction", "asc");
+let documentSortKey = readUiPreference("ha_reporting_document_sort_key", "generated_at");
+let documentSortDirection = readUiPreference("ha_reporting_document_sort_direction", "desc");
+let expandedAutomationIds = new Set(readUiPreferenceJson("ha_reporting_automation_expanded", []));
+let expandedDocumentIds = new Set(readUiPreferenceJson("ha_reporting_document_expanded", []));
 let editingAutomationId = null;
 let editingReportId = null;
 let previewReportId = null;
@@ -25,6 +31,52 @@ const metricTypes = [
 ];
 
 const $ = id => document.getElementById(id);
+
+function readUiPreference(key, fallback=""){
+  try{
+    const value=window.localStorage?.getItem(key);
+    return value == null ? fallback : value;
+  }catch(_){ return fallback; }
+}
+
+function readUiPreferenceJson(key, fallback){
+  try{
+    const value=window.localStorage?.getItem(key);
+    if(value == null) return fallback;
+    const parsed=JSON.parse(value);
+    return parsed ?? fallback;
+  }catch(_){ return fallback; }
+}
+
+function writeUiPreference(key, value){
+  try{ window.localStorage?.setItem(key, String(value)); }catch(_){}
+}
+
+function writeUiPreferenceJson(key, value){
+  try{ window.localStorage?.setItem(key, JSON.stringify(value)); }catch(_){}
+}
+
+function uiText(key, fallback, params={}){
+  return (typeof window!=="undefined" && window.hrT) ? window.hrT(key, params) : fallback;
+}
+
+function timestampValue(value){
+  if(value == null || value === "") return null;
+  if(typeof value === "number" && Number.isFinite(value)) return value > 1e12 ? value : value*1000;
+  const parsed=Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function compareNullable(a,b,direction="asc"){
+  const aMissing=a == null || Number.isNaN(a);
+  const bMissing=b == null || Number.isNaN(b);
+  if(aMissing && bMissing) return 0;
+  if(aMissing) return 1;
+  if(bMissing) return -1;
+  const sign=direction==="desc"?-1:1;
+  if(typeof a === "string" || typeof b === "string") return String(a).localeCompare(String(b), undefined, {numeric:true,sensitivity:"base"})*sign;
+  return (Number(a)-Number(b))*sign;
+}
 
 function esc(value){
   return String(value ?? "").replace(/[&<>"]/g, c => ({
@@ -452,7 +504,7 @@ function updateAiContextSettingsUi(level){
     optimized:typeof hrT==="function"?hrT("settings.ai_context_optimized_help"):"Optimisé est recommandé pour les petits modèles locaux et l'inférence CPU.",
     extended:typeof hrT==="function"?hrT("settings.ai_context_extended_help"):"Étendu transmet davantage de faits à un modèle plus puissant.",
     complete:typeof hrT==="function"?hrT("settings.ai_context_complete_help"):"Complet transmet le ledger intégral lorsque sa taille respecte la limite de sécurité.",
-    automatic:typeof hrT==="function"?hrT("settings.ai_context_automatic_help"):"Automatique choisit Complet, Étendu ou Optimisé selon la taille du rapport."
+    automatic:typeof hrT==="function"?hrT("settings.ai_context_automatic_help"):"Automatique privilégie Optimisé pour les rapports volumineux, utilise Étendu pour les rapports intermédiaires et Complet uniquement pour les petits rapports."
   };
   if($("aiContextHelp")) $("aiContextHelp").textContent=help[level]||help.optimized;
 }
@@ -1487,6 +1539,7 @@ function formatBytes(bytes){
 
 async function showDocuments(push=true){
   setPage("documentsPage",{},push);
+  syncDocumentListControls();
   await loadDocuments();
 }
 
@@ -1510,6 +1563,64 @@ async function loadDocuments(){
   const data=await documentsResponse.json();
   documents=data.documents||[];
   renderDocuments();
+}
+
+function documentSortValue(doc,key){
+  const period=doc.period||{};
+  const values={
+    name:String(doc.report_name||doc.filename||doc.report_id||""),
+    generated_at:timestampValue(doc.generated_at_epoch ?? doc.generated_at),
+    period_start:timestampValue(period.start_epoch ?? period.start),
+    period_end:timestampValue(period.end_epoch ?? period.end),
+    report_type:String(period.type||period.label||""),
+    size:Number(doc.size_bytes||0)
+  };
+  return values[key] ?? values.generated_at;
+}
+
+function sortedDocuments(){
+  return [...documents].sort((a,b)=>{
+    const primary=compareNullable(documentSortValue(a,documentSortKey),documentSortValue(b,documentSortKey),documentSortDirection);
+    if(primary) return primary;
+    return compareNullable(timestampValue(b.generated_at_epoch ?? b.generated_at),timestampValue(a.generated_at_epoch ?? a.generated_at),"asc");
+  });
+}
+
+function persistExpandedDocuments(){
+  writeUiPreferenceJson("ha_reporting_document_expanded", [...expandedDocumentIds]);
+}
+
+function toggleDocumentCard(id){
+  const key=String(id);
+  if(expandedDocumentIds.has(key)) expandedDocumentIds.delete(key); else expandedDocumentIds.add(key);
+  persistExpandedDocuments();
+  renderDocuments();
+}
+
+function setAllDocumentsExpanded(expanded){
+  expandedDocumentIds = expanded ? new Set(documents.map(item=>String(item.id))) : new Set();
+  persistExpandedDocuments();
+  renderDocuments();
+}
+
+function setDocumentSort(key,direction=null){
+  documentSortKey=key||"generated_at";
+  if(direction) documentSortDirection=direction;
+  writeUiPreference("ha_reporting_document_sort_key",documentSortKey);
+  writeUiPreference("ha_reporting_document_sort_direction",documentSortDirection);
+  syncDocumentListControls();
+  renderDocuments();
+}
+
+function syncDocumentListControls(){
+  const select=$("documentSortKey");
+  const direction=$("documentSortDirection");
+  if(select) select.value=documentSortKey;
+  if(direction){
+    direction.textContent=documentSortDirection==="asc"?"↑":"↓";
+    direction.setAttribute("aria-label", documentSortDirection==="asc" ? uiText("list.sort_ascending","Tri croissant") : uiText("list.sort_descending","Tri décroissant"));
+    direction.title=direction.getAttribute("aria-label");
+  }
 }
 
 function documentExportUi(doc){
@@ -1537,25 +1648,37 @@ function renderDocuments(){
     $("documentList").innerHTML='<div class="card empty">Aucun PDF natif généré.</div>';
     return;
   }
-  $("documentList").innerHTML=documents.map(doc=>`
-    <div class="documentCard">
-      <div class="documentInfo">
-        <div class="reportTitle">${esc(doc.filename)}</div>
-        <div class="reportMeta">${esc(doc.report_name || doc.report_id)} · ${esc(doc.generated_at || "")} · ${esc(formatBytes(doc.size_bytes))}</div>
-        <span class="reportPeriodPill">${esc((doc.period||{}).label || "")}</span>
-        <span class="reportPeriodPill">PDF local</span>
+  $("documentList").innerHTML=sortedDocuments().map(doc=>{
+    const expanded=expandedDocumentIds.has(String(doc.id));
+    const period=doc.period||{};
+    return `
+    <div class="documentCard collapsibleListCard ${expanded?"isExpanded":"isCollapsed"}">
+      <div class="documentCardHeader">
+        <div class="documentInfo">
+          <div class="reportTitle">${esc(doc.filename)}</div>
+          <div class="reportMeta">${esc(doc.report_name || doc.report_id)} · ${esc(formatAutomationDate(doc.generated_at))} · ${esc(formatBytes(doc.size_bytes))}</div>
+          <div class="compactListMeta"><span>${esc(period.label||"")}</span><span>${esc(uiText("documents.pdf_local","PDF local"))}</span></div>
+        </div>
+        <button class="collapseToggle" type="button" aria-expanded="${expanded}" aria-label="${esc(expanded?uiText("list.collapse","Réduire"):uiText("list.expand","Déployer"))}" onclick="toggleDocumentCard('${esc(doc.id)}')"><span aria-hidden="true">${expanded?"⌃":"⌄"}</span></button>
+      </div>
+      <div class="collapsibleCardBody ${expanded?"":"hidden"}">
+        <div class="documentDetails">
+          <span class="reportPeriodPill">${esc(period.label || "")}</span>
+          <span class="reportPeriodPill">${esc(uiText("documents.pdf_local","PDF local"))}</span>
+        </div>
         <div class="documentExports">${Object.entries(doc.exports||{}).map(([id,state])=>{
           const provider=exportProviderById(id);
           if(!provider || !state || !state.filename) return '';
           return `<small>${esc(provider.name)} : ${esc(state.filename)}${state.attempts ? ` · tentative ${esc(state.attempts)}` : ''}</small>`;
         }).join('')}</div>
+        <div class="reportActions documentActions">
+          <button onclick="downloadDocument('${esc(doc.id)}')">Télécharger</button>
+          ${documentExportUi(doc)}
+          <button class="danger" onclick="deleteDocument('${esc(doc.id)}','${esc(doc.filename)}')">Supprimer</button>
+        </div>
       </div>
-      <div class="reportActions documentActions">
-        <button onclick="downloadDocument('${esc(doc.id)}')">Télécharger</button>
-        ${documentExportUi(doc)}
-        <button class="danger" onclick="deleteDocument('${esc(doc.id)}','${esc(doc.filename)}')">Supprimer</button>
-      </div>
-    </div>`).join("");
+    </div>`;
+  }).join("");
 }
 
 async function downloadDocument(id){
@@ -1819,6 +1942,74 @@ function automationIsActive(item){
   return ["queued","running","data_complete","ai_running","pdf_generating","exporting"].includes(status);
 }
 
+function automationSortValue(item,key){
+  const runtime=item.runtime||{};
+  const values={
+    created_at:timestampValue(item.created_at),
+    name:String(item.name||""),
+    next_run:timestampValue(item.next_run_at),
+    last_run:timestampValue(runtime.last_run_at),
+    last_finish:timestampValue(runtime.last_finished_at),
+    duration:Number(runtime.last_duration_seconds||0),
+    status:String(item.progress?.status||runtime.last_status||"")
+  };
+  return values[key] ?? values.next_run;
+}
+
+function sortedScheduledAutomations(){
+  return [...scheduledAutomations].sort((a,b)=>{
+    const aActive=automationIsActive(a);
+    const bActive=automationIsActive(b);
+    if(aActive!==bActive) return aActive?-1:1;
+    const primary=compareNullable(automationSortValue(a,automationSortKey),automationSortValue(b,automationSortKey),automationSortDirection);
+    if(primary) return primary;
+    return compareNullable(String(a.name||""),String(b.name||""),"asc");
+  });
+}
+
+function automationCardExpanded(item){
+  return automationIsActive(item) || expandedAutomationIds.has(String(item.id));
+}
+
+function persistExpandedAutomations(){
+  writeUiPreferenceJson("ha_reporting_automation_expanded", [...expandedAutomationIds]);
+}
+
+function toggleAutomationCard(id){
+  const item=scheduledAutomations.find(row=>String(row.id)===String(id));
+  if(item && automationIsActive(item)) return;
+  const key=String(id);
+  if(expandedAutomationIds.has(key)) expandedAutomationIds.delete(key); else expandedAutomationIds.add(key);
+  persistExpandedAutomations();
+  renderScheduledAutomations($("automationTimezone")?.dataset.timezone||"");
+}
+
+function setAllAutomationsExpanded(expanded){
+  expandedAutomationIds = expanded ? new Set(scheduledAutomations.filter(item=>!automationIsActive(item)).map(item=>String(item.id))) : new Set();
+  persistExpandedAutomations();
+  renderScheduledAutomations($("automationTimezone")?.dataset.timezone||"");
+}
+
+function setAutomationSort(key,direction=null){
+  automationSortKey=key||"next_run";
+  if(direction) automationSortDirection=direction;
+  writeUiPreference("ha_reporting_automation_sort_key",automationSortKey);
+  writeUiPreference("ha_reporting_automation_sort_direction",automationSortDirection);
+  syncAutomationListControls();
+  renderScheduledAutomations($("automationTimezone")?.dataset.timezone||"");
+}
+
+function syncAutomationListControls(){
+  const select=$("automationSortKey");
+  const direction=$("automationSortDirection");
+  if(select) select.value=automationSortKey;
+  if(direction){
+    direction.textContent=automationSortDirection==="asc"?"↑":"↓";
+    direction.setAttribute("aria-label", automationSortDirection==="asc" ? uiText("list.sort_ascending","Tri croissant") : uiText("list.sort_descending","Tri décroissant"));
+    direction.title=direction.getAttribute("aria-label");
+  }
+}
+
 function renderPipelineProgress(progress){
   if(!progress?.steps) return "";
   const labels = {data:"Collecte et statistiques", ai:"Analyse IA", pdf:"Génération PDF", export:"Export Paperless", notification:"Notification"};
@@ -1855,6 +2046,7 @@ document.addEventListener("visibilitychange", scheduleAutomationRefresh);
 
 function renderScheduledAutomations(timezone){
   $("automationTimezone").textContent=`Fuseau utilisé : ${timezone||"Home Assistant"}`;
+  $("automationTimezone").dataset.timezone=timezone||"Home Assistant";
   if(!scheduledAutomations.length){
     $("automationList").innerHTML='<div class="card empty">Aucune automatisation HA Reporting.</div>';
     return;
@@ -1862,7 +2054,7 @@ function renderScheduledAutomations(timezone){
   const list = $("automationList");
   const focused = list.contains(document.activeElement) ? document.activeElement?.dataset.focusKey : null;
   const openDetails = new Set(Array.from(list.querySelectorAll("details[open]")).map(el => el.dataset.detailsKey));
-  list.innerHTML=scheduledAutomations.map(item=>{
+  list.innerHTML=sortedScheduledAutomations().map(item=>{
     const runtime=item.runtime||{};
     const pipeline=item.pipeline||{};
     const retry=item.retry||{};
@@ -1874,17 +2066,26 @@ function renderScheduledAutomations(timezone){
     const exports=runtime.last_exports||{};
     const paperless=exports.paperless;
     const paperlessLabel=paperless ? (paperless.ok?"Paperless ✓":"Paperless ✕") : "Paperless —";
-    return `<div class="automationCard ${item.enabled?"":"disabledAutomation"}">
+    const expanded=automationCardExpanded(item);
+    const active=automationIsActive(item);
+    return `<div class="automationCard collapsibleListCard ${expanded?"isExpanded":"isCollapsed"} ${item.enabled?"":"disabledAutomation"}">
       <div class="automationCardHeader">
         <div>
           <div class="catalogTitle">${esc(item.name)}</div>
           <div class="catalogMeta">${esc(reports.find(report=>report.id===item.report_id)?.name || "Rapport indisponible")} · ${esc(automationScheduleLabel(item))}</div>
+          <div class="compactListMeta"><span>${esc(uiText("automation.next_run","Prochaine exécution"))} : ${esc(formatAutomationDate(item.next_run_at))}</span><span class="${lastClass}">${esc(automationStatusLabel(lastStatus))}</span><span>${esc(formatAutomationDuration(runtime.last_duration_seconds))}</span></div>
         </div>
-        <span class="providerBadge ${item.enabled?"ok":""}">${item.enabled?"Activée":"Désactivée"}</span>
+        <div class="listCardHeaderActions">
+          <span class="providerBadge ${item.enabled?"ok":""}">${item.enabled?"Activée":"Désactivée"}</span>
+          <button class="collapseToggle" type="button" ${active?"disabled":""} aria-expanded="${expanded}" aria-label="${esc(active?uiText("automation.running_expanded","En cours · déployée"):expanded?uiText("list.collapse","Réduire"):uiText("list.expand","Déployer"))}" onclick="toggleAutomationCard('${esc(item.id)}')"><span aria-hidden="true">${expanded?"⌃":"⌄"}</span></button>
+        </div>
       </div>
+      <div class="collapsibleCardBody ${expanded?"":"hidden"}">
       <div class="automationMetaGrid">
+        <div><span class="muted">${esc(uiText("automation.created_at","Créée le"))}</span><strong>${esc(formatAutomationDate(item.created_at))}</strong></div>
         <div><span class="muted">Prochaine exécution</span><strong>${esc(formatAutomationDate(item.next_run_at))}</strong></div>
-        <div><span class="muted">Dernière exécution</span><strong>${esc(formatAutomationDate(runtime.last_run_at))}</strong></div>
+        <div><span class="muted">${esc(uiText("automation.last_start","Dernier lancement"))}</span><strong>${esc(formatAutomationDate(runtime.last_run_at))}</strong></div>
+        <div><span class="muted">${esc(uiText("automation.last_finish","Dernière fin"))}</span><strong>${esc(formatAutomationDate(runtime.last_finished_at))}</strong></div>
         <div><span class="muted">Dernier statut</span><strong class="${lastClass}">${esc(automationStatusLabel(lastStatus))}</strong></div>
         <div><span class="muted">Durée</span><strong>${esc(formatAutomationDuration(runtime.last_duration_seconds))}</strong></div>
         <div><span class="muted">Déclenchement</span><strong>${esc(automationTriggerLabel(runtime.last_trigger))}</strong></div>
@@ -1902,6 +2103,7 @@ function renderScheduledAutomations(timezone){
         <button data-focus-key="history-${esc(item.id)}" onclick="showAutomationHistory('${esc(item.id)}')">Historique</button>
         <button data-focus-key="edit-${esc(item.id)}" onclick="editScheduledAutomation('${esc(item.id)}')">Modifier</button>
         <button class="danger" data-focus-key="delete-${esc(item.id)}" onclick="deleteScheduledAutomation('${esc(item.id)}','${esc(item.name)}')">Supprimer</button>
+      </div>
       </div>
     </div>`;
   }).join("");
@@ -1922,6 +2124,7 @@ async function loadScheduledAutomations(){
 
 async function showAutomations(push=true){
   setPage("automationsPage",{},push);
+  syncAutomationListControls();
   try {
     await loadReports();
     await loadScheduledAutomations();
@@ -2135,6 +2338,10 @@ $("tabDocuments").addEventListener("click", () => showDocuments());
 $("tabAutomations").addEventListener("click", () => showAutomations());
 $("tabSettings").addEventListener("click", () => showProviders());
 $("refreshAutomationsButton").addEventListener("click", () => loadScheduledAutomations());
+$("automationSortKey").addEventListener("change", event => setAutomationSort(event.target.value));
+$("automationSortDirection").addEventListener("click", () => setAutomationSort(automationSortKey, automationSortDirection==="asc"?"desc":"asc"));
+$("collapseAllAutomationsButton").addEventListener("click", () => setAllAutomationsExpanded(false));
+$("expandAllAutomationsButton").addEventListener("click", () => setAllAutomationsExpanded(true));
 $("newAutomationButton").addEventListener("click", () => showAutomationForm());
 $("automationScheduleType").addEventListener("change", updateAutomationScheduleFields);
 $("saveAutomationButton").addEventListener("click", saveScheduledAutomation);
@@ -2146,6 +2353,10 @@ $("automationRetryEnabled").addEventListener("change", () => {
   $("automationRetryDelay").disabled=!enabled;
 });
 $("refreshDocumentsButton").addEventListener("click", () => loadDocuments());
+$("documentSortKey").addEventListener("change", event => setDocumentSort(event.target.value));
+$("documentSortDirection").addEventListener("click", () => setDocumentSort(documentSortKey, documentSortDirection==="asc"?"desc":"asc"));
+$("collapseAllDocumentsButton").addEventListener("click", () => setAllDocumentsExpanded(false));
+$("expandAllDocumentsButton").addEventListener("click", () => setAllDocumentsExpanded(true));
 $("exportProvidersButton").addEventListener("click", () => showExportProviders());
 $("paperlessMode").addEventListener("change", updatePaperlessModeFields);
 $("paperlessTestButton").addEventListener("click", testPaperless);

@@ -5,7 +5,7 @@ import re
 import tempfile
 import threading
 import unicodedata
-from datetime import timedelta
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 AUTOMATION_FILE = Path('/config/automations.json')
@@ -87,6 +87,28 @@ def _normalize_history(raw_history):
             'progress': copy.deepcopy(item.get('progress')),
         })
     return history
+
+
+def _inferred_created_at(payload):
+    """Return a stable creation timestamp when one is available.
+
+    RC8 starts persisting ``created_at`` for new automations so the UI can sort
+    by creation time. Existing installations did not store that field, so we
+    conservatively fall back to the oldest known execution timestamp instead of
+    fabricating a current timestamp during migration.
+    """
+    value = str((payload or {}).get('created_at') or '').strip()
+    if value:
+        return value
+    history = (payload or {}).get('history') or []
+    candidates = []
+    for row in history:
+        if not isinstance(row, dict):
+            continue
+        started = str(row.get('started_at') or '').strip()
+        if started:
+            candidates.append(started)
+    return min(candidates) if candidates else None
 
 
 def normalize_automation(payload, automation_id=None):
@@ -179,6 +201,7 @@ def normalize_automation(payload, automation_id=None):
     runtime = copy.deepcopy(payload.get('runtime') or {})
     return {
         'id': aid,
+        'created_at': _inferred_created_at(payload),
         'name': name,
         'enabled': bool(payload.get('enabled', True)),
         'report_id': report_id,
@@ -245,6 +268,8 @@ def get_automation(automation_id):
 
 
 def create_automation(payload):
+    payload = copy.deepcopy(payload or {})
+    payload.setdefault('created_at', datetime.now(timezone.utc).isoformat())
     item = normalize_automation(payload)
     with _STORE_LOCK:
         data = _read_all()
@@ -269,6 +294,7 @@ def update_automation(automation_id, payload):
                 merged[key] = copy.deepcopy(payload[key])
         merged['runtime'] = current.get('runtime') or {}
         merged['history'] = current.get('history') or []
+        merged['created_at'] = current.get('created_at')
         item = normalize_automation(merged, automation_id=automation_id)
         data['version'] = 2
         data['automations'][index] = item

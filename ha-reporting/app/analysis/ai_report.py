@@ -685,7 +685,7 @@ def _fact_ledger_context_v11(result: dict[str, Any]) -> dict[str, Any]:
     ledger is sent to the LLM later; the report itself remains unchanged.
     """
     context: dict[str, Any] = {
-        "schema": "ha-reporting-ai-context-v13",
+        "schema": "ha-reporting-ai-context-v14",
         "ledger_complete": True,
         "legend": {
             "source": {
@@ -1086,7 +1086,7 @@ def _populate_selection_policy(context: dict[str, Any]) -> None:
         if qid not in mandatory_summary:
             mandatory_summary.append(qid)
     context["selection_policy"] = {
-        "protocol": "id_only_v4_context_levels",
+        "protocol": "id_only_v5_recommendation_guard",
         "summary_prefixes": ["F", "R", "Q"],
         "attention_prefixes": ["F", "C", "S", "R", "Q"],
         "mandatory_summary": mandatory_summary,
@@ -1398,6 +1398,41 @@ def _relationship_redundant_fact_ids(context: dict[str, Any], relationship_ids: 
     return redundant
 
 
+def _recommendation_action_supported(action: str, evidence: str, context: dict[str, Any]) -> bool:
+    """Return whether a recommendation action is supported by its own evidence.
+
+    In particular, reconstructed-counter advice must be anchored to evidence
+    that itself carries reconstructed/reset semantics. A different fact from
+    the same device is not sufficient proof.
+    """
+    if action != "verify_reconstructed_counter":
+        return True
+
+    index = _selection_index(context)
+    row = index.get(str(evidence)) or {}
+    comparisons = {
+        str(item.get("i")): item
+        for item in context.get("comparison_sets") or []
+        if item.get("i")
+    }
+
+    def reconstructed(candidate: dict[str, Any]) -> bool:
+        return bool(
+            candidate.get("st") == "reconstructed"
+            or candidate.get("br")
+            or candidate.get("rr")
+        )
+
+    evidence = str(evidence or "")
+    if evidence.startswith("C"):
+        return reconstructed(row)
+    if evidence.startswith("F"):
+        if reconstructed(row):
+            return True
+        return reconstructed(comparisons.get(str(row.get("c") or "")) or {})
+    return False
+
+
 def _validate_selection(data: Any, context: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     """Validate an id-only AI selection and inject mandatory quality facts."""
     parsed = _extract_json_object(data) or {}
@@ -1456,7 +1491,11 @@ def _validate_selection(data: Any, context: dict[str, Any]) -> tuple[dict[str, A
                 continue
             action = str(item.get("action") or "")
             evidence = str(item.get("evidence") or "")
-            if action in actions_allowed and evidence in evidence_allowed:
+            if (
+                action in actions_allowed
+                and evidence in evidence_allowed
+                and _recommendation_action_supported(action, evidence, context)
+            ):
                 pair = {"action": action, "evidence": evidence}
                 if pair not in recommendations:
                     recommendations.append(pair)
@@ -1804,6 +1843,8 @@ def _render_ledger_id(item_id: str, context: dict[str, Any], language: str, sect
 
 
 def _render_recommendation(action: str, evidence: str, context: dict[str, Any], language: str) -> str:
+    if not _recommendation_action_supported(action, evidence, context):
+        return ""
     index = _selection_index(context)
     row = index.get(evidence) or {}
     sources = {item.get("i"): item for item in context.get("sources") or []}
@@ -1884,7 +1925,15 @@ def _recommendation_source_identity(evidence: str, context: dict[str, Any]) -> t
 
 def _merged_recommendation_lines(selection: dict[str, Any], context: dict[str, Any], language: str) -> list[str]:
     """Merge multiple recommendation actions that target the same real source."""
-    raw = [item for item in selection.get("recommendations") or [] if isinstance(item, dict)]
+    raw = [
+        item for item in selection.get("recommendations") or []
+        if isinstance(item, dict)
+        and _recommendation_action_supported(
+            str(item.get("action") or ""),
+            str(item.get("evidence") or ""),
+            context,
+        )
+    ]
     groups: list[dict[str, Any]] = []
     by_key: dict[str, dict[str, Any]] = {}
     for item in raw:
@@ -1998,7 +2047,7 @@ def build_budgeted_ai_context(
     target_chars: int = AI_TARGET_CONTEXT_CHARS,
     context_level: str = "optimized",
 ) -> tuple[str, dict[str, Any]]:
-    """Build the RC7 model context according to the configured context level.
+    """Build the RC8 model context according to the configured context level.
 
     All modes keep the same deterministic fact ledger and ID-only output
     contract. The setting only changes how much already-validated evidence the
@@ -2015,9 +2064,16 @@ def build_budgeted_ai_context(
     effective = requested
     clamped = False
     if requested == "automatic":
-        if len(full_context_json) <= 45000:
+        # RC8 deliberately makes Automatic conservative. The A/B tests with a
+        # local 8B model showed that larger shortlists add useful detail but can
+        # nearly double latency and introduce more low-priority noise. Small
+        # reports may still use the complete ledger; medium reports can use the
+        # extended projection, while substantial monthly/annual reports stay on
+        # the optimized shortlist unless the user explicitly selects Extended.
+        full_fact_count = len(full_context.get("facts") or []) + len(full_context.get("comparison_sets") or [])
+        if len(full_context_json) <= 25000 and full_fact_count <= 48:
             effective = "complete"
-        elif len(full_context_json) <= 130000:
+        elif len(full_context_json) <= 55000 and full_fact_count <= 90:
             effective = "extended"
         else:
             effective = "optimized"
@@ -2172,7 +2228,7 @@ def _instructions(context_json: str, language: str = "fr") -> str:
     if language == "en":
         return f"""You are selecting evidence for a home-automation report calculated by HA Reporting.
 Do not write the report and do not expose internal reasoning.
-The context uses `ha-reporting-ai-context-v13`, a deterministic fact ledger projection.
+The context uses `ha-reporting-ai-context-v14`, a deterministic fact ledger projection.
 
 Your ONLY job is to select IDs already listed in `selection_policy`.
 Return exactly one JSON object and nothing else:
@@ -2182,6 +2238,7 @@ Rules:
 - `summary`: 1 to 4 eligible `F*`, `R*` or mandatory `Q*` IDs. Prefer current `mean`/`period_delta`/`integrated_energy_kwh`, representative comparison `mean`/`period_delta`, explicit relationships, and mandatory quality signals.
 - `attention`: 0 to 5 eligible IDs. Prefer mandatory `Q*` quality signals, partial/limited/reconstructed comparison sets, quality-limited sources, or relationships whose full-period comparison is not supported.
 - `recommendations`: 0 to 4 objects. `action` must be one of `selection_policy.recommendation_actions`; `evidence` must be an attention-worthy ID from the context.
+- `verify_reconstructed_counter` is valid only when its own evidence explicitly indicates a reconstructed counter/reset (`st=reconstructed`, `br=true` or `rr=true`). Do not borrow reset evidence from another fact of the same device.
 - Return IDs only. Never return names, values, percentages, explanations, prose, markdown, code fences or extra keys.
 - Prefer representative current-period energy/mean facts and explicit `relationships` over isolated power peaks.
 - A `power_forecast_vs_actual` peak gap is context only and must not be selected as evidence for overload, calibration error or a fault.
@@ -2195,7 +2252,7 @@ Validated HA Reporting context:
 """
     return f"""Tu sélectionnes les éléments à mettre en avant dans un rapport domotique calculé par HA Reporting.
 N'écris pas le rapport et n'affiche aucun raisonnement interne.
-Le contexte utilise `ha-reporting-ai-context-v13`, une projection du registre déterministe de faits.
+Le contexte utilise `ha-reporting-ai-context-v14`, une projection du registre déterministe de faits.
 
 Ta SEULE tâche est de sélectionner des identifiants déjà présents dans `selection_policy`.
 Retourne exactement un objet JSON et rien d'autre :
@@ -2205,6 +2262,7 @@ Règles :
 - `summary` : 1 à 4 IDs `F*`, `R*` ou `Q*` obligatoires éligibles. Privilégie les `mean`/`period_delta`/`integrated_energy_kwh` courants, les `mean`/`period_delta` de comparaison représentative, les relations explicites et les signaux globaux de qualité obligatoires.
 - `attention` : 0 à 5 IDs éligibles. Privilégie les signaux `Q*` obligatoires, les comparaisons partielles/limitées/reconstruites, les sources de qualité limitée ou les relations dont la comparaison de période complète n’est pas supportée.
 - `recommendations` : 0 à 4 objets. `action` doit appartenir à `selection_policy.recommendation_actions` et `evidence` doit être un ID digne d’attention présent dans le contexte.
+- `verify_reconstructed_counter` n'est valide que si son propre élément de preuve indique explicitement un compteur reconstruit/reset (`st=reconstructed`, `br=true` ou `rr=true`). N'emprunte jamais une preuve de reset à un autre fait du même appareil.
 - Retourne uniquement des IDs. N'écris jamais de nom, valeur, pourcentage, explication, prose, markdown, bloc de code ni clé supplémentaire.
 - Privilégie les énergies de période, moyennes représentatives et `relationships` explicites plutôt que les pics de puissance isolés.
 - Un écart de pic dans `power_forecast_vs_actual` est seulement contextuel : il ne doit jamais servir de preuve de surcharge, mauvais calibrage ou panne.
@@ -2389,7 +2447,7 @@ def analyze_report_with_ai(
                 "context_current_sources": context_meta["current_sources"],
                 "context_comparison_sources": context_meta["comparison_sources"],
                 "context_relationships": context_meta["relationships"],
-                "selection_protocol": "id_only_v4_context_levels",
+                "selection_protocol": "id_only_v5_recommendation_guard",
                 "omitted_current_sources": context_meta["omitted_current_sources"],
                 "omitted_comparison_sources": context_meta["omitted_comparison_sources"],
                 "sources": (result.get("summary") or {}).get("sources_total", 0),

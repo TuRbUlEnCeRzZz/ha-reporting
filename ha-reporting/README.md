@@ -2,7 +2,7 @@
 
 ![HA Reporting](logo.png)
 
-**Current development version: 0.2.0-rc.8**
+**Current stable version: 0.2.0**
 
 HA Reporting is a reporting engine for **Home Assistant OS**. It turns Home Assistant sensor history stored in VictoriaMetrics into structured reports, period comparisons, optional AI commentary and locally generated PDF documents.
 
@@ -99,9 +99,9 @@ Beta.21 introduces the first HA Reporting internationalization layer.
 
 From beta.21 onward, new and modified maintainer-facing repository content is written in **English**. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-## What is new in 0.2.0-rc.8
+## What is new in 0.2.0
 
-`0.2.0-rc.8` is the final UX and AI-selection hardening release candidate planned before 0.2.0 stable. It keeps the RC7 configurable context levels and deterministic fact-ledger boundary, while improving day-to-day navigation and preventing reconstructed-counter recommendations from being attached to unrelated evidence.
+`0.2.0` is the first stable HA Reporting release. It is promoted directly from `0.2.0-rc.8` **without functional changes**, after the final RC8 validation run confirmed the conservative Automatic AI-context policy and recommendation evidence guard on a full monthly N/N-1 report.
 
 - makes **Automations** cards collapsible/expandable with persisted per-card state;
 - keeps an automation that is currently running expanded so live progress remains visible;
@@ -113,6 +113,14 @@ From beta.21 onward, new and modified maintainer-facing repository content is wr
 - introduces **`ha-reporting-ai-context-v14`** and **`id_only_v5_recommendation_guard`**;
 - validates recommendation semantics so `verify_reconstructed_counter` is accepted only when its own evidence explicitly proves reconstructed/reset handling;
 - keeps calculations, units, allowed relationships, ID-only selection and final numeric prose fully deterministic.
+
+The stable release keeps the RC8 runtime behavior unchanged. The promotion only updates release/version metadata, documentation and validation references.
+
+## Previous 0.2.0-rc.8 milestone
+
+`0.2.0-rc.8` completed the pre-stable UX and AI-selection hardening work: collapsible/sortable Automations and Documents, conservative Automatic context selection, and evidence-bound reconstructed-counter recommendations.
+
+See [RELEASE-NOTES-0.2.0-rc.8.md](RELEASE-NOTES-0.2.0-rc.8.md) and [VALIDATION-0.2.0-rc.8.md](VALIDATION-0.2.0-rc.8.md) for the RC8 milestone.
 
 ## Previous 0.2.0-rc.7 milestone
 
@@ -204,16 +212,16 @@ These relationships are provider-agnostic. EMHASS is a useful real-world example
 
    `https://github.com/TuRbUlEnCeRzZz/ha-reporting`
 
-4. Refresh the store and verify that the offered version is **0.2.0-rc.8** before installing or updating.
+4. Refresh the store and verify that the offered version is **0.2.0** before installing or updating.
 5. Start HA Reporting and open its interface through Home Assistant Ingress.
 
 ### From the ZIP: local installation
 
-1. Extract `ha-reporting-0.2.0-rc.8.zip` on your computer.
+1. Extract `ha-reporting-0.2.0.zip` on your computer.
 2. Inside the extracted repository, locate the **`ha-reporting/`** directory containing `config.yaml`, `Dockerfile`, `run.sh` and `app/`.
 3. Copy that directory to **`/addons/ha-reporting`** on Home Assistant OS using your existing file-transfer method. Do not copy the whole repository into `/addons/ha-reporting`.
 4. Refresh the app store and rebuild/reinstall the local add-on.
-5. Start it and confirm **HA Reporting 0.2.0-rc.8** in the add-on log.
+5. Start it and confirm **HA Reporting 0.2.0** in the add-on log.
 
 The first build can take some time on a Raspberry Pi 4 because dependencies are installed by Supervisor.
 
@@ -244,7 +252,7 @@ AI commentary can be wrong or over-interpret limited history. Treat it as commen
 
 ### AI context normalization
 
-0.2.0-rc.8 uses **`ha-reporting-ai-context-v14`** with the **`id_only_v5_recommendation_guard`** selection protocol. HA Reporting always builds the complete deterministic fact ledger internally. Calculations, units, comparison eligibility, forecast/measured relationships and final numeric sentences remain controlled by HA Reporting rather than the language model.
+0.2.0 uses **`ha-reporting-ai-context-v14`** with the **`id_only_v5_recommendation_guard`** selection protocol. HA Reporting always builds the complete deterministic fact ledger internally. Calculations, units, comparison eligibility, forecast/measured relationships and final numeric sentences remain controlled by HA Reporting rather than the language model.
 
 The global **Settings → Artificial intelligence → AI context level** setting changes only how much validated evidence the model can inspect:
 
@@ -305,9 +313,9 @@ HA Reporting is experimental. Report accuracy depends on the quality and retenti
 
 Large reports and local AI inference can be slow on a Raspberry Pi 4. Supervisor builds also depend on upstream packages and system libraries.
 
-0.2.0-rc.8 has automated Python and JavaScript regression coverage, but automated desktop tests do not prove that every Home Assistant OS, ARM build, AI provider, VictoriaMetrics dataset or Paperless installation behaves identically. After upgrading, run at least one end-to-end report on the actual Home Assistant OS host before relying on scheduled delivery.
+0.2.0 has automated Python and JavaScript regression coverage, but automated desktop tests do not prove that every Home Assistant OS, ARM build, AI provider, VictoriaMetrics dataset or Paperless installation behaves identically. After upgrading, run at least one end-to-end report on the actual Home Assistant OS host before relying on scheduled delivery.
 
-See [VALIDATION-0.2.0-rc.8.md](VALIDATION-0.2.0-rc.8.md) for the release-candidate validation notes and [DOCS.md](DOCS.md) for technical details.
+See [VALIDATION-0.2.0.md](VALIDATION-0.2.0.md) for the stable-release validation notes and [DOCS.md](DOCS.md) for technical details.
 
 ## Repository layout
 
@@ -352,7 +360,7 @@ Possible future directions include:
 - additional export and notification destinations;
 - continued PDF/layout improvements and reporting diagnostics;
 - further validation with larger installations and longer histories;
-- optional presets for common reporting use cases. EMHASS data can already be reported through normal sensors, but there is no dedicated EMHASS integration in 0.2.0-rc.8; the power-integration option is provider-agnostic.
+- optional presets for common reporting use cases. EMHASS data can already be reported through normal sensors, but there is no dedicated EMHASS integration in 0.2.0; the power-integration option is provider-agnostic.
 
 These are possible directions, not delivery or maintenance commitments.
 
@@ -360,11 +368,13 @@ These are possible directions, not delivery or maintenance commitments.
 
 - [Technical documentation](DOCS.md)
 - [Changelog](CHANGELOG.md)
+- [0.2.0 validation](VALIDATION-0.2.0.md)
 - [0.2.0-rc.8 validation](VALIDATION-0.2.0-rc.8.md)
 - [0.2.0-rc.7 validation](VALIDATION-0.2.0-rc.7.md)
 - [0.2.0-rc.6 validation](VALIDATION-0.2.0-rc.6.md)
 - [0.2.0-rc.4 validation](VALIDATION-0.2.0-rc.4.md)
 - [0.2.0-rc.3 validation](VALIDATION-0.2.0-rc.3.md)
+- [0.2.0 GitHub release notes](RELEASE-NOTES-0.2.0.md)
 - [0.2.0-rc.8 GitHub release notes](RELEASE-NOTES-0.2.0-rc.8.md)
 - [0.2.0-rc.7 GitHub release notes](RELEASE-NOTES-0.2.0-rc.7.md)
 - [0.2.0-rc.6 GitHub release notes](RELEASE-NOTES-0.2.0-rc.6.md)

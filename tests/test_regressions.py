@@ -1147,7 +1147,7 @@ class Beta12ExportProviderTests(unittest.TestCase):
         self.assertTrue(status['reachable'])
         self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
         self.assertEqual(seen['auth'],'Token secret')
-        self.assertIn('0.2.0-rc.8',seen['ua'])
+        self.assertIn('0.2.0',seen['ua'])
 
     def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
         import tempfile
@@ -1526,7 +1526,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.2.0-rc.8')
+        self.assertEqual(config['version'],'0.2.0')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertTrue(config['hassio_api'])

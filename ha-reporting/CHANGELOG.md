@@ -1,3 +1,12 @@
+## 0.2.0
+
+- first stable HA Reporting release;
+- promote `0.2.0-rc.8` directly to stable with no functional runtime changes;
+- keep collapsible/sortable Automations and Documents, conservative Automatic AI context selection and the recommendation evidence guard unchanged;
+- keep `ha-reporting-ai-context-v14` / `id_only_v5_recommendation_guard` unchanged;
+- keep deterministic calculations, units, comparison eligibility, forecast relationships and numeric rendering unchanged;
+- update release/version metadata, documentation and stable validation references only.
+
 ## 0.2.0-rc.8
 
 - add collapsible/expandable Automation cards with persisted per-card state and automatic expansion while a job is running;

@@ -1,8 +1,8 @@
 # HA Reporting technical documentation
 
-## 0.2.0-rc.8 — Collapsible lists and recommendation evidence guard
+## 0.2.0 — Stable release
 
-RC8 keeps the RC7 configurable context levels and deterministic ID-only contract, but applies two final stabilization layers before the planned 0.2.0 stable release.
+0.2.0 is promoted directly from RC8 without functional changes. It keeps the RC7 configurable context levels and deterministic ID-only contract together with the final RC8 stabilization layers described below.
 
 ### Automations and Documents UX
 

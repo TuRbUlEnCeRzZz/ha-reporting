@@ -37,6 +37,10 @@ check(() => assert.equal(i18nSandbox.window.hrT('source.power_statistics_energy'
 check(() => assert.equal(i18nSandbox.window.hrT('source.integrated_energy'),'Integrated energy'));
 check(() => assert.equal(i18nSandbox.window.hrT('comparison.limited'),'Limited'));
 check(() => assert.equal(i18nSandbox.window.hrT('document.download_failed'),'Download failed'));
+check(() => assert.equal(i18nSandbox.window.hrT('settings.ai_context_optimized'),'Optimized'));
+check(() => assert.equal(i18nSandbox.window.hrTranslateValue('Optimisé · rapide'),'Optimized · fast'));
+check(() => assert.match(indexSource, /id="aiContextLevel"/));
+check(() => assert.match(source, /api\/settings\/ai/));
 const i18nFrenchSandbox = {
   window: {},
   localStorage: {
@@ -82,6 +86,7 @@ check(() => assert.match(sandbox.formatAiContextInfo({input:{context_characters:
 check(() => assert.match(sandbox.formatAiContextInfo({input:{context_characters:47300,context_limit_characters:60000,context_original_characters:106724,context_lossless:true,context_mode:'lossless_normalized'}}), /aucune source omise/));
 check(() => assert.match(sandbox.formatAiContextInfo({input:{context_characters:12300,context_limit_characters:220000,context_mode:'deterministic_shortlist',context_full_facts:420,context_shortlisted_facts:28}}), /présélection IA 28\/420 faits/));
 check(() => assert.match(sandbox.formatAiContextInfo({input:{context_characters:12300,context_limit_characters:220000,context_mode:'deterministic_shortlist',context_full_facts:420,context_shortlisted_facts:28}}), /données complètes conservées dans le rapport/));
+check(() => assert.match(sandbox.formatAiContextInfo({input:{context_characters:12300,context_limit_characters:220000,context_mode:'deterministic_shortlist',context_level_requested:'automatic',context_level_effective:'optimized',context_full_facts:420,context_shortlisted_facts:28}}), /Mode : Automatique → Optimisé/));
 check(() => assert.match(sandbox.renderAiAnalysis({ai_analysis:{enabled:true,status:'completed',entity_id:'ai_task.local',duration_seconds:1.23,text:'OK'}}), /nuancer ou contester/));
 check(() => assert.match(sandbox.renderAiAnalysis({ai_analysis:{enabled:true,status:'completed',entity_id:'ai_task.local',duration_seconds:1.23,text:'<script>x<\/script>'}}), /&lt;script&gt;/));
 check(() => assert.match(sandbox.renderAiAnalysis({ai_analysis:{enabled:true,status:'error',error:'boom'}}), /boom/));

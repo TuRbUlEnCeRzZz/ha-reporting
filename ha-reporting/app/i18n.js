@@ -1,4 +1,4 @@
-/* HA Reporting i18n foundation (0.2.0-rc.6).
+/* HA Reporting i18n foundation (0.2.0-rc.7).
  *
  * The legacy beta.20 UI still contains French source strings in a number of
  * rendering functions.  beta.21 centralizes translations here and translates
@@ -211,6 +211,27 @@ const HR_I18N_MESSAGES = {
   "device.create_category": {fr:"Créer une catégorie", en:"Create a category"},
 
   "settings.global": {fr:"Configuration globale de HA Reporting.", en:"Global HA Reporting configuration."},
+  "settings.ai_title": {fr:"Intelligence artificielle", en:"Artificial intelligence"},
+  "settings.ai_context_level": {fr:"Niveau de contexte IA", en:"AI context level"},
+  "settings.ai_context_intro": {fr:"Configure la quantité de faits déterministes transmise au modèle. Les calculs, unités et relations restent toujours contrôlés par HA Reporting.", en:"Configure how many deterministic facts are sent to the model. Calculations, units and allowed relationships always remain controlled by HA Reporting."},
+  "settings.ai_context_optimized": {fr:"Optimisé", en:"Optimized"},
+  "settings.ai_context_extended": {fr:"Étendu", en:"Extended"},
+  "settings.ai_context_complete": {fr:"Complet", en:"Complete"},
+  "settings.ai_context_automatic": {fr:"Automatique", en:"Automatic"},
+  "settings.ai_context_optimized_option": {fr:"Optimisé · rapide", en:"Optimized · fast"},
+  "settings.ai_context_extended_option": {fr:"Étendu · analyse plus riche", en:"Extended · richer analysis"},
+  "settings.ai_context_complete_option": {fr:"Complet · ledger intégral si possible", en:"Complete · full ledger when possible"},
+  "settings.ai_context_automatic_option": {fr:"Automatique · selon la complexité du rapport", en:"Automatic · based on report complexity"},
+  "settings.ai_context_optimized_help": {fr:"Optimisé est recommandé pour les petits modèles locaux et l'inférence CPU.", en:"Optimized is recommended for small local models and CPU inference."},
+  "settings.ai_context_extended_help": {fr:"Étendu transmet davantage de faits à un modèle plus puissant.", en:"Extended sends more facts to a more capable model."},
+  "settings.ai_context_complete_help": {fr:"Complet transmet le ledger intégral lorsque sa taille respecte la limite de sécurité.", en:"Complete sends the full ledger when it fits within the safety limit."},
+  "settings.ai_context_automatic_help": {fr:"Automatique choisit Complet, Étendu ou Optimisé selon la taille du rapport.", en:"Automatic chooses Complete, Extended or Optimized based on report size."},
+  "settings.ai_context_saving": {fr:"Enregistrement…", en:"Saving…"},
+  "settings.ai_context_saved": {fr:"✓ Niveau de contexte IA enregistré", en:"✓ AI context level saved"},
+  "settings.ai_context_save_error": {fr:"Erreur d'enregistrement : ", en:"Save error: "},
+  "settings.ai_deterministic_guards": {fr:"Garde-fous déterministes", en:"Deterministic safeguards"},
+  "settings.ai_deterministic_guards_help": {fr:"Toujours actifs : fact ledger, unités, comparaisons autorisées et rendu chiffré contrôlé.", en:"Always active: fact ledger, units, allowed comparisons and controlled numeric rendering."},
+  "report.ai_context_level": {fr:"Mode", en:"Mode"},
   "settings.languages": {fr:"Langues", en:"Languages"},
   "settings.languages_help": {fr:"Choisis la langue de l'interface et la langue proposée par défaut pour les nouveaux rapports.", en:"Choose the interface language and the default language proposed for new reports."},
   "settings.ui_language": {fr:"Langue de l'interface", en:"Interface language"},

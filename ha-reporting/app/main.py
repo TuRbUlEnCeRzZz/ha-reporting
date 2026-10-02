@@ -35,6 +35,7 @@ from document_store import (
     update_document_export,
 )
 from analysis.ai_report import analyze_report_with_ai
+from settings_store import load_settings as load_app_settings, save_ai_settings
 from automation_store import (
     append_history as append_scheduled_automation_history,
     create_automation as create_scheduled_automation,
@@ -111,6 +112,27 @@ logging.basicConfig(
 )
 log = logging.getLogger("ha-reporting")
 
+
+
+
+def _ai_context_level():
+    return str((load_app_settings().get("ai") or {}).get("context_level") or "optimized")
+
+
+def _ai_config_with_global_settings(raw):
+    config = dict(raw or {})
+    config["context_level"] = _ai_context_level()
+    return config
+
+
+def ai_settings_overview():
+    return load_app_settings()
+
+
+def update_ai_settings(payload):
+    settings = save_ai_settings(payload or {})
+    log.info("AI context settings updated: %s", (settings.get("ai") or {}).get("context_level"))
+    return settings
 
 def stable_id(value):
     value = unicodedata.normalize("NFKD", str(value or ""))
@@ -1483,7 +1505,7 @@ def execute_report(report_id):
         )
 
     data_finished = time.time()
-    ai_config = report.get("ai_analysis") or {}
+    ai_config = _ai_config_with_global_settings(report.get("ai_analysis") or {})
     ai_enabled = bool(ai_config.get("enabled"))
     result = {
         "report_version": 1,
@@ -1519,6 +1541,7 @@ def execute_report(report_id):
             "mode": "no_thinking_expected",
             "mode_control": "ai_task_entity_configuration",
             "timeout_seconds": _ai_timeout_seconds(ai_config),
+            "context_level": ai_config.get("context_level", "optimized"),
         } if ai_enabled else {
             "enabled": False,
             "status": "disabled",
@@ -1532,7 +1555,7 @@ def _ai_analysis_status(report_id):
     result = _cached_report_result(report_id)
     if result is None:
         report = load_report(report_id)
-        ai_config = report.get("ai_analysis") or {}
+        ai_config = _ai_config_with_global_settings(report.get("ai_analysis") or {})
         if not bool(ai_config.get("enabled")):
             return {"enabled": False, "status": "disabled"}
         return {
@@ -1540,6 +1563,7 @@ def _ai_analysis_status(report_id):
             "status": "idle",
             "entity_id": str(ai_config.get("entity_id") or "").strip() or None,
             "timeout_seconds": _ai_timeout_seconds(ai_config),
+            "context_level": ai_config.get("context_level", "optimized"),
             "transport": "home_assistant_websocket",
         }
     return copy.deepcopy(result.get("ai_analysis") or {"enabled": False, "status": "disabled"})
@@ -1556,7 +1580,7 @@ def _ai_analysis_status_payload(report_id):
 def start_ai_analysis(report_id):
     """Start AI interpretation in a server-side background job and return immediately."""
     report = load_report(report_id)
-    ai_config = report.get("ai_analysis") or {}
+    ai_config = _ai_config_with_global_settings(report.get("ai_analysis") or {})
     result = _cached_report_result(report_id)
     if result is None:
         result = execute_report(report_id)
@@ -1591,6 +1615,7 @@ def start_ai_analysis(report_id):
             "mode": "no_thinking_expected",
             "mode_control": "ai_task_entity_configuration",
             "timeout_seconds": timeout_seconds,
+            "context_level": ai_config.get("context_level", "optimized"),
             "transport": "home_assistant_websocket",
             "started_at_epoch": time.time(),
         }
@@ -1670,7 +1695,7 @@ def _finalize_cached_ai_analysis(report_id, analysis):
 
 def _automation_ai_analysis(report_id, report, automation_job_id):
     """Run AI synchronously inside an automation worker (HTTP remains non-blocking)."""
-    ai_config = dict(report.get("ai_analysis") or {})
+    ai_config = _ai_config_with_global_settings(report.get("ai_analysis") or {})
     ai_config["enabled"] = True
     timeout_seconds = _ai_timeout_seconds(ai_config)
     running = {
@@ -1681,6 +1706,7 @@ def _automation_ai_analysis(report_id, report, automation_job_id):
         "mode": "no_thinking_expected",
         "mode_control": "ai_task_entity_configuration",
         "timeout_seconds": timeout_seconds,
+        "context_level": ai_config.get("context_level", "optimized"),
         "transport": "home_assistant_websocket",
         "started_at_epoch": time.time(),
     }
@@ -2703,6 +2729,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_payload(200, {"entities": home_assistant_states()})
             if path.endswith("/api/providers"):
                 return self.send_payload(200, provider_overview())
+            if path.endswith("/api/settings"):
+                return self.send_payload(200, ai_settings_overview())
             if path.endswith("/api/catalogs"):
                 return self.send_payload(200, {"catalogs": list_catalogs()})
             if path.endswith("/api/reports"):
@@ -2820,6 +2848,8 @@ class Handler(BaseHTTPRequestHandler):
             payload = self.json_body()
             if path.endswith("/api/providers/victoria_metrics"):
                 return self.send_payload(200, save_provider_config(payload))
+            if path.endswith("/api/settings/ai"):
+                return self.send_payload(200, update_ai_settings(payload))
             if path.endswith("/api/export-providers/paperless"):
                 return self.send_payload(200, {"provider": save_export_provider("paperless", payload)})
             if "/api/scheduled-automation/" in path:

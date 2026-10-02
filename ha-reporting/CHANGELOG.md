@@ -1,3 +1,14 @@
+## 0.2.0-rc.7
+
+- add global AI context levels under Settings: Optimized, Extended, Complete and Automatic;
+- introduce `ha-reporting-ai-context-v13` and `id_only_v4_context_levels`;
+- keep deterministic calculations, units, relationships and numeric rendering unchanged across all context levels;
+- expose requested/effective AI context level in report metadata and fall back safely if a larger mode exceeds the application context guard;
+- suppress redundant standalone forecast/actual facts when an authoritative relationship is already rendered;
+- preserve decimal precision coherently between forecast/actual values and deterministic gaps;
+- prioritize total electrical energy in annual summaries when N/N-x has no representative comparison;
+- keep RC6 relationship priority, RC5 shortlisting, read-only VictoriaMetrics maintenance, PDF downloads and export/automation behavior unchanged.
+
 ## 0.2.0-rc.6
 
 - fix deterministic rendering of `integrated_energy_kwh` so derived forecast energy is always displayed in kWh instead of inheriting the source power unit;

@@ -346,8 +346,16 @@ def _ai_context_quality(ai: dict[str, Any], language: str = "fr") -> str:
     mode = input_meta.get("context_mode")
     full_facts = int(input_meta.get("context_full_facts") or 0)
     shortlisted_facts = int(input_meta.get("context_shortlisted_facts") or 0)
+    requested_level = str(input_meta.get("context_level_requested") or "")
+    effective_level = str(input_meta.get("context_level_effective") or requested_level)
+    level_labels_en = {"optimized":"Optimized","extended":"Extended","complete":"Complete","automatic":"Automatic"}
+    level_labels_fr = {"optimized":"Optimisé","extended":"Étendu","complete":"Complet","automatic":"Automatique"}
     if str(language).lower() == "en":
         text = f"AI context: {chars / 1000:.1f} k / {limit / 1000:.1f} k characters"
+        if requested_level:
+            text += f" · Mode: {level_labels_en.get(requested_level, requested_level)}"
+            if effective_level and effective_level != requested_level:
+                text += f" → {level_labels_en.get(effective_level, effective_level)}"
         if mode == "deterministic_shortlist":
             if full_facts:
                 text += f" · AI shortlist {shortlisted_facts}/{full_facts} facts"
@@ -361,6 +369,10 @@ def _ai_context_quality(ai: dict[str, Any], language: str = "fr") -> str:
             text += f" · {omitted} routine sources omitted"
         return text
     text = f"Contexte IA : {chars / 1000:.1f} k / {limit / 1000:.1f} k caractères"
+    if requested_level:
+        text += f" · Mode : {level_labels_fr.get(requested_level, requested_level)}"
+        if effective_level and effective_level != requested_level:
+            text += f" → {level_labels_fr.get(effective_level, effective_level)}"
     if mode == "deterministic_shortlist":
         if full_facts:
             text += f" · présélection IA {shortlisted_facts}/{full_facts} faits"

@@ -1,5 +1,26 @@
 # HA Reporting technical documentation
 
+## 0.2.0-rc.7 — Configurable AI context depth
+
+RC7 keeps the deterministic ID-only fact-ledger contract but decouples **model capability** from the small-model shortlist used in RC6. The new global AI context setting is stored independently from report definitions and is applied whenever an AI Task analysis starts.
+
+### Context levels
+
+- `optimized`: RC6-sized deterministic shortlist, designed for small local models and CPU inference.
+- `extended`: larger deterministic projection with substantially more summary and attention candidates.
+- `complete`: full deterministic ledger if its encoded size is within the application safety limit.
+- `automatic`: selects complete for small ledgers, extended for medium ledgers and optimized for large ledgers.
+
+The complete ledger is always built internally first. The selected context level changes only the **projection sent to the LLM**. The model still returns validated IDs only, and HA Reporting still owns all calculations, units, comparison eligibility and quantitative sentence rendering.
+
+The contract is now `ha-reporting-ai-context-v13` with protocol `id_only_v4_context_levels`. AI metadata records both `context_level_requested` and `context_level_effective`. If Complete or Extended would exceed the application-side context guard, the backend deterministically falls back to a smaller effective mode rather than sending an oversized request.
+
+### RC7 presentation hardening
+
+- relationship summaries suppress current-period facts already represented by the selected forecast/actual relationship;
+- relationship endpoints use enough decimal precision to remain arithmetically coherent with the rendered deterministic gap;
+- annual reports with zero representative N/N-x comparisons prioritize the current total electrical-energy period fact when available.
+
 ## 0.2.0-rc.6 — Relationship-priority stabilization
 
 RC6 keeps RC5's deterministic shortlist and ID-only selection boundary, while tightening the last real-world issues found in daily, monthly and annual reports. The complete report dataset and full fact ledger remain unchanged; only deterministic selection/rendering policy is refined.

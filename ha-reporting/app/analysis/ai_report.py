@@ -677,15 +677,15 @@ def _current_source_relationships(rows: list[dict[str, Any]]) -> list[dict[str, 
 
 
 def _fact_ledger_context_v11(result: dict[str, Any]) -> dict[str, Any]:
-    """Build the complete deterministic RC6 fact ledger.
+    """Build the complete deterministic RC7 fact ledger.
 
-    RC6 keeps the complete semantic ledger internally, deduplicates repeated
+    RC7 keeps the complete semantic ledger internally, deduplicates repeated
     entities by their real Home Assistant entity id, and adds deterministic
     report/comparison quality signals. A smaller deterministic projection of this
     ledger is sent to the LLM later; the report itself remains unchanged.
     """
     context: dict[str, Any] = {
-        "schema": "ha-reporting-ai-context-v12",
+        "schema": "ha-reporting-ai-context-v13",
         "ledger_complete": True,
         "legend": {
             "source": {
@@ -717,7 +717,7 @@ def _fact_ledger_context_v11(result: dict[str, Any]) -> dict[str, Any]:
             "coverage_quality": ">=95 representative; 80-95 partial/cautious; <80 limited",
             "relationship": "only allowed cross-source comparison",
             "forecast_peak": "max gap is context only; it never proves overload, calibration error or a fault",
-            "projection": "the LLM receives a deterministic shortlist; all report data remains in HA Reporting",
+            "projection": "the LLM receives a deterministic context projection selected by the configured context level; all report data remains in HA Reporting",
         },
         "report": [
             (result.get("report") or {}).get("name"),
@@ -1028,7 +1028,7 @@ def _fact_ledger_context_v11(result: dict[str, Any]) -> dict[str, Any]:
     return context
 
 def _populate_selection_policy(context: dict[str, Any]) -> None:
-    """Declare the RC6 shortlist/id-only selection protocol."""
+    """Declare the RC7 shortlist/id-only selection protocol."""
     mandatory_quality_summary = [
         str(row.get("i")) for row in context.get("quality_signals") or []
         if row.get("i") and row.get("ms")
@@ -1037,7 +1037,7 @@ def _populate_selection_policy(context: dict[str, Any]) -> None:
         str(row.get("i")) for row in context.get("quality_signals") or []
         if row.get("i") and row.get("ma")
     ]
-    # RC6: a validated forecast-vs-actual relation is authoritative and must not
+    # RC7: a validated forecast-vs-actual relation is authoritative and must not
     # be dropped by the LLM shortlist selection. Prefer energy before power so
     # the period-energy relationship survives even when other mandatory quality
     # signals consume part of the four-line summary budget.
@@ -1056,11 +1056,37 @@ def _populate_selection_policy(context: dict[str, Any]) -> None:
         rid = str(row.get("id"))
         if rid not in mandatory_summary:
             mandatory_summary.append(rid)
+
+    # RC7: when N/N-x has no representative comparison, surface the home's
+    # current total electrical energy before individual appliance facts. This
+    # keeps annual summaries useful even when the historical reference is weak.
+    no_representative = any(
+        row.get("k") == "comparison_quality" and row.get("st") == "no_representative"
+        for row in context.get("quality_signals") or []
+    )
+    if no_representative and not validated_relationships:
+        sources = {row.get("i"): row for row in context.get("sources") or []}
+        for fact in context.get("facts") or []:
+            source = sources.get(fact.get("s")) or {}
+            sensor_key = str(source.get("sk") or source.get("e") or "").casefold()
+            coverage = _as_number(source.get("cov"))
+            if (
+                fact.get("q") == "current"
+                and fact.get("k") == "period_delta"
+                and source.get("m") == "energy_total"
+                and ("total_active_energy" in sensor_key or sensor_key.endswith("active_energy"))
+                and (coverage is None or coverage >= 80.0)
+            ):
+                fid = str(fact.get("i"))
+                if fid not in mandatory_summary:
+                    mandatory_summary.append(fid)
+                break
+
     for qid in mandatory_quality_summary:
         if qid not in mandatory_summary:
             mandatory_summary.append(qid)
     context["selection_policy"] = {
-        "protocol": "id_only_v3_relationship_priority",
+        "protocol": "id_only_v4_context_levels",
         "summary_prefixes": ["F", "R", "Q"],
         "attention_prefixes": ["F", "C", "S", "R", "Q"],
         "mandatory_summary": mandatory_summary,
@@ -1077,7 +1103,7 @@ def _populate_selection_policy(context: dict[str, Any]) -> None:
 def _allowed_selection_ids(context: dict[str, Any]) -> tuple[set[str], set[str], set[str]]:
     """Return deterministic allowed ID sets for the projected ledger.
 
-    RC6 deliberately refuses low-coverage current values and limited/reconstructed
+    RC7 deliberately refuses low-coverage current values and limited/reconstructed
     N/N-x facts as normal summary evidence. Those facts remain available as
     attention evidence through their source/comparison quality IDs.
     """
@@ -1164,7 +1190,7 @@ def _selection_index(context: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _fact_score(fact: dict[str, Any], sources: dict[str, dict[str, Any]], comparisons: dict[str, dict[str, Any]]) -> float:
-    """Score one deterministic fact for RC6's LLM shortlist."""
+    """Score one deterministic fact for RC7's LLM shortlist."""
     stat = str(fact.get("k") or "")
     score = {"period_delta": 100.0, "integrated_energy_kwh": 96.0, "mean": 90.0}.get(stat, 10.0)
     source = sources.get(fact.get("s")) or {}
@@ -1205,13 +1231,20 @@ def _comparison_attention_score(row: dict[str, Any]) -> float:
     return score
 
 
-def _project_ai_context(full: dict[str, Any]) -> dict[str, Any]:
-    """Return a deterministic RC6 shortlist for the LLM.
+def _project_ai_context(full: dict[str, Any], profile: str = "optimized") -> dict[str, Any]:
+    """Return a deterministic RC7 projection for the LLM.
 
-    The complete ledger stays inside HA Reporting. The model sees only facts that
-    can materially improve the synthesis or explain quality limitations. This is
-    the main RC6 latency optimization for local CPU inference.
+    ``optimized`` keeps RC6-sized shortlists for small/CPU-bound local models.
+    ``extended`` exposes substantially more representative facts to larger models
+    while keeping the deterministic fact/relationship contract unchanged.
     """
+    profile = str(profile or "optimized").strip().lower()
+    if profile not in {"optimized", "extended"}:
+        profile = "optimized"
+    budgets = {
+        "optimized": {"summary": 28, "attention": 8, "comparisons": 14, "sources": 8},
+        "extended": {"summary": 96, "attention": 24, "comparisons": 36, "sources": 18},
+    }[profile]
     sources = {row.get("i"): row for row in full.get("sources") or []}
     comparisons = {row.get("i"): row for row in full.get("comparison_sets") or []}
     facts = list(full.get("facts") or [])
@@ -1223,7 +1256,7 @@ def _project_ai_context(full: dict[str, Any]) -> dict[str, Any]:
     summary_allowed, attention_allowed, _ = _allowed_selection_ids(full)
     summary_facts = [f for f in facts if str(f.get("i")) in summary_allowed]
     summary_facts.sort(key=lambda f: (-_fact_score(f, sources, comparisons), str(f.get("i"))))
-    selected_fact_ids = {str(f.get("i")) for f in summary_facts[:28]}
+    selected_fact_ids = {str(f.get("i")) for f in summary_facts[:budgets["summary"]]}
 
     # Keep a small set of high-impact comparable changes as attention candidates.
     attention_facts = [
@@ -1231,7 +1264,7 @@ def _project_ai_context(full: dict[str, Any]) -> dict[str, Any]:
         if str(f.get("i")) in attention_allowed and f.get("q") == "comparison"
     ]
     attention_facts.sort(key=lambda f: (-_fact_score(f, sources, comparisons), str(f.get("i"))))
-    selected_fact_ids.update(str(f.get("i")) for f in attention_facts[:8])
+    selected_fact_ids.update(str(f.get("i")) for f in attention_facts[:budgets["attention"]])
 
     # Keep the most useful comparison-quality objects, prioritizing limited and
     # reconstructed cases. Unavailable entries are summarized globally instead
@@ -1241,7 +1274,7 @@ def _project_ai_context(full: dict[str, Any]) -> dict[str, Any]:
         if str(row.get("i")) in attention_allowed and row.get("st") != "unavailable"
     ]
     attention_comparisons.sort(key=lambda r: (-_comparison_attention_score(r), str(r.get("i"))))
-    selected_comparison_ids = {str(row.get("i")) for row in attention_comparisons[:14]}
+    selected_comparison_ids = {str(row.get("i")) for row in attention_comparisons[:budgets["comparisons"]]}
     for fact in facts:
         if str(fact.get("i")) in selected_fact_ids and fact.get("c"):
             selected_comparison_ids.add(str(fact.get("c")))
@@ -1261,7 +1294,7 @@ def _project_ai_context(full: dict[str, Any]) -> dict[str, Any]:
             severity += 10.0
         quality_sources.append((severity, sid, row))
     quality_sources.sort(key=lambda item: (-item[0], item[1]))
-    selected_source_alert_ids = {item[1] for item in quality_sources[:8]}
+    selected_source_alert_ids = {item[1] for item in quality_sources[:budgets["sources"]]}
 
     selected_source_ids = set(selected_source_alert_ids)
     for fact in facts:
@@ -1286,7 +1319,7 @@ def _project_ai_context(full: dict[str, Any]) -> dict[str, Any]:
     projected = {
         "schema": full.get("schema"),
         "ledger_complete": False,
-        "projection": "deterministic_shortlist_v1",
+        "projection": f"deterministic_{profile}_v2",
         "legend": full.get("legend"),
         "semantics": full.get("semantics"),
         "report": full.get("report"),
@@ -1341,6 +1374,30 @@ def _extract_json_object(value: Any) -> dict[str, Any] | None:
     return None
 
 
+def _relationship_redundant_fact_ids(context: dict[str, Any], relationship_ids: list[str] | set[str]) -> set[str]:
+    """Facts already expressed by selected forecast/actual relationships."""
+    wanted = {str(item) for item in relationship_ids}
+    relationships = {
+        str(row.get("id")): row for row in context.get("relationships") or [] if row.get("id")
+    }
+    redundant: set[str] = set()
+    for rid in wanted:
+        relationship = relationships.get(rid) or {}
+        kind = relationship.get("kind")
+        forecast_id = relationship.get("forecast_source_id")
+        actual_id = relationship.get("actual_source_id")
+        if kind == "energy_forecast_vs_actual":
+            wanted_pairs = {(forecast_id, "integrated_energy_kwh"), (actual_id, "period_delta")}
+        elif kind == "power_forecast_vs_actual":
+            wanted_pairs = {(forecast_id, "mean"), (actual_id, "mean")}
+        else:
+            continue
+        for fact in context.get("facts") or []:
+            if fact.get("q") == "current" and (fact.get("s"), fact.get("k")) in wanted_pairs:
+                redundant.add(str(fact.get("i")))
+    return redundant
+
+
 def _validate_selection(data: Any, context: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     """Validate an id-only AI selection and inject mandatory quality facts."""
     parsed = _extract_json_object(data) or {}
@@ -1373,6 +1430,10 @@ def _validate_selection(data: Any, context: dict[str, Any]) -> tuple[dict[str, A
         str(item) for item in (policy.get("mandatory_attention") or [])
         if str(item) in attention_allowed
     ]
+    redundant_summary_facts = _relationship_redundant_fact_ids(
+        context, [item for item in mandatory_summary if item.startswith("R")]
+    )
+    model_summary = [item for item in model_summary if item not in redundant_summary_facts]
 
     summary: list[str] = []
     for item in mandatory_summary + model_summary:
@@ -1535,6 +1596,29 @@ def _fmt_number(value: Any, language: str = "fr", signed: bool = False) -> str:
     return text
 
 
+def _relationship_precision(gap: Any) -> int:
+    try:
+        value = float(gap)
+    except (TypeError, ValueError):
+        return 1
+    if abs(value - round(value)) < 1e-9:
+        return 0
+    if abs(value * 10 - round(value * 10)) < 1e-8:
+        return 1
+    return 2
+
+
+def _fmt_fixed(value: Any, decimals: int, language: str = "fr", signed: bool = False) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    text = f"{number:+.{decimals}f}" if signed else f"{number:.{decimals}f}"
+    if language == "fr":
+        text = text.replace(".", ",")
+    return text
+
+
 def _stat_label(metric: str | None, stat: str | None, language: str) -> str:
     fr = {
         "mean": "moyenne", "max": "maximum", "min": "minimum", "p95": "P95",
@@ -1651,12 +1735,13 @@ def _render_ledger_id(item_id: str, context: dict[str, Any], language: str, sect
         kind = row.get("kind")
         supported = bool(row.get("full_period_comparison_supported"))
         if kind == "energy_forecast_vs_actual":
-            forecast = _fmt_number(row.get("forecast_energy_kwh"), language)
-            actual = _fmt_number(row.get("actual_energy_kwh"), language)
+            precision = _relationship_precision(row.get("absolute_gap_kwh"))
+            forecast = _fmt_fixed(row.get("forecast_energy_kwh"), precision, language)
+            actual = _fmt_fixed(row.get("actual_energy_kwh"), precision, language)
             fcov = _fmt_number(row.get("forecast_coverage_pct"), language)
             acov = _fmt_number(row.get("actual_coverage_pct"), language)
             if supported:
-                gap = _fmt_number(row.get("absolute_gap_kwh"), language, signed=True)
+                gap = _fmt_fixed(row.get("absolute_gap_kwh"), precision, language, signed=True)
                 pct = _fmt_number(row.get("relative_gap_pct"), language, signed=True)
                 if language == "en":
                     return f"Actual period energy is {actual} kWh versus {forecast} kWh forecast; gap {gap} kWh ({pct} %)."
@@ -1665,10 +1750,11 @@ def _render_ledger_id(item_id: str, context: dict[str, Any], language: str, sect
                 return f"Forecast integrated energy is {forecast} kWh ({fcov}% coverage) and actual energy is {actual} kWh ({acov}% coverage); coverage is insufficient for a full-period gap."
             return f"L'énergie prévisionnelle intégrée est de {forecast} kWh (couverture {fcov} %) et l'énergie réelle de {actual} kWh (couverture {acov} %) ; la couverture est insuffisante pour calculer un écart de période complet."
         if kind == "power_forecast_vs_actual":
-            forecast = _fmt_number(row.get("forecast_mean_w"), language)
-            actual = _fmt_number(row.get("actual_mean_w"), language)
+            precision = _relationship_precision(row.get("mean_gap_w"))
+            forecast = _fmt_fixed(row.get("forecast_mean_w"), precision, language)
+            actual = _fmt_fixed(row.get("actual_mean_w"), precision, language)
             if supported:
-                gap = _fmt_number(row.get("mean_gap_w"), language, signed=True)
+                gap = _fmt_fixed(row.get("mean_gap_w"), precision, language, signed=True)
                 pct = _fmt_number(row.get("mean_gap_pct"), language, signed=True)
                 if language == "en":
                     return f"Mean measured power is {actual} W versus {forecast} W forecast; gap {gap} W ({pct} %)."
@@ -1910,24 +1996,77 @@ def _encoded_context(context: dict[str, Any]) -> str:
 def build_budgeted_ai_context(
     result: dict[str, Any],
     target_chars: int = AI_TARGET_CONTEXT_CHARS,
+    context_level: str = "optimized",
 ) -> tuple[str, dict[str, Any]]:
-    """Return RC6's deterministic shortlist while retaining the full ledger internally.
+    """Build the RC7 model context according to the configured context level.
 
-    The report data and complete fact ledger are preserved in HA Reporting. Only a
-    deterministic shortlist of representative/significant facts is sent to the
-    language model, which materially reduces local CPU inference time without
-    allowing the model to invent values or comparisons.
+    All modes keep the same deterministic fact ledger and ID-only output
+    contract. The setting only changes how much already-validated evidence the
+    LLM can see.
     """
+    requested = str(context_level or "optimized").strip().lower()
+    if requested not in {"optimized", "extended", "complete", "automatic"}:
+        requested = "optimized"
+
     legacy_json = _encoded_context(compact_report_context(result))
     full_context = _fact_ledger_context_v11(result)
     full_context_json = _encoded_context(full_context)
-    context = _project_ai_context(full_context)
-    context_json = _encoded_context(context)
-    stats = context.get("ledger_stats") or {}
+
+    effective = requested
+    clamped = False
+    if requested == "automatic":
+        if len(full_context_json) <= 45000:
+            effective = "complete"
+        elif len(full_context_json) <= 130000:
+            effective = "extended"
+        else:
+            effective = "optimized"
+
+    if effective == "complete":
+        context = full_context
+        context_json = full_context_json
+        if len(context_json) > AI_MAX_CONTEXT_CHARS:
+            # Safety first: the complete ledger must never trigger a provider
+            # context overflow. Fall back deterministically while reporting the
+            # effective mode in the PDF/UI metadata.
+            effective = "extended"
+            clamped = True
+            context = _project_ai_context(full_context, "extended")
+            context_json = _encoded_context(context)
+    elif effective == "extended":
+        context = _project_ai_context(full_context, "extended")
+        context_json = _encoded_context(context)
+        if len(context_json) > AI_MAX_CONTEXT_CHARS:
+            effective = "optimized"
+            clamped = True
+            context = _project_ai_context(full_context, "optimized")
+            context_json = _encoded_context(context)
+    else:
+        context = _project_ai_context(full_context, "optimized")
+        context_json = _encoded_context(context)
+
+    full_sources = len(full_context.get("sources") or [])
+    full_comparisons = len(full_context.get("comparison_sets") or [])
+    full_facts = len(full_context.get("facts") or [])
+    if effective == "complete":
+        shortlisted_sources = full_sources
+        shortlisted_comparisons = full_comparisons
+        shortlisted_facts = full_facts
+        mode = "complete_ledger"
+    else:
+        stats = context.get("ledger_stats") or {}
+        shortlisted_sources = stats.get("shortlisted_sources", 0)
+        shortlisted_comparisons = stats.get("shortlisted_comparison_sets", 0)
+        shortlisted_facts = stats.get("shortlisted_facts", 0)
+        mode = "deterministic_shortlist"
+
     metadata = {
         "schema": context.get("schema"),
-        "mode": "deterministic_shortlist",
-        "lossless": False,
+        "mode": mode,
+        "context_level_requested": requested,
+        "context_level_effective": effective,
+        "context_level_clamped": clamped,
+        "lossless": effective == "complete",
         "report_data_lossless": True,
         "characters": len(context_json),
         "target_characters": target_chars,
@@ -1939,12 +2078,12 @@ def build_budgeted_ai_context(
         "current_sources": (full_context.get("counts") or {}).get("current_sources", 0),
         "comparison_sources": (full_context.get("counts") or {}).get("comparison_sources", 0),
         "relationships": len(context.get("relationships") or []),
-        "full_sources": stats.get("full_sources", 0),
-        "shortlisted_sources": stats.get("shortlisted_sources", 0),
-        "full_comparison_sets": stats.get("full_comparison_sets", 0),
-        "shortlisted_comparison_sets": stats.get("shortlisted_comparison_sets", 0),
-        "full_facts": stats.get("full_facts", 0),
-        "shortlisted_facts": stats.get("shortlisted_facts", 0),
+        "full_sources": full_sources,
+        "shortlisted_sources": shortlisted_sources,
+        "full_comparison_sets": full_comparisons,
+        "shortlisted_comparison_sets": shortlisted_comparisons,
+        "full_facts": full_facts,
+        "shortlisted_facts": shortlisted_facts,
         "quality_signals": len(context.get("quality_signals") or []),
     }
     return context_json, metadata
@@ -2033,7 +2172,7 @@ def _instructions(context_json: str, language: str = "fr") -> str:
     if language == "en":
         return f"""You are selecting evidence for a home-automation report calculated by HA Reporting.
 Do not write the report and do not expose internal reasoning.
-The context uses `ha-reporting-ai-context-v12`, a deterministic shortlisted fact ledger.
+The context uses `ha-reporting-ai-context-v13`, a deterministic fact ledger projection.
 
 Your ONLY job is to select IDs already listed in `selection_policy`.
 Return exactly one JSON object and nothing else:
@@ -2049,14 +2188,14 @@ Rules:
 - If a relationship has `full_period_comparison_supported=false`, it may be selected as an attention/coverage limitation, but never as evidence of a period performance gap.
 - For N/N-x, prefer `comparable` facts for summary. Use `partial`, `limited`, `reconstructed` or sparse-zero items mainly as attention evidence.
 - Do not invent cross-source comparisons. Do not calculate anything.
-- This is a deterministic shortlist of the full HA Reporting ledger. Do not infer anything about omitted routine facts.
+- This is a deterministic projection of the HA Reporting ledger. Do not infer anything about facts not present in the supplied context.
 
 Validated HA Reporting context:
 {context_json}
 """
     return f"""Tu sélectionnes les éléments à mettre en avant dans un rapport domotique calculé par HA Reporting.
 N'écris pas le rapport et n'affiche aucun raisonnement interne.
-Le contexte utilise `ha-reporting-ai-context-v12`, un registre déterministe de faits présélectionnés.
+Le contexte utilise `ha-reporting-ai-context-v13`, une projection du registre déterministe de faits.
 
 Ta SEULE tâche est de sélectionner des identifiants déjà présents dans `selection_policy`.
 Retourne exactement un objet JSON et rien d'autre :
@@ -2072,7 +2211,7 @@ Règles :
 - Si une relation contient `full_period_comparison_supported=false`, elle peut être sélectionnée comme limite de couverture, mais jamais comme preuve d'un écart de performance sur toute la période.
 - Pour N/N-x, privilégie les faits `comparable` dans la synthèse. Utilise surtout les éléments `partial`, `limited`, `reconstructed` ou sparse-zero dans les points d'attention.
 - N'invente aucune comparaison entre sources. Ne calcule rien.
-- Ce contexte est une présélection déterministe du registre complet HA Reporting. N'infère rien à propos des faits routiniers non transmis au modèle.
+- Ce contexte est une projection déterministe du registre HA Reporting. N'infère rien à propos des faits absents du contexte transmis.
 
 Contexte validé par HA Reporting :
 {context_json}
@@ -2105,6 +2244,7 @@ def analyze_report_with_ai(
         "mode": "no_thinking_expected",
         "mode_control": "ai_task_entity_configuration",
         "timeout_seconds": timeout_seconds,
+        "context_level": str(config.get("context_level") or "optimized"),
         "transport": "home_assistant_websocket",
         "websocket_url": HA_AI_TASK_WS_URL,
         "heartbeat_interval_seconds": AI_WS_HEARTBEAT_SECONDS,
@@ -2120,7 +2260,7 @@ def analyze_report_with_ai(
 
     ws = None
     try:
-        context_json, context_meta = build_budgeted_ai_context(result)
+        context_json, context_meta = build_budgeted_ai_context(result, context_level=config.get("context_level", "optimized"))
         context = json.loads(context_json)
         if len(context_json) > AI_MAX_CONTEXT_CHARS:
             if language == "en":
@@ -2233,6 +2373,9 @@ def analyze_report_with_ai(
                 "context_legacy_characters": context_meta["legacy_characters"],
                 "context_full_compact_characters": context_meta["full_compact_characters"],
                 "context_mode": context_meta["mode"],
+                "context_level_requested": context_meta["context_level_requested"],
+                "context_level_effective": context_meta["context_level_effective"],
+                "context_level_clamped": context_meta["context_level_clamped"],
                 "context_schema": context_meta["schema"],
                 "context_lossless": context_meta["lossless"],
                 "report_data_lossless": context_meta["report_data_lossless"],
@@ -2246,7 +2389,7 @@ def analyze_report_with_ai(
                 "context_current_sources": context_meta["current_sources"],
                 "context_comparison_sources": context_meta["comparison_sources"],
                 "context_relationships": context_meta["relationships"],
-                "selection_protocol": "id_only_v3_relationship_priority",
+                "selection_protocol": "id_only_v4_context_levels",
                 "omitted_current_sources": context_meta["omitted_current_sources"],
                 "omitted_comparison_sources": context_meta["omitted_comparison_sources"],
                 "sources": (result.get("summary") or {}).get("sources_total", 0),

@@ -4,6 +4,7 @@ import json
 import threading
 import time
 import math
+import tempfile
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -36,6 +37,7 @@ from exporters.paperless import PaperlessExportProvider
 import exporters.config as export_config
 import document_store
 import automation_store
+import settings_store
 from rendering.pdf_report import render_pdf_native
 import main
 
@@ -476,7 +478,7 @@ class Beta26ComparisonQualityTests(unittest.TestCase):
 
     def test_rc4_prompt_uses_selection_only_contract(self):
         prompt=_instructions('{}')
-        self.assertIn('ha-reporting-ai-context-v12',prompt)
+        self.assertIn('ha-reporting-ai-context-v13',prompt)
         self.assertIn('`attention`',prompt)
         self.assertIn('recommendation_actions',prompt)
         self.assertIn('Ne calcule rien',prompt)
@@ -623,7 +625,7 @@ class AiAnalysisTests(unittest.TestCase):
 
     def test_ai_prompt_requires_id_only_selection_protocol(self):
         prompt=_instructions('{}')
-        self.assertIn('ha-reporting-ai-context-v12',prompt)
+        self.assertIn('ha-reporting-ai-context-v13',prompt)
         self.assertIn('selection_policy',prompt)
         self.assertIn('Retourne uniquement des IDs',prompt)
         self.assertIn("N'invente aucune comparaison entre sources",prompt)
@@ -674,7 +676,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertEqual(meta['omitted_comparison_sources'],0)
         self.assertEqual(context['counts']['current_sources'],421)
         self.assertEqual(context['counts']['comparison_sources'],420)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v12')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v13')
         self.assertLess(meta['shortlisted_facts'],meta['full_facts'])
         self.assertLess(meta['shortlisted_sources'],meta['full_sources'])
         encoded=json.dumps(context,ensure_ascii=False)
@@ -691,7 +693,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertEqual(meta['omitted_current_sources'],0)
         self.assertEqual(meta['omitted_comparison_sources'],0)
         self.assertEqual(context['counts']['current_sources'],1)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v12')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v13')
         self.assertNotIn('preview',context_json)
 
     def test_beta24_context_uses_named_semantics_and_integrated_energy(self):
@@ -708,7 +710,7 @@ class AiAnalysisTests(unittest.TestCase):
         sample['catalogs'][0]['devices'][0]['sources'].append(energy)
         context=_fact_ledger_context_v11(sample)
         meta={"omitted_current_sources":0}
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v12')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v13')
         power=next(src for src in context['sources'] if src.get('sk')=='frigo_power')
         pfacts={f['k']:f['v'] for f in context['facts'] if f.get('s')==power['i'] and f.get('q')=='current'}
         self.assertEqual(pfacts['max'],120)
@@ -751,7 +753,7 @@ class AiAnalysisTests(unittest.TestCase):
         sample['summary']={'sources_total':3,'sources_ok':3}
         context_json,meta=build_budgeted_ai_context(sample)
         context=json.loads(context_json)
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v12')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v13')
         self.assertEqual(meta['relationships'],2)
         energy=next(item for item in context['relationships'] if item['kind']=='energy_forecast_vs_actual')
         self.assertAlmostEqual(energy['forecast_energy_kwh'],6.89)
@@ -887,7 +889,7 @@ class AiAnalysisTests(unittest.TestCase):
         self.assertTrue(call['return_response'])
         self.assertEqual(call['service_data']['entity_id'],'ai_task.local')
         self.assertIn("n'affiche aucun raisonnement interne",call['service_data']['instructions'])
-        self.assertIn('ha-reporting-ai-context-v12',call['service_data']['instructions'])
+        self.assertIn('ha-reporting-ai-context-v13',call['service_data']['instructions'])
         self.assertEqual(result['input']['context_mode'],'deterministic_shortlist')
         self.assertTrue(result['input']['report_data_lossless'])
         self.assertLessEqual(result['input']['context_characters'],AI_TARGET_CONTEXT_CHARS)
@@ -1145,7 +1147,7 @@ class Beta12ExportProviderTests(unittest.TestCase):
         self.assertTrue(status['reachable'])
         self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
         self.assertEqual(seen['auth'],'Token secret')
-        self.assertIn('0.2.0-rc.6',seen['ua'])
+        self.assertIn('0.2.0-rc.7',seen['ua'])
 
     def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
         import tempfile
@@ -1524,7 +1526,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.2.0-rc.6')
+        self.assertEqual(config['version'],'0.2.0-rc.7')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(config['ingress'])
         self.assertTrue(config['hassio_api'])
@@ -1650,7 +1652,7 @@ class Rc4FactLedgerTests(unittest.TestCase):
         base=self.source('dryer_power',coverage=97.6,density=99.3,max={'value':658},p95=546,mean=20.5)
         ref=self.source('dryer_power',coverage=100,density=99.3,max={'value':749},p95=540,mean=17.5)
         context=self.context_for([ComparisonEngine()._compare_source(base,ref)])
-        self.assertEqual(context['schema'],'ha-reporting-ai-context-v12')
+        self.assertEqual(context['schema'],'ha-reporting-ai-context-v13')
         comp=context['comparison_sets'][0]
         src=next(item for item in context['sources'] if item['i']==comp['s'])
         self.assertEqual(src.get('sk'),'dryer_power')
@@ -2086,3 +2088,119 @@ class Rc6RelationshipPriorityTests(unittest.TestCase):
         self.assertEqual(len(bullets),1)
         self.assertIn('réévaluer',bullets[0])
         self.assertIn('resets',bullets[0])
+
+
+class Rc7ContextLevelTests(unittest.TestCase):
+    @staticmethod
+    def source(index, metric='power', unit='W', mean=None, delta=None, coverage=100.0):
+        stats={'mean':float(mean if mean is not None else index + 1),'max':{'value':100+index},'p95':50+index}
+        if metric=='energy_total':
+            stats={'delta':float(delta if delta is not None else index + 1),'last':{'value':1000+index}}
+        return {
+            'status':'ok','sensor_key':f'source_{index}','entity_id':f'sensor.source_{index}',
+            'metric':metric,'unit':unit,
+            'analysis':{
+                'quality':{'period_coverage_percent':coverage,'sample_density_percent':100.0,'density_applicable':metric=='power'},
+                'statistics':stats,'validation':{'warnings':[]},
+            },
+        }
+
+    def result(self, count=120):
+        devices=[]
+        for index in range(count):
+            devices.append({'device':{'name':f'Device {index}','category':'test'},'sources':[self.source(index)]})
+        return {
+            'report':{'name':'Context test','language':'fr'},
+            'resolved_period':{'label':'N','timezone':'Europe/Zurich'},
+            'summary':{'sources_total':count,'sources_ok':count,'sources_no_data':0,'sources_error':0,'sources_invalid':0},
+            'catalogs':[{'name':'Home','devices':devices}],
+            'comparisons':{'targets':[]},
+        }
+
+    def test_context_levels_expand_without_changing_deterministic_contract(self):
+        result=self.result()
+        optimized_json, optimized=build_budgeted_ai_context(result, context_level='optimized')
+        extended_json, extended=build_budgeted_ai_context(result, context_level='extended')
+        complete_json, complete=build_budgeted_ai_context(result, context_level='complete')
+        self.assertEqual(optimized['context_level_effective'],'optimized')
+        self.assertEqual(extended['context_level_effective'],'extended')
+        self.assertGreater(extended['shortlisted_facts'],optimized['shortlisted_facts'])
+        self.assertEqual(complete['context_level_effective'],'complete')
+        self.assertEqual(complete['full_facts'],complete['shortlisted_facts'])
+        self.assertGreater(len(complete_json),len(extended_json))
+        for raw in (optimized_json,extended_json,complete_json):
+            context=json.loads(raw)
+            self.assertEqual(context['schema'],'ha-reporting-ai-context-v13')
+            self.assertEqual(context['selection_policy']['protocol'],'id_only_v4_context_levels')
+
+    def test_automatic_uses_complete_for_small_and_optimized_for_large(self):
+        _,small=build_budgeted_ai_context(self.result(1),context_level='automatic')
+        _,large=build_budgeted_ai_context(self.result(500),context_level='automatic')
+        self.assertEqual(small['context_level_requested'],'automatic')
+        self.assertEqual(small['context_level_effective'],'complete')
+        self.assertIn(large['context_level_effective'],{'optimized','extended'})
+        self.assertNotEqual(large['context_level_effective'],'complete')
+
+    def test_settings_store_persists_ai_context_level(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'settings.yaml'
+            self.assertEqual(settings_store.load_settings(path)['ai']['context_level'],'optimized')
+            saved=settings_store.save_ai_settings({'context_level':'extended'},path)
+            self.assertEqual(saved['ai']['context_level'],'extended')
+            self.assertEqual(settings_store.load_settings(path)['ai']['context_level'],'extended')
+            with self.assertRaises(ValueError):
+                settings_store.save_ai_settings({'context_level':'turbo'},path)
+
+    def test_relationship_selection_suppresses_redundant_component_facts(self):
+        helper=Rc6RelationshipPriorityTests()
+        context=helper.context()
+        energy=next(r for r in context['relationships'] if r['kind']=='energy_forecast_vs_actual')
+        power=next(r for r in context['relationships'] if r['kind']=='power_forecast_vs_actual')
+        redundant=[
+            f['i'] for f in context['facts']
+            if f.get('q')=='current' and f.get('k') in {'integrated_energy_kwh','period_delta','mean'}
+        ]
+        selection,valid=_validate_selection({
+            'summary':[energy['id'],power['id'],*redundant],
+            'attention':[],'recommendations':[]
+        },context)
+        self.assertTrue(valid)
+        self.assertEqual(selection['summary'][:2],[energy['id'],power['id']])
+        self.assertFalse(any(item in redundant for item in selection['summary'][2:]))
+        text=_render_selection_analysis(context,selection,'fr')
+        self.assertEqual(text.count('Prévision EMHASS'),0)
+        self.assertEqual(text.count('Puissance électrique totale'),0)
+
+    def test_relationship_renderer_keeps_precision_coherent(self):
+        context=Rc6RelationshipPriorityTests().context()
+        energy=next(r for r in context['relationships'] if r['kind']=='energy_forecast_vs_actual')
+        energy.update({'forecast_energy_kwh':235.6,'actual_energy_kwh':217.4,'absolute_gap_kwh':-18.2,'relative_gap_pct':-7.73})
+        power=next(r for r in context['relationships'] if r['kind']=='power_forecast_vs_actual')
+        power.update({'forecast_mean_w':326.8,'actual_mean_w':301.0,'mean_gap_w':-25.8,'mean_gap_pct':-7.88})
+        text=_render_selection_analysis(context,{'summary':[energy['id'],power['id']],'attention':[],'recommendations':[]},'fr')
+        self.assertIn('217,4 kWh contre 235,6 kWh',text)
+        self.assertIn('301,0 W contre 326,8 W',text)
+
+    def test_no_representative_annual_prioritizes_total_energy_fact(self):
+        total_energy=self.source(999,metric='energy_total',unit='kWh',delta=2107,coverage=100)
+        total_energy['sensor_key']='introduction_electrique_appartement_couloir_total_active_energy'
+        total_energy['entity_id']='sensor.introduction_electrique_appartement_couloir_total_active_energy'
+        result={
+            'report':{'name':'Annual','language':'fr'},'resolved_period':{'label':'2026','timezone':'Europe/Zurich'},
+            'summary':{'sources_total':2,'sources_ok':2,'sources_no_data':0,'sources_error':0,'sources_invalid':0},
+            'catalogs':[{'name':'EMHASS','devices':[{'device':{'name':'EMHASS'},'sources':[total_energy,self.source(1)]}]}],
+            'comparisons':{'targets':[{
+                'label':'N-1 période','resolved_period':{'label':'2025'},
+                'summary':{'sources_total':2,'sources_comparable':0,'sources_partial':0,'sources_limited':1,'sources_reconstructed':0,'sources_unavailable':1},
+                'catalogs':[],
+            }]},
+        }
+        context=json.loads(build_budgeted_ai_context(result)[0])
+        mandatory=context['selection_policy']['mandatory_summary']
+        total_fact=next(f for f in context['facts'] if f.get('k')=='period_delta')
+        quality=next(q for q in context['quality_signals'] if q.get('k')=='comparison_quality')
+        self.assertEqual(mandatory[0],total_fact['i'])
+        self.assertIn(quality['i'],mandatory)
+        text=_render_selection_analysis(context,_fallback_selection(context),'fr')
+        self.assertIn("2107 kWh",text)
+        self.assertIn("aucune comparaison N/N-x représentative",text)

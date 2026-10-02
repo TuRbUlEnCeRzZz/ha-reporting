@@ -18,7 +18,7 @@
   </button>
   <div>
     <h1>HA Reporting</h1>
-    <div class="subtitle">0.2.0-rc.6</div>
+    <div class="subtitle">0.2.0-rc.7</div>
   </div>
 </header>
 
@@ -473,6 +473,35 @@
           </label>
         </div>
         <p class="muted">The interface language is detected from Home Assistant on first launch and then stored locally. Each report can use its own language.</p>
+      </div>
+
+      <div class="providerCard">
+        <div class="providerHeading">
+          <div>
+            <h3>Intelligence artificielle</h3>
+            <p class="muted">Configure la quantité de faits déterministes transmise au modèle. Les calculs, unités et relations restent toujours contrôlés par HA Reporting.</p>
+          </div>
+          <span id="aiContextBadge" class="providerBadge">Optimisé</span>
+        </div>
+        <div class="grid two">
+          <label>Niveau de contexte IA
+            <select id="aiContextLevel">
+              <option value="optimized">Optimisé · rapide</option>
+              <option value="extended">Étendu · analyse plus riche</option>
+              <option value="complete">Complet · ledger intégral si possible</option>
+              <option value="automatic">Automatique · selon la complexité du rapport</option>
+            </select>
+          </label>
+          <div class="capabilityBox">
+            <span class="muted">Garde-fous déterministes</span>
+            <div class="fieldHelp">Toujours actifs : fact ledger, unités, comparaisons autorisées et rendu chiffré contrôlé.</div>
+          </div>
+        </div>
+        <p id="aiContextHelp" class="muted">Optimisé est recommandé pour les petits modèles locaux et l'inférence CPU.</p>
+        <div class="actions">
+          <button class="primary" id="aiContextSaveButton">Enregistrer</button>
+          <span id="aiContextStatusText" class="statusText"></span>
+        </div>
       </div>
 
       <div class="settingsSection">

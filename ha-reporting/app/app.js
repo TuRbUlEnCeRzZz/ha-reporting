@@ -174,7 +174,7 @@ async function showProviders(push=true){
   setPage("providersPage", {}, push);
   await loadCatalogs();
   populateSeriesCatalogs();
-  await loadProviders();
+  await Promise.all([loadProviders(), loadAiSettings()]);
 }
 
 function renderCapabilities(capabilities){
@@ -429,6 +429,59 @@ async function loadProviders(){
   if(!vm) return;
   $("vmUrl").value = vm.url || "";
   renderProviderStatus(vm.status);
+}
+
+function aiContextLevelLabel(level){
+  const labels={
+    optimized:typeof hrT==="function"?hrT("settings.ai_context_optimized"):"Optimisé",
+    extended:typeof hrT==="function"?hrT("settings.ai_context_extended"):"Étendu",
+    complete:typeof hrT==="function"?hrT("settings.ai_context_complete"):"Complet",
+    automatic:typeof hrT==="function"?hrT("settings.ai_context_automatic"):"Automatique"
+  };
+  return labels[level]||labels.optimized;
+}
+
+function updateAiContextSettingsUi(level){
+  level=level||"optimized";
+  if($("aiContextLevel")) $("aiContextLevel").value=level;
+  if($("aiContextBadge")){
+    $("aiContextBadge").textContent=aiContextLevelLabel(level);
+    $("aiContextBadge").className="providerBadge ok";
+  }
+  const help={
+    optimized:typeof hrT==="function"?hrT("settings.ai_context_optimized_help"):"Optimisé est recommandé pour les petits modèles locaux et l'inférence CPU.",
+    extended:typeof hrT==="function"?hrT("settings.ai_context_extended_help"):"Étendu transmet davantage de faits à un modèle plus puissant.",
+    complete:typeof hrT==="function"?hrT("settings.ai_context_complete_help"):"Complet transmet le ledger intégral lorsque sa taille respecte la limite de sécurité.",
+    automatic:typeof hrT==="function"?hrT("settings.ai_context_automatic_help"):"Automatique choisit Complet, Étendu ou Optimisé selon la taille du rapport."
+  };
+  if($("aiContextHelp")) $("aiContextHelp").textContent=help[level]||help.optimized;
+}
+
+async function loadAiSettings(){
+  const response=await fetch("api/settings");
+  const data=await response.json();
+  const level=((data.ai||{}).context_level)||"optimized";
+  updateAiContextSettingsUi(level);
+}
+
+async function saveAiContextSettings(){
+  const status=$("aiContextStatusText");
+  status.textContent=typeof hrT==="function"?hrT("settings.ai_context_saving"):"Enregistrement…";
+  status.classList.remove("error");
+  const response=await fetch("api/settings/ai",{
+    method:"PATCH",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({context_level:$("aiContextLevel").value})
+  });
+  const data=await response.json();
+  if(!response.ok){
+    status.textContent=(typeof hrT==="function"?hrT("settings.ai_context_save_error"):"Erreur d'enregistrement : ")+(data.error||"");
+    status.classList.add("error");
+    return;
+  }
+  const level=((data.ai||{}).context_level)||"optimized";
+  updateAiContextSettingsUi(level);
+  status.textContent=typeof hrT==="function"?hrT("settings.ai_context_saved"):"✓ Niveau de contexte IA enregistré";
 }
 
 function vmMaintenanceStatusLabel(status){
@@ -1133,6 +1186,20 @@ function formatAiContextInfo(ai){
   const t = (id, fallback) => (typeof window !== "undefined" && window.hrT) ? window.hrT(id) : fallback;
   const k = value => `${(Number(value || 0) / 1000).toFixed(1)} k`;
   let text = `${t("report.ai_context", "Contexte IA")} : ${k(chars)} / ${k(limit)} ${t("report.ai_context_characters", "caractères")}`;
+  const requestedLevel=input.context_level_requested||"";
+  const effectiveLevel=input.context_level_effective||requestedLevel;
+  if(requestedLevel){
+    const levelNames={
+      optimized:t("settings.ai_context_optimized","Optimisé"),
+      extended:t("settings.ai_context_extended","Étendu"),
+      complete:t("settings.ai_context_complete","Complet"),
+      automatic:t("settings.ai_context_automatic","Automatique")
+    };
+    text += ` · ${t("report.ai_context_level","Mode")} : ${levelNames[requestedLevel]||requestedLevel}`;
+    if(effectiveLevel && effectiveLevel!==requestedLevel){
+      text += ` → ${levelNames[effectiveLevel]||effectiveLevel}`;
+    }
+  }
   if(input.context_mode === "deterministic_shortlist"){
     const fullFacts = Number(input.context_full_facts || 0);
     const shortlistFacts = Number(input.context_shortlisted_facts || 0);
@@ -2156,6 +2223,9 @@ $("vmSaveButton").addEventListener("click", async () => {
     $("vmStatusText").classList.add("error");
   }
 });
+if($("aiContextLevel")) $("aiContextLevel").addEventListener("change", event => updateAiContextSettingsUi(event.target.value));
+if($("aiContextSaveButton")) $("aiContextSaveButton").addEventListener("click", saveAiContextSettings);
+
 window.addEventListener("popstate", async event => {
   const state = event.state;
   if(!state?.haReporting) return;

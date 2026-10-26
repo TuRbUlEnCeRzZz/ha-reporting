@@ -1,5 +1,13 @@
 # HA Reporting technical documentation
 
+## 0.2.1 — Companion removal and Supervisor mapping modernization
+
+HA Reporting 0.2.1 is distributed **only** as a Home Assistant OS application managed by Supervisor. The optional custom integration previously located at `custom_components/ha_reporting/` is no longer included. The app's own scheduler, reporting services, AI Tasks, exports and notification features are unchanged.
+
+The Supervisor `config.yaml` now maps `app_config` (instead of the legacy alias `addon_config`) to `/config` in the running app, with read/write access. The app slug `ha_reporting` and repository are unchanged; the existing public application configuration folder remains under `app_configs/<repository_id>_ha_reporting`. This migration does not move or delete files within `/config`.
+
+If an earlier companion is installed in Home Assistant Core, its removal must be done separately. Remove the existing integration config entry, uninstall the HACS installation or delete its `custom_components/ha_reporting` files, and restart Core. Native `ha_reporting.run_report` actions cease to exist; built-in schedules and reports are not dependent on this action.
+
 ## 0.2.0 — Stable release
 
 0.2.0 is promoted directly from RC8 without functional changes. It keeps the RC7 configurable context levels and deterministic ID-only contract together with the final RC8 stabilization layers described below.
@@ -214,7 +222,7 @@ For power, an all-near-zero signal with sampling density below 10% is marked `sp
 
 ### Home Assistant Ingress PDF downloads
 
-The backend download route and UTF-8 `Content-Disposition` handling are unchanged. The frontend no longer calls `window.open(..., "_blank")` for local documents because a new browser tab—especially from the Companion app or Nabu Casa—may not retain the Ingress authentication context. The Documents page now performs a same-origin authenticated `fetch()`, converts the response to a Blob, and triggers a local download without navigating away from HA Reporting.
+The backend download route and UTF-8 `Content-Disposition` handling are unchanged. The frontend no longer calls `window.open(..., "_blank")` for local documents because a new browser tab—especially from the Home Assistant mobile app or Nabu Casa—may not retain the Ingress authentication context. The Documents page now performs a same-origin authenticated `fetch()`, converts the response to a Blob, and triggers a local download without navigating away from HA Reporting.
 
 ---
 
@@ -443,7 +451,7 @@ retourne les jobs récents. Une demande strictement identique à un job encore a
 
 L’échec d’une destination d’export ne détruit jamais le PDF local : le job termine en `completed_with_errors`. Les erreurs de calcul ou de génération PDF restent fatales et placent le job en `error`.
 
-Cette API constitue le contrat prévu pour l’intégration Home Assistant compagnon qui exposera plus tard une action native `ha_reporting.run_report`.
+Cette API REST reste disponible pour les clients autorisés. La version 0.2.1 ne fournit plus d’intégration compagnon Home Assistant Core ni d’action native `ha_reporting.run_report` ; les automatisations internes de HA Reporting demeurent disponibles.
 
 ## Rapport HTML et PDF natif
 

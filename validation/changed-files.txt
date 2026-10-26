@@ -1,12 +1,20 @@
-ha-reporting/README.md
-ha-reporting/config.yaml
-ha-reporting/run.sh
-ha-reporting/app/main.py
-ha-reporting/app/index.html
-ha-reporting/app/automation_store.py
-ha-reporting/app/style.css
-ha-reporting/app/app.js
+COMPANION-INTEGRATION.md [deleted]
+custom_components/ha_reporting/ [deleted, including translations]
+CONTRIBUTING.md
+README.md
+RELEASE-NOTES-0.2.1.md
+VALIDATION-0.2.1.md
 ha-reporting/CHANGELOG.md
 ha-reporting/DOCS.md
-README.md
+ha-reporting/README.md
+ha-reporting/RELEASE-NOTES-0.2.1.md
+ha-reporting/VALIDATION-0.2.1.md
+ha-reporting/config.yaml
+ha-reporting/run.sh
+ha-reporting/app/i18n.js
+ha-reporting/app/exporters/paperless.py
+ha-reporting/app/providers/victoriametrics.py
 tests/test_regressions.py
+tests/test_product_polish.py
+tests/test_product_ui.cjs
+validation/manifest-sha256.json

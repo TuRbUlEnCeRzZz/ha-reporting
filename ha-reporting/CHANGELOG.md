@@ -1,3 +1,10 @@
+## 0.2.1
+
+- remove the optional HACS/Home Assistant Core companion integration and its installation guide;
+- replace Supervisor `addon_config` mapping with `app_config`, retaining writable `/config` and the existing app slug;
+- update version metadata, runtime User-Agent strings, README/technical documentation and automated test assertions;
+- preserve the reporting engine, VictoriaMetrics backend, AI analysis, Ingress, PDFs, Paperless exports, built-in automations and notifications unchanged.
+
 ## 0.2.0
 
 - first stable HA Reporting release;

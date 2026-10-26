@@ -45,7 +45,7 @@ class VictoriaMetricsProvider(DataProvider):
             url,
             headers={
                 "Accept": "application/json",
-                "User-Agent": "HA-Reporting/0.2.0",
+                "User-Agent": "HA-Reporting/0.2.1",
             },
         )
 
@@ -528,7 +528,7 @@ class VictoriaMetricsProvider(DataProvider):
         }
         request = urllib.request.Request(
             f"{self.base_url}/api/v1/export?{urllib.parse.urlencode(params, doseq=True)}",
-            headers={"Accept": "application/stream+json", "User-Agent": "HA-Reporting/0.2.0"},
+            headers={"Accept": "application/stream+json", "User-Agent": "HA-Reporting/0.2.1"},
         )
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:

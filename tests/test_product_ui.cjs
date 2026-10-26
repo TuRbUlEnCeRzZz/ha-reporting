@@ -1,13 +1,16 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
 const source=fs.readFileSync(path.join(__dirname,'../ha-reporting/app/app.js'),'utf8');
 const elements=new Map();
-function element(id){if(!elements.has(id))elements.set(id,{textContent:'',innerHTML:'',className:'',classList:{contains:()=>false,add(){}},contains:()=>false,querySelectorAll:()=>[]});return elements.get(id);}
+function element(id){if(!elements.has(id))elements.set(id,{textContent:'',innerHTML:'',className:'',dataset:{},classList:{contains:()=>false,add(){}},contains:()=>false,querySelectorAll:()=>[]});return elements.get(id);}
 let timer=null, timerDelay=null;
 const sandbox={document:{hidden:false,activeElement:null},$:element,Date,AbortSignal,Set,clearTimeout(){timer=null;},setTimeout(fn,ms){timer=fn;timerDelay=ms;return 1;},scheduledAutomations:[],reports:[],launchingAutomations:new Set(),automationLaunchErrors:new Map(),toastTimer:null,automationPollTimer:null,automationLoadPromise:null,visibleAutomationHistory:null,fetch:async()=>({ok:true,json:async()=>({automations:[]})})};
 vm.createContext(sandbox);
 for(const name of ['esc','formatAutomationDuration','automationStatusLabel','automationStatusClass','automationScheduleLabel','automationAiLabel','formatAutomationDate','automationTriggerLabel','automationIsActive','renderPipelineProgress','showToast','loadScheduledAutomations','runScheduledAutomationNow','scheduleAutomationRefresh','renderScheduledAutomations']){
  const match=source.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^}`,'m'));assert.ok(match,name);vm.runInContext(match[0],sandbox);
 }
+// Keep this legacy unit test focused on scheduling and launch behavior; rendering
+// itself is covered in tests/test_ui.cjs and now uses additional list-state helpers.
+sandbox.renderScheduledAutomations = () => {};
 let checks=0;async function check(fn){await fn();checks++;}
 (async()=>{
  await check(()=>assert.equal(sandbox.formatAutomationDuration(null),'—'));

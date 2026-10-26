@@ -22,7 +22,8 @@ Before preparing a release, run:
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py'
 node tests/test_ui.cjs
-python3 -m compileall -q ha-reporting/app custom_components/ha_reporting
+node tests/test_product_ui.cjs
+python3 -m compileall -q ha-reporting/app
 node --check ha-reporting/app/app.js
 node --check ha-reporting/app/i18n.js
 ```

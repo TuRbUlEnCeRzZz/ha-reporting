@@ -1,4 +1,4 @@
-/* HA Reporting i18n foundation (0.2.0).
+/* HA Reporting i18n foundation (0.2.1).
  *
  * The legacy beta.20 UI still contains French source strings in a number of
  * rendering functions.  beta.21 centralizes translations here and translates

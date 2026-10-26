@@ -1147,7 +1147,7 @@ class Beta12ExportProviderTests(unittest.TestCase):
         self.assertTrue(status['reachable'])
         self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
         self.assertEqual(seen['auth'],'Token secret')
-        self.assertIn('0.2.0',seen['ua'])
+        self.assertIn('0.2.1',seen['ua'])
 
     def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
         import tempfile
@@ -1526,8 +1526,10 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.2.0')
+        self.assertEqual(config['version'],'0.2.1')
         self.assertIn('aarch64',config['arch'])
+        self.assertTrue(any(m.get('type')=='app_config' and m.get('path')=='/config' and m.get('read_only') is False for m in config['map']))
+        self.assertFalse((ROOT/'custom_components').exists())
         self.assertTrue(config['ingress'])
         self.assertTrue(config['hassio_api'])
         self.assertEqual(config['hassio_role'],'default')

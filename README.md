@@ -2,7 +2,7 @@
 
 ![HA Reporting](ha-reporting/logo.png)
 
-**Current stable version: 0.2.0**
+**Current stable version: 0.2.1**
 
 HA Reporting is a reporting engine for **Home Assistant OS**. It turns Home Assistant sensor history stored in VictoriaMetrics into structured reports, period comparisons, optional AI commentary and locally generated PDF documents.
 
@@ -99,7 +99,20 @@ Beta.21 introduces the first HA Reporting internationalization layer.
 
 From beta.21 onward, new and modified maintainer-facing repository content is written in **English**. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## What is new in 0.2.0
+## What is new in 0.2.1
+
+`0.2.1` is a packaging and compatibility update to the Home Assistant OS **app**. The optional Home Assistant Core companion integration has been removed from this repository: HA Reporting is no longer distributed as a HACS/Marketplace integration. Scheduled report generation, manual runs, AI Tasks, VictoriaMetrics, PDF/Paperless export and Home Assistant notifications still run inside the app.
+
+- Removes the `custom_components/ha_reporting/` companion integration and its installation guide; no companion code is shipped.
+- Moves the Supervisor mount mapping from the deprecated `addon_config` name to `app_config` without changing the `/config` mount target. Back up application data before upgrading and verify documents and catalogues after restarting.
+- Updates app version metadata, runtime banner, outgoing User-Agent headers, regression expectations and documentation.
+- Keeps the app slug `ha_reporting`, Supervisor repository details and Ingress behavior unchanged to preserve an in-place upgrade path.
+
+**If the companion integration is already installed locally** (by HACS or manual copying), remove it separately from Home Assistant's **Devices & services** and from HACS/Marketplace or `/config/custom_components/ha_reporting`, then restart Home Assistant Core. Deleting it from this source archive alone does not remove an existing installation. The `ha_reporting.run_report` native HA service becomes unavailable; any HA automation calling it must be migrated. Automations configured directly inside HA Reporting are unaffected.
+
+See [RELEASE-NOTES-0.2.1.md](RELEASE-NOTES-0.2.1.md) and [VALIDATION-0.2.1.md](VALIDATION-0.2.1.md).
+
+## Previous 0.2.0 stable release
 
 `0.2.0` is the first stable HA Reporting release. It is promoted directly from `0.2.0-rc.8` **without functional changes**, after the final RC8 validation run confirmed the conservative Automatic AI-context policy and recommendation evidence guard on a full monthly N/N-1 report.
 
@@ -295,7 +308,7 @@ Retries apply to global job failures. A completed run with warnings, such as a f
 
 Automation definitions and execution history are stored in `/config/automations.json`. Up to 50 execution records are retained per automation. This history limit is **not** a PDF retention policy, so monitor the storage used by `/config/documents`.
 
-The optional companion integration remains available under `custom_components/ha_reporting/` for advanced Home Assistant-side workflows using HA Reporting services. Internal scheduling does not require it.
+HA Reporting operates as a standalone Home Assistant OS app. It does **not** require a HACS/Marketplace integration or the former companion component; internal scheduling and Home Assistant notifications are built in.
 
 ## Security and privacy
 
@@ -313,7 +326,7 @@ HA Reporting is experimental. Report accuracy depends on the quality and retenti
 
 Large reports and local AI inference can be slow on a Raspberry Pi 4. Supervisor builds also depend on upstream packages and system libraries.
 
-0.2.0 has automated Python and JavaScript regression coverage, but automated desktop tests do not prove that every Home Assistant OS, ARM build, AI provider, VictoriaMetrics dataset or Paperless installation behaves identically. After upgrading, run at least one end-to-end report on the actual Home Assistant OS host before relying on scheduled delivery.
+0.2.1 has automated Python and JavaScript regression coverage, but automated desktop tests do not prove that every Home Assistant OS, ARM build, AI provider, VictoriaMetrics dataset or Paperless installation behaves identically. After upgrading, run at least one end-to-end report on the actual Home Assistant OS host before relying on scheduled delivery.
 
 See [VALIDATION-0.2.0.md](VALIDATION-0.2.0.md) for the stable-release validation notes and [ha-reporting/DOCS.md](ha-reporting/DOCS.md) for technical details.
 
@@ -328,8 +341,6 @@ ha-reporting/
 │   ├── Dockerfile
 │   ├── DOCS.md                    # Technical documentation
 │   └── CHANGELOG.md
-├── custom_components/
-│   └── ha_reporting/              # Optional Home Assistant companion integration
 ├── tests/                         # Regression tests
 ├── CONTRIBUTING.md                # Development and language policy
 └── repository.yaml                # Home Assistant add-on repository metadata
@@ -344,7 +355,8 @@ Before preparing a release, run:
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py'
 node tests/test_ui.cjs
-python3 -m compileall -q ha-reporting/app custom_components/ha_reporting
+node tests/test_product_ui.cjs
+python3 -m compileall -q ha-reporting/app
 node --check ha-reporting/app/app.js
 node --check ha-reporting/app/i18n.js
 ```
@@ -360,7 +372,7 @@ Possible future directions include:
 - additional export and notification destinations;
 - continued PDF/layout improvements and reporting diagnostics;
 - further validation with larger installations and longer histories;
-- optional presets for common reporting use cases. EMHASS data can already be reported through normal sensors, but there is no dedicated EMHASS integration in 0.2.0; the power-integration option is provider-agnostic.
+- optional presets for common reporting use cases. EMHASS data can already be reported through normal sensors, but there is no dedicated EMHASS integration in 0.2.1; the power-integration option is provider-agnostic.
 
 These are possible directions, not delivery or maintenance commitments.
 
@@ -368,6 +380,8 @@ These are possible directions, not delivery or maintenance commitments.
 
 - [Technical documentation](ha-reporting/DOCS.md)
 - [Changelog](ha-reporting/CHANGELOG.md)
+- [0.2.1 validation](VALIDATION-0.2.1.md)
+- [0.2.1 GitHub release notes](RELEASE-NOTES-0.2.1.md)
 - [0.2.0 validation](VALIDATION-0.2.0.md)
 - [0.2.0-rc.8 validation](VALIDATION-0.2.0-rc.8.md)
 - [0.2.0-rc.7 validation](VALIDATION-0.2.0-rc.7.md)

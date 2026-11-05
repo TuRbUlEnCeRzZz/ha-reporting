@@ -7,7 +7,8 @@ from typing import Any
 
 import websocket
 
-from .insights import add_cycle_facts
+from .insights import (add_cycle_facts, priority_highlights, meaningful_change,
+                       format_cycle_pair, no_significant_change, qualified_attention)
 
 
 HA_AI_TASK_WS_URL = "ws://supervisor/core/websocket"
@@ -864,6 +865,7 @@ def _fact_ledger_context_v11(result: dict[str, Any]) -> dict[str, Any]:
                     runtime_verified=True if source.get("verification") else None,
                     reset=True if stats.get("resets_detected") else None,
                     device_scope=[catalog.get("id"), info.get("id")],
+                    category=info.get("category"),
                 )
 
                 values: dict[str, Any]
@@ -924,8 +926,9 @@ def _fact_ledger_context_v11(result: dict[str, Any]) -> dict[str, Any]:
                         metric=source.get("metric"), unit=source.get("unit"),
                         device=device_name, catalog=catalog_name,
                         device_scope=[catalog.get("id"), device.get("id")],
+                        category=device.get("category"),
                     )
-                    comparison_key = (str(target_label or ""), str(target_period or ""), source_id)
+                    comparison_key = (str(target.get("id") or ""), str(target_label or ""), str(target_period or ""), source_id)
                     comparison_id = comparison_by_key.get(comparison_key)
                     if comparison_id is None:
                         comparison_id = f"C{len(context['comparison_sets']) + 1}"
@@ -933,6 +936,7 @@ def _fact_ledger_context_v11(result: dict[str, Any]) -> dict[str, Any]:
                         comparison_status = source.get("comparison_status")
                         comparison_set = {
                             "i": comparison_id, "tg": target_label, "tp": target_period, "s": source_id,
+                            "target_id": target.get("id"),
                             "st": comparison_status if comparison_status != "comparable" else None,
                             "p": interpretation.get("wording_policy"),
                             "bc": base_quality.get("period_coverage_percent"),
@@ -1051,7 +1055,7 @@ def _fact_ledger_context_v11(result: dict[str, Any]) -> dict[str, Any]:
     _populate_selection_policy(context)
     return context
 
-def _populate_selection_policy(context: dict[str, Any]) -> None:
+def _populate_selection_policy(context: dict[str, Any], priorities=None, priority_attention=None) -> None:
     """Declare the RC7 shortlist/id-only selection protocol."""
     mandatory_quality_summary = [
         str(row.get("i")) for row in context.get("quality_signals") or []
@@ -1125,6 +1129,8 @@ def _populate_selection_policy(context: dict[str, Any]) -> None:
         "attention_prefixes": ["F", "C", "S", "R", "Q"],
         "mandatory_summary": mandatory_summary,
         "mandatory_attention": mandatory_attention,
+        "priority_highlights": priority_highlights(context) if priorities is None else list(priorities),
+        "priority_attention": qualified_attention(context) if priority_attention is None else list(priority_attention),
         "recommendation_actions": [
             "collect_more_data",
             "monitor_forecast",
@@ -1267,8 +1273,13 @@ def _fact_score(fact: dict[str, Any], sources: dict[str, dict[str, Any]], compar
                 score += min(abs(impact), 50.0) * 8.0
                 if abs(impact) < .1:
                     score -= 100.0
-        if stat in {"energy_per_cycle", "runtime_per_cycle"}:
-            score += 25.0
+        if stat == "runtime_per_cycle":
+            # Seconds per operation and aggregate time matter, not a fixed
+            # derived-metric bonus that elevates tiny timer changes.
+            seconds = abs(_as_number(fact.get("d")) or 0)*3600
+            score += min(seconds/60, 30)
+        if stat == "energy_per_cycle" and meaningful_change(fact, source, comparison):
+            score += min(abs(_as_number(fact.get("p")) or 0), 100)/4
     return score
 
 
@@ -1313,6 +1324,8 @@ def _project_ai_context(full: dict[str, Any], profile: str = "optimized") -> dic
     summary_facts.sort(key=lambda f: (-_fact_score(f, sources, comparisons), str(f.get("i"))))
     selected_fact_ids = {str(f.get("i")) for f in summary_facts[:budgets["summary"]]}
     selected_fact_ids.update(item for item in (full.get("selection_policy") or {}).get("mandatory_summary", []) if item.startswith("F"))
+    selected_fact_ids.update((full.get("selection_policy") or {}).get("priority_highlights") or [])
+    selected_fact_ids.update((full.get("selection_policy") or {}).get("priority_attention") or [])
 
     # Keep a small set of high-impact comparable changes as attention candidates.
     attention_facts = [
@@ -1399,7 +1412,10 @@ def _project_ai_context(full: dict[str, Any], profile: str = "optimized") -> dic
             "shortlisted_facts": len(selected_fact_ids),
         },
     }
-    _populate_selection_policy(projected)
+    # Reuse the full-ledger selection instead of ranking the projection again.
+    _populate_selection_policy(projected,
+        (full.get("selection_policy") or {}).get("priority_highlights") or [],
+        (full.get("selection_policy") or {}).get("priority_attention") or [])
     return projected
 
 def _extract_json_object(value: Any) -> dict[str, Any] | None:
@@ -1466,7 +1482,38 @@ def _recommendation_action_supported(action: str, evidence: str, context: dict[s
     """
     if action == "check_cycle_usage":
         row = _selection_index(context).get(str(evidence)) or {}
-        return row.get("k") == "energy_per_cycle" and (_as_number(row.get("p")) or 0) >= 20
+        index = _selection_index(context)
+        comparison = index.get(row.get("c")) or {}
+        source = index.get(row.get("s") or comparison.get("s")) or {}
+        return (row.get("k") == "energy_per_cycle" and (_as_number(row.get("p")) or 0) >= 20
+                and meaningful_change(row, source, comparison)
+                and row.get("cycle_kind") != "starts"
+                and row.get("i") in ((context.get("selection_policy") or {}).get("priority_highlights") or []))
+    if action in {"collect_more_data", "monitor_source"}:
+        # Quality is always retained in detail, but idle measurements alone
+        # do not justify generic collection advice in a concise synthesis.
+        index = _selection_index(context)
+        row = index.get(str(evidence)) or {}
+        comparison = index.get(row.get("c")) or {}
+        sid = row.get("s") or comparison.get("s") or (evidence if str(evidence).startswith("S") else None)
+        ids = {sid} if sid else set(index)
+        active = False
+        for fact in context.get("facts") or []:
+            comp = index.get(fact.get("c")) or {}
+            source = index.get(fact.get("s") or comp.get("s")) or {}
+            if source.get("i") not in ids:
+                continue
+            value = _as_number(fact.get("v") if fact.get("q") == "current" else fact.get("b"))
+            if value is None or value <= 0:
+                continue
+            if source.get("m") == "energy_total" and fact.get("k") == "period_delta":
+                active |= (_energy_to_kwh(value, source.get("u")) or 0) >= .1
+            elif source.get("m") == "runtime" and fact.get("k") == "period_delta":
+                factor = {"h": 1, "min": 1/60, "s": 1/3600}.get(str(source.get("u") or "").lower(), 0)
+                active |= value*factor >= .1
+            elif source.get("m") == "power" and fact.get("k") == "mean":
+                active |= (_power_to_w(value, source.get("u")) or 0) >= 1
+        return active
     if action != "verify_reconstructed_counter":
         return True
 
@@ -1551,13 +1598,20 @@ def _validate_selection(data: Any, context: dict[str, Any]) -> tuple[dict[str, A
     model_summary = [item for item in model_summary if item not in redundant_summary_facts]
 
     summary: list[str] = []
-    for item in mandatory_summary + model_summary:
+    priorities = list(policy.get("priority_highlights") or [])
+    index = _selection_index(context)
+    # Legacy archived reports without stable device IDs cannot use the common
+    # device join. Keep their existing bound-fact rendering contract.
+    stable_devices = any(len(row.get('device_scope') or []) == 2 and all(row['device_scope'])
+                         for row in context.get('sources') or [])
+    if stable_devices:
+        model_summary = [item for item in model_summary
+                         if not (item.startswith("F") and (index.get(item) or {}).get("q") == "comparison")]
+    for item in mandatory_summary + priorities + model_summary:
         if item not in summary:
             summary.append(item)
-        if len(summary) >= 4:
-            break
     attention: list[str] = []
-    for item in mandatory_attention + model_attention:
+    for item in mandatory_attention + list(policy.get("priority_attention") or []) + model_attention:
         if item not in attention:
             attention.append(item)
         if len(attention) >= 5:
@@ -1614,6 +1668,9 @@ def _fallback_selection(context: dict[str, Any]) -> dict[str, Any]:
                     summary.append(rid)
                 break
 
+    for item in policy.get("priority_highlights") or []:
+        if item not in summary:
+            summary.append(item)
     # Then choose representative comparison means/period totals, followed by
     # representative current facts. Low-quality facts are excluded upstream.
     for rid in summary_allowed:
@@ -1622,17 +1679,17 @@ def _fallback_selection(context: dict[str, Any]) -> dict[str, Any]:
         if rid in summary:
             continue
         row = index.get(rid) or {}
-        if rid.startswith("F") and row.get("q") == "comparison" and row.get("k") in {"period_delta", "mean", "energy_per_cycle", "runtime_per_cycle"}:
+        if rid.startswith("F") and row.get("q") == "comparison" and rid in (policy.get("priority_highlights") or []):
             summary.append(rid)
     for rid in summary_allowed:
         if len(summary) >= 4:
             break
-        if rid not in summary:
+        if rid not in summary and (index.get(rid) or {}).get("q") != "comparison":
             summary.append(rid)
 
     attention: list[str] = []
     fallback_attention = [item for item in attention_allowed if not str(item).startswith("F")]
-    for item in (policy.get("mandatory_attention") or []) + fallback_attention:
+    for item in (policy.get("mandatory_attention") or []) + (policy.get("priority_attention") or []) + fallback_attention:
         item = str(item)
         if item in attention_set and item not in attention:
             attention.append(item)
@@ -1656,8 +1713,9 @@ def _fallback_selection(context: dict[str, Any]) -> dict[str, Any]:
             action = "collect_more_data"
         else:
             action = "monitor_source"
-        recommendations.append({"action": action, "evidence": rid})
-    return {"summary": _diverse_summary_ids(context, summary[:4]), "attention": attention, "recommendations": recommendations[:4]}
+        if _recommendation_action_supported(action, rid, context):
+            recommendations.append({"action": action, "evidence": rid})
+    return {"summary": _diverse_summary_ids(context, summary), "attention": attention, "recommendations": recommendations[:4]}
 
 def _source_label(source: dict[str, Any], language: str = "fr") -> str:
     """Return a human-oriented label without leaking grouping artefacts.
@@ -1781,13 +1839,12 @@ def _quality_suffix(comparison: dict[str, Any], language: str) -> str:
     return ""
 
 
-def _render_ledger_id(item_id: str, context: dict[str, Any], language: str, section: str) -> str | None:
-    index = _selection_index(context)
+def _render_ledger_id(item_id: str, context: dict[str, Any], language: str, section: str, index=None) -> str | None:
+    index = _selection_index(context) if index is None else index
     row = index.get(item_id)
     if not row:
         return None
-    sources = {item.get("i"): item for item in context.get("sources") or []}
-    comparisons = {item.get("i"): item for item in context.get("comparison_sets") or []}
+    sources = comparisons = index
 
     if item_id.startswith("Q"):
         kind = row.get("k")
@@ -1823,28 +1880,38 @@ def _render_ledger_id(item_id: str, context: dict[str, Any], language: str, sect
         metric = source.get("m")
         stat = row.get("k")
         if stat in {"energy_per_cycle", "runtime_per_cycle"}:
-            unit = "kWh/cycle" if stat == "energy_per_cycle" else "h/cycle"
-            base = _fmt_fixed(row.get("b"), 2, language)
-            reference = _fmt_fixed(row.get("r"), 2, language)
-            pct = f" ({_fmt_number(row['p'], language, signed=True)} %)" if row.get("p") is not None else ""
+            base, reference, unit = format_cycle_pair(stat, row['b'], row['r'], language)
+            starts = row.get('cycle_kind') == 'starts'
+            if starts:
+                unit = unit.replace('/cycle', '/start' if language == 'en' else '/démarrage')
+            counter_label = ('starts' if language == 'en' else 'démarrages') if starts else 'cycles'
+            separator = "" if unit.startswith("/") else " "
+            base, reference = base + separator + unit, reference + separator + unit
+            pct = f" ({_fmt_number(row['p'], language, signed=True)} %)" if row.get("p") is not None and base != reference else ""
             target = comparison.get("tg") or ("reference" if language == "en" else "référence")
             if language == "en":
-                text = f"{label}: {base} {unit} versus {reference} {unit} ({target}){pct}; {row['cycles_base']:g} versus {row['cycles_reference']:g} cycles."
+                text = f"{label}: {base} versus {reference} ({target}){pct}; {row['cycles_base']:g} versus {row['cycles_reference']:g} {counter_label}."
                 caution = " Fewer cycles but higher total energy; operating conditions may explain this, without establishing a cause."
             else:
-                text = f"{label} : {base} {unit} contre {reference} {unit} ({target}){pct} ; {row['cycles_base']:g} contre {row['cycles_reference']:g} cycles."
+                text = f"{label} : {base} contre {reference} ({target}){pct} ; {row['cycles_base']:g} contre {row['cycles_reference']:g} {counter_label}."
                 caution = " Moins de cycles mais davantage d’énergie totale ; les conditions d’utilisation peuvent l’expliquer, sans cause établie."
             if stat == "energy_per_cycle" and row['cycles_base'] < row['cycles_reference'] and row['total_gap'] > 0:
                 text += caution
-            if stat == "energy_per_cycle":
+            if stat == "energy_per_cycle" and section != "detail":
                 for related in context.get("facts") or []:
                     related_source = sources.get(related.get("s")) or {}
                     related_comparison = comparisons.get(related.get("c")) or {}
-                    if related.get("k") == "runtime_per_cycle" and related.get("d") and related_source.get("device_scope") == source.get("device_scope") and (related_comparison.get("tg"), related_comparison.get("tp")) == (comparison.get("tg"), comparison.get("tp")):
-                        duration = f"{_fmt_fixed(related.get('b'), 2, language)} h/cycle"
-                        previous_duration = f"{_fmt_fixed(related.get('r'), 2, language)} h/cycle"
+                    if related.get("k") == "runtime_per_cycle" and related.get("d") and related_source.get("device_scope") == source.get("device_scope") and (related_comparison.get("target_id"), related_comparison.get("tg"), related_comparison.get("tp")) == (comparison.get("target_id"), comparison.get("tg"), comparison.get("tp")):
+                        duration, previous_duration, duration_unit = format_cycle_pair('runtime_per_cycle', related['b'], related['r'], language)
+                        if starts:
+                            duration_unit = duration_unit.replace('/cycle', '/start' if language == 'en' else '/démarrage')
+                        separator = "" if duration_unit.startswith("/") else " "
+                        duration += separator + duration_unit
+                        previous_duration += separator + duration_unit
                         text += (f" Mean duration: {duration} versus {previous_duration}." if language == "en" else f" Durée moyenne : {duration} contre {previous_duration}.")
                         break
+            if source.get('category') == 'refrigeration':
+                text += (" Counter cycles may represent starts; this descriptive ratio does not measure efficiency." if language == 'en' else " Les cycles du compteur peuvent être des démarrages ; ce ratio descriptif ne mesure pas un rendement.")
             return text
         # integrated_energy_kwh is a derived ENERGY fact even when the source
         # itself is a power sensor expressed in W. Never inherit the source unit.
@@ -1862,8 +1929,10 @@ def _render_ledger_id(item_id: str, context: dict[str, Any], language: str, sect
                 text = f"{label} : {stat_label} {base} {unit} contre {reference} {unit} ; écart {gap} {unit}{pct_text}."
             if comparison.get("tg"):
                 text += f" ({comparison['tg']})"
-            if comparison.get("st"):
+            if comparison.get("st") or comparison.get("br") or comparison.get("rr"):
                 text += _quality_suffix(comparison, language)
+                if comparison.get("st") != "reconstructed" and (comparison.get("br") or comparison.get("rr")):
+                    text += _quality_suffix({"st": "reconstructed"}, language)
             return text.replace("  ", " ").strip()
         value = _fmt_number(row.get("v"), language)
         if language == "en":
@@ -2155,14 +2224,31 @@ def _render_selection_analysis(context: dict[str, Any], selection: dict[str, Any
         if item_id not in highlight_ids
         if (text := _render_ledger_id(item_id, context, language, "summary"))
     ])
+    index = _selection_index(context)
+    alert_ids, seen_devices = [], set()
+    qualified_ids = set((context.get('selection_policy') or {}).get('priority_attention') or [])
+    quality_ids = sorted(selection.get("attention") or [],
+                         key=lambda rid: (rid not in qualified_ids, -_comparison_attention_score(index.get(rid) or {})))
+    for item_id in quality_ids:
+        row = index.get(item_id) or {}
+        comparison = index.get(row.get('c')) or {}
+        source = index.get(row.get("s") or comparison.get('s')) or (row if str(item_id).startswith("S") else {})
+        scope = tuple(source.get("device_scope") or [])
+        if (str(item_id).startswith(("C", "S")) or item_id in qualified_ids) and len(scope) == 2 and all(scope):
+            if scope in seen_devices:
+                continue
+            seen_devices.add(scope)
+        alert_ids.append(item_id)
     attention = dedupe([
-        text for item_id in selection.get("attention") or []
+        text for item_id in alert_ids
         if (text := _render_ledger_id(item_id, context, language, "attention"))
     ])
     summary_keys = {" ".join(text.casefold().split()) for text in summary + highlights}
     attention = [text for text in attention if " ".join(text.casefold().split()) not in summary_keys]
     recommendations = dedupe(_merged_recommendation_lines(selection, context, language))
 
+    if not (context.get('selection_policy') or {}).get('priority_highlights') and context.get('comparison_sets'):
+        summary.append(no_significant_change(language))
     if not summary:
         summary = ["No representative quantitative fact was selected." if language == "en" else "Aucun fait quantitatif représentatif n'a été sélectionné."]
     if not attention:
@@ -2379,6 +2465,7 @@ Return exactly one JSON object and nothing else:
 {{"summary":["ID"],"attention":["ID"],"recommendations":[{{"action":"ACTION","evidence":"ID"}}]}}
 
 Rules:
+- Keep `selection_policy.priority_highlights` in order as the shared deterministic observations. Do not replace them with other appliance facts. Group quality warnings per device; observations describe changes, attention means uncertainty, and recommendations require a concrete supported check. Empty advice is valid; do not diagnose faults or efficiency from counters.
 - Rank appliance changes by absolute kWh impact and confidence before percentages. Ignore idle zero-versus-zero comparisons.
 - `energy_per_cycle` and `runtime_per_cycle` are validated derived facts; prefer them when distinguishing cycle count from consumption per cycle. Do not derive new ratios yourself.
 - Historical N/N-x change and forecast-versus-actual gap are distinct. Availability does not establish coverage or density; a counter reset does not establish an appliance fault. Correlation is not causation.
@@ -2407,6 +2494,7 @@ Retourne exactement un objet JSON et rien d'autre :
 {{"summary":["ID"],"attention":["ID"],"recommendations":[{{"action":"ACTION","evidence":"ID"}}]}}
 
 Règles :
+- Conserve `selection_policy.priority_highlights` dans leur ordre : observations déterministes communes au PDF et à la notification. Ne les remplace pas par d’autres faits d’appareils. Regroupe les limites par appareil. Observation = évolution mesurée ; à surveiller = incertitude ; action = vérification concrète étayée. Aucune action est valide ; aucun diagnostic de panne ou de rendement à partir des compteurs.
 - Classe les évolutions d’appareils selon leur impact absolu en kWh et la confiance, avant les pourcentages. Ignore les comparaisons nulles contre nulles.
 - `energy_per_cycle` et `runtime_per_cycle` sont des faits dérivés validés ; privilégie-les pour distinguer le nombre de cycles de la consommation par cycle. Ne calcule aucun autre ratio.
 - L’évolution historique N/N-x et l’écart réel/prévision sont distincts. La disponibilité ne garantit ni couverture ni densité ; un reset de compteur ne prouve pas une panne. Une corrélation ne prouve pas une cause.

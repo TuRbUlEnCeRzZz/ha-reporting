@@ -1,0 +1,11 @@
+{
+  "period": {"start": "2026-10-26", "end": "2026-11-02", "timezone": "Europe/Zurich"},
+  "provenance": "Synthetic counters reproducing the user's approximate ratios and counts; not the unavailable weekly report or its statistical ground truth. Unprovided energy totals are test inputs only.",
+  "devices": [
+    {"id": "washer", "name": "Lave-linge", "energy": [3.49, 3.10], "cycles": [5, 7]},
+    {"id": "dishwasher", "name": "Lave-vaisselle", "energy": [7.91, 7], "cycles": [7, 7]},
+    {"id": "dryer", "name": "Sèche-linge", "energy": [9.1, 10], "cycles": [5, 5]},
+    {"id": "fridge", "name": "Armoire combinée cuisine", "category": "refrigeration", "energy": [3.234, 3.2661], "cycles": [196, 191]},
+    {"id": "fan", "name": "Ventilation WC séparés", "runtime_seconds": [32606, 25175], "cycles": [119, 95]}
+  ]
+}

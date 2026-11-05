@@ -35,6 +35,7 @@ from document_store import (
     update_document_export,
 )
 from analysis.ai_report import analyze_report_with_ai
+from analysis.insights import mobile_summary
 from settings_store import load_settings as load_app_settings, save_ai_settings
 from automation_store import (
     append_history as append_scheduled_automation_history,
@@ -354,9 +355,10 @@ def _notification_message(job, report, analysis):
     language = _validated_report_language((report or {}).get("language", "fr"))
     fallback_title = "HA Reporting report" if language == "en" else "Rapport HA Reporting"
     report_name = str((report or {}).get("name") or (job or {}).get("report_id") or fallback_title)
-    ai_text = (analysis or {}).get("text") if (analysis or {}).get("status") == "completed" else None
-    if ai_text:
-        message = ai_text
+    result = _cached_report_result((job or {}).get("report_id"))
+    digest = mobile_summary(result, language) if result else ""
+    if digest:
+        message = digest
     elif language == "en":
         status = str((analysis or {}).get("status") or "disabled")
         message = f"Report generated successfully. AI analysis: {status}."

@@ -7,6 +7,8 @@ from typing import Any
 
 import websocket
 
+from .insights import add_cycle_facts
+
 
 HA_AI_TASK_WS_URL = "ws://supervisor/core/websocket"
 AI_WS_HEARTBEAT_SECONDS = 20
@@ -77,10 +79,12 @@ def _comparison_interpretation(source: dict[str, Any]) -> dict[str, Any]:
     base_reconstructed = str(base_quality.get("counter_mode") or "") in {
         "provider_reconstructed",
         "reconstructed",
+        "detailed_reconstructed",
     }
     reference_reconstructed = str(reference_quality.get("counter_mode") or "") in {
         "provider_reconstructed",
         "reconstructed",
+        "detailed_reconstructed",
     }
     full_period_change_supported = bool(
         status == "comparable"
@@ -581,6 +585,10 @@ def _current_source_relationships(rows: list[dict[str, Any]]) -> list[dict[str, 
     source pairing or recalculate gaps. Partial coverage is preserved and exposed;
     it never causes a source to be discarded.
     """
+    def reliable(row):
+        density = _as_number(row.get("density_pct"))
+        return row.get("usable", True) and not (row.get("metric") == "power" and density is not None and density < 10)
+
     forecast_power = [
         row for row in rows
         if row.get("metric") == "power"
@@ -607,16 +615,19 @@ def _current_source_relationships(rows: list[dict[str, Any]]) -> list[dict[str, 
         if forecast_kwh is not None and actual_kwh is not None:
             supported = _coverage_allows_full_period(
                 forecast.get("coverage_pct"), actual.get("coverage_pct")
-            )
+            ) and reliable(forecast) and reliable(actual)
             relationship = {
                 "kind": "energy_forecast_vs_actual",
                 "forecast_source": forecast.get("source"),
                 "actual_source": actual.get("source"),
                 "forecast_energy_kwh": _rounded_derived(forecast_kwh),
                 "actual_energy_kwh": _rounded_derived(actual_kwh),
+                "forecast_source_id": forecast.get("source_id"),
+                "actual_source_id": actual.get("source_id"),
                 "forecast_coverage_pct": forecast.get("coverage_pct"),
                 "actual_coverage_pct": actual.get("coverage_pct"),
                 "full_period_comparison_supported": supported,
+                "source_quality_limited": not (reliable(forecast) and reliable(actual)),
                 "comparison_policy": (
                     "validated_full_period_gap" if supported
                     else "coverage_insufficient_for_period_gap"
@@ -643,12 +654,14 @@ def _current_source_relationships(rows: list[dict[str, Any]]) -> list[dict[str, 
         if forecast_mean_w is not None and actual_mean_w is not None:
             supported = _coverage_allows_full_period(
                 forecast.get("coverage_pct"), actual.get("coverage_pct")
-            )
+            ) and reliable(forecast) and reliable(actual)
             relationship = {
                 "kind": "power_forecast_vs_actual",
                 "forecast_source": forecast.get("source"),
                 "actual_source": actual.get("source"),
                 "forecast_mean_w": _rounded_derived(forecast_mean_w),
+                "forecast_source_id": forecast.get("source_id"),
+                "actual_source_id": actual.get("source_id"),
                 "actual_mean_w": _rounded_derived(actual_mean_w),
                 "forecast_p95_w": _rounded_derived(_power_to_w(forecast_values.get("p95"), forecast.get("unit"))),
                 "actual_p95_w": _rounded_derived(_power_to_w(actual_values.get("p95"), actual.get("unit"))),
@@ -657,6 +670,7 @@ def _current_source_relationships(rows: list[dict[str, Any]]) -> list[dict[str, 
                 "forecast_coverage_pct": forecast.get("coverage_pct"),
                 "actual_coverage_pct": actual.get("coverage_pct"),
                 "full_period_comparison_supported": supported,
+                "source_quality_limited": not (reliable(forecast) and reliable(actual)),
                 "comparison_policy": (
                     "validated_full_period_gap" if supported
                     else "coverage_insufficient_for_period_gap"
@@ -716,6 +730,8 @@ def _fact_ledger_context_v11(result: dict[str, Any]) -> dict[str, Any]:
             "integrated_energy_kwh": "energy integrated from the same power source over the report period",
             "coverage_quality": ">=95 representative; 80-95 partial/cautious; <80 limited",
             "relationship": "only allowed cross-source comparison",
+            "energy_per_cycle": "validated same-device, same-target energy/cycles ratio in kWh/cycle; not proof of efficiency or a fault",
+            "runtime_per_cycle": "validated same-device, same-target runtime/cycles ratio in h/cycle",
             "forecast_peak": "max gap is context only; it never proves overload, calibration error or a fault",
             "projection": "the LLM receives a deterministic context projection selected by the configured context level; all report data remains in HA Reporting",
         },
@@ -788,6 +804,8 @@ def _fact_ledger_context_v11(result: dict[str, Any]) -> dict[str, Any]:
             new_device = str(device or "").strip()
             if new_device and row.get("d") and row.get("d") != new_device:
                 row["sh"] = True
+            if metadata.get("device_scope") and row.get("device_scope") and metadata["device_scope"] != row["device_scope"]:
+                row["sh"] = True
             for key_name, value in metadata.items():
                 alias = aliases.get(key_name, key_name)
                 if value is not None and value != [] and alias not in row:
@@ -844,6 +862,8 @@ def _fact_ledger_context_v11(result: dict[str, Any]) -> dict[str, Any]:
                     status=source.get("status") if source.get("status") != "ok" else None,
                     warnings=(validation.get("warnings") or []) or None,
                     runtime_verified=True if source.get("verification") else None,
+                    reset=True if stats.get("resets_detected") else None,
+                    device_scope=[catalog.get("id"), info.get("id")],
                 )
 
                 values: dict[str, Any]
@@ -877,6 +897,8 @@ def _fact_ledger_context_v11(result: dict[str, Any]) -> dict[str, Any]:
                 device_rows.append({
                     "source": relation_name, "source_id": source_id, "metric": metric,
                     "unit": source.get("unit"), "values": values, "coverage_pct": coverage,
+                    "density_pct": density,
+                    "usable": source.get("status") in {None, "ok"} and validation.get("valid", True),
                 })
             context["relationships"].extend(_current_source_relationships(device_rows))
 
@@ -901,6 +923,7 @@ def _fact_ledger_context_v11(result: dict[str, Any]) -> dict[str, Any]:
                         entity_id=source.get("entity_id"), sensor_key=sensor_key,
                         metric=source.get("metric"), unit=source.get("unit"),
                         device=device_name, catalog=catalog_name,
+                        device_scope=[catalog.get("id"), device.get("id")],
                     )
                     comparison_key = (str(target_label or ""), str(target_period or ""), source_id)
                     comparison_id = comparison_by_key.get(comparison_key)
@@ -951,15 +974,15 @@ def _fact_ledger_context_v11(result: dict[str, Any]) -> dict[str, Any]:
     for relationship in context["relationships"]:
         forecast_name = relationship.get("forecast_source")
         actual_name = relationship.get("actual_source")
-        forecast_id = None
-        actual_id = None
+        forecast_id = relationship.get("forecast_source_id")
+        actual_id = relationship.get("actual_source_id")
         for row in context["sources"]:
             # The relationship names end with the sensor key; matching this way
             # avoids retaining long catalog/device paths in the source registry.
             sensor_key = str(row.get("sk") or "")
-            if forecast_name and sensor_key and str(forecast_name).endswith("/" + sensor_key):
+            if forecast_id is None and forecast_name and sensor_key and str(forecast_name).endswith("/" + sensor_key):
                 forecast_id = row.get("i")
-            if actual_name and sensor_key and str(actual_name).endswith("/" + sensor_key):
+            if actual_id is None and actual_name and sensor_key and str(actual_name).endswith("/" + sensor_key):
                 actual_id = row.get("i")
         relationship["forecast_source_id"] = forecast_id
         relationship["actual_source_id"] = actual_id
@@ -1024,6 +1047,7 @@ def _fact_ledger_context_v11(result: dict[str, Any]) -> dict[str, Any]:
             "ma": True if no_representative or weak else None,
         })
 
+    add_cycle_facts(context)
     _populate_selection_policy(context)
     return context
 
@@ -1056,6 +1080,16 @@ def _populate_selection_policy(context: dict[str, Any]) -> None:
         rid = str(row.get("id"))
         if rid not in mandatory_summary:
             mandatory_summary.append(rid)
+
+    # Keep historical change alongside the forecast gap: they answer different
+    # questions, even when their signs differ. Use only the paired real meter.
+    actual_sources = {row.get("actual_source_id") for row in validated_relationships if row.get("kind") == "energy_forecast_vs_actual"}
+    comparison_sources = {row.get("i"): row.get("s") for row in context.get("comparison_sets") or []}
+    eligible, _, _ = _allowed_selection_ids(context)
+    for fact in context.get("facts") or []:
+        if fact.get("q") == "comparison" and fact.get("k") == "period_delta" and fact.get("i") in eligible and comparison_sources.get(fact.get("c")) in actual_sources:
+            mandatory_summary.append(fact["i"])
+            break
 
     # RC7: when N/N-x has no representative comparison, surface the home's
     # current total electrical energy before individual appliance facts. This
@@ -1096,6 +1130,7 @@ def _populate_selection_policy(context: dict[str, Any]) -> None:
             "monitor_forecast",
             "monitor_source",
             "verify_reconstructed_counter",
+            "check_cycle_usage",
         ],
     }
 
@@ -1137,18 +1172,27 @@ def _allowed_selection_ids(context: dict[str, Any]) -> tuple[set[str], set[str],
         fid = str(fid)
         scope = fact.get("q")
         stat = fact.get("k")
-        source = sources.get(fact.get("s")) or {}
-        metric = source.get("m")
         comparison = comparisons.get(fact.get("c")) or {}
+        source = sources.get(fact.get("s") or comparison.get("s")) or {}
+        metric = source.get("m")
+        # Keep idle values in detailed tables, never as summary highlights.
+        if stat in {"period_delta", "integrated_energy_kwh", "energy_per_cycle", "runtime_per_cycle", "mean"}:
+            if scope == "comparison" and _as_number(fact.get("b")) == _as_number(fact.get("r")):
+                continue
+            if scope == "current" and metric in {"energy_total", "runtime", "cycles", "power"} and _as_number(fact.get("v")) == 0:
+                continue
         if scope == "current":
             coverage = _as_number(source.get("cov"))
-            representative = coverage is None or coverage >= 80.0
+            density = _as_number(source.get("den"))
+            representative = (coverage is None or coverage >= 80.0) and not source.get("st") and not (metric == "power" and density is not None and density < 10)
             if representative and stat in {"mean", "period_delta", "integrated_energy_kwh"}:
                 summary.add(fid)
         elif scope == "comparison":
             status = comparison.get("st") or "comparable"
-            if status in {"comparable", "partial"} and stat in {"mean", "period_delta"}:
+            if status in {"comparable", "partial"} and stat in {"mean", "period_delta", "energy_per_cycle", "runtime_per_cycle"}:
                 summary.add(fid)
+            if stat == "energy_per_cycle" and (_as_number(fact.get("p")) or 0) >= 20:
+                attention.add(fid)
             if status in {"partial", "limited", "reconstructed"} and stat in {"mean", "period_delta"}:
                 attention.add(fid)
             elif fact.get("p") is not None and stat in {"mean", "period_delta"}:
@@ -1173,7 +1217,8 @@ def _allowed_selection_ids(context: dict[str, Any]) -> tuple[set[str], set[str],
     for source in context.get("sources") or []:
         sid = source.get("i")
         coverage = _as_number(source.get("cov"))
-        if sid and (source.get("st") or source.get("w") or (coverage is not None and coverage < 80.0)):
+        density = _as_number(source.get("den"))
+        if sid and (source.get("st") or source.get("w") or source.get("reset") or (coverage is not None and coverage < 80.0) or (source.get("m") == "power" and density is not None and density < 10)):
             attention.add(str(sid))
 
     return summary, attention, set(attention)
@@ -1192,8 +1237,9 @@ def _selection_index(context: dict[str, Any]) -> dict[str, dict[str, Any]]:
 def _fact_score(fact: dict[str, Any], sources: dict[str, dict[str, Any]], comparisons: dict[str, dict[str, Any]]) -> float:
     """Score one deterministic fact for RC7's LLM shortlist."""
     stat = str(fact.get("k") or "")
-    score = {"period_delta": 100.0, "integrated_energy_kwh": 96.0, "mean": 90.0}.get(stat, 10.0)
-    source = sources.get(fact.get("s")) or {}
+    score = {"period_delta": 100.0, "energy_per_cycle": 100.0, "runtime_per_cycle": 100.0, "integrated_energy_kwh": 96.0, "mean": 90.0}.get(stat, 10.0)
+    comparison = comparisons.get(fact.get("c")) or {}
+    source = sources.get(fact.get("s") or comparison.get("s")) or {}
     metric = source.get("m")
     if metric == "energy_total":
         score += 18.0
@@ -1205,7 +1251,6 @@ def _fact_score(fact: dict[str, Any], sources: dict[str, dict[str, Any]], compar
     if coverage is not None:
         score += 15.0 if coverage >= 95.0 else (5.0 if coverage >= 80.0 else -40.0)
     if fact.get("q") == "comparison":
-        comparison = comparisons.get(fact.get("c")) or {}
         status = comparison.get("st") or "comparable"
         score += {"comparable": 25.0, "partial": 10.0, "limited": -50.0, "reconstructed": -30.0, "unavailable": -100.0}.get(status, 0.0)
         pct = _as_number(fact.get("p"))
@@ -1214,6 +1259,16 @@ def _fact_score(fact: dict[str, Any], sources: dict[str, dict[str, Any]], compar
         gap = _as_number(fact.get("d"))
         if gap is not None and pct is None:
             score += min(abs(gap), 100.0) / 20.0
+        # Absolute energy impact dominates percentages. A 0.01 kWh doubling
+        # must not outrank a multi-kWh change with a smaller relative gap.
+        if metric == "energy_total" or stat == "integrated_energy_kwh":
+            impact = fact.get("energy_impact_kwh") if stat == "energy_per_cycle" else _energy_to_kwh(gap, source.get("u"))
+            if impact is not None:
+                score += min(abs(impact), 50.0) * 8.0
+                if abs(impact) < .1:
+                    score -= 100.0
+        if stat in {"energy_per_cycle", "runtime_per_cycle"}:
+            score += 25.0
     return score
 
 
@@ -1257,6 +1312,7 @@ def _project_ai_context(full: dict[str, Any], profile: str = "optimized") -> dic
     summary_facts = [f for f in facts if str(f.get("i")) in summary_allowed]
     summary_facts.sort(key=lambda f: (-_fact_score(f, sources, comparisons), str(f.get("i"))))
     selected_fact_ids = {str(f.get("i")) for f in summary_facts[:budgets["summary"]]}
+    selected_fact_ids.update(item for item in (full.get("selection_policy") or {}).get("mandatory_summary", []) if item.startswith("F"))
 
     # Keep a small set of high-impact comparable changes as attention candidates.
     attention_facts = [
@@ -1265,6 +1321,9 @@ def _project_ai_context(full: dict[str, Any], profile: str = "optimized") -> dic
     ]
     attention_facts.sort(key=lambda f: (-_fact_score(f, sources, comparisons), str(f.get("i"))))
     selected_fact_ids.update(str(f.get("i")) for f in attention_facts[:budgets["attention"]])
+    for fact in facts:
+        if fact.get("i") in selected_fact_ids:
+            selected_fact_ids.update(fact.get("contributors") or [])
 
     # Keep the most useful comparison-quality objects, prioritizing limited and
     # reconstructed cases. Unavailable entries are summarized globally instead
@@ -1405,6 +1464,9 @@ def _recommendation_action_supported(action: str, evidence: str, context: dict[s
     that itself carries reconstructed/reset semantics. A different fact from
     the same device is not sufficient proof.
     """
+    if action == "check_cycle_usage":
+        row = _selection_index(context).get(str(evidence)) or {}
+        return row.get("k") == "energy_per_cycle" and (_as_number(row.get("p")) or 0) >= 20
     if action != "verify_reconstructed_counter":
         return True
 
@@ -1431,6 +1493,24 @@ def _recommendation_action_supported(action: str, evidence: str, context: dict[s
             return True
         return reconstructed(comparisons.get(str(row.get("c") or "")) or {})
     return False
+
+
+def _diverse_summary_ids(context: dict[str, Any], ids: list[str]) -> list[str]:
+    """Reserve the small summary budget for distinct appliance observations."""
+    index = _selection_index(context)
+    mandatory = set((context.get("selection_policy") or {}).get("mandatory_summary") or [])
+    selected, seen = [], set()
+    for item in ids:
+        row = index.get(item) or {}
+        comparison = index.get(row.get("c")) or {}
+        source = index.get(row.get("s") or comparison.get("s")) or {}
+        scope = tuple(source.get("device_scope") or [])
+        if item.startswith("F") and item not in mandatory and len(scope) == 2 and all(scope):
+            if scope in seen:
+                continue
+            seen.add(scope)
+        selected.append(item)
+    return selected
 
 
 def _validate_selection(data: Any, context: dict[str, Any]) -> tuple[dict[str, Any], bool]:
@@ -1503,7 +1583,7 @@ def _validate_selection(data: Any, context: dict[str, Any]) -> tuple[dict[str, A
                 break
 
     return {
-        "summary": summary,
+        "summary": _diverse_summary_ids(context, summary),
         "attention": attention,
         "recommendations": recommendations,
     }, model_valid
@@ -1512,7 +1592,9 @@ def _fallback_selection(context: dict[str, Any]) -> dict[str, Any]:
     """Deterministic fallback if the model does not return valid JSON IDs."""
     summary_set, attention_set, _ = _allowed_selection_ids(context)
     index = _selection_index(context)
-    ordered_ids = list(index)
+    sources = {row.get("i"): row for row in context.get("sources") or []}
+    comparisons = {row.get("i"): row for row in context.get("comparison_sets") or []}
+    ordered_ids = sorted(index, key=lambda rid: (-_fact_score(index[rid], sources, comparisons) if rid.startswith("F") else 0, rid))
     summary_allowed = [item for item in ordered_ids if item in summary_set]
     attention_allowed = [item for item in ordered_ids if item in attention_set]
     policy = context.get("selection_policy") or {}
@@ -1540,7 +1622,7 @@ def _fallback_selection(context: dict[str, Any]) -> dict[str, Any]:
         if rid in summary:
             continue
         row = index.get(rid) or {}
-        if rid.startswith("F") and row.get("q") == "comparison" and row.get("k") in {"period_delta", "mean"}:
+        if rid.startswith("F") and row.get("q") == "comparison" and row.get("k") in {"period_delta", "mean", "energy_per_cycle", "runtime_per_cycle"}:
             summary.append(rid)
     for rid in summary_allowed:
         if len(summary) >= 4:
@@ -1558,6 +1640,10 @@ def _fallback_selection(context: dict[str, Any]) -> dict[str, Any]:
             break
 
     recommendations: list[dict[str, str]] = []
+    for fact in context.get("facts") or []:
+        if fact.get("i") in attention_set and _recommendation_action_supported("check_cycle_usage", fact["i"], context):
+            recommendations.append({"action": "check_cycle_usage", "evidence": fact["i"]})
+            break
     for rid in attention[:4]:
         row = index.get(rid) or {}
         if rid.startswith("R"):
@@ -1571,7 +1657,7 @@ def _fallback_selection(context: dict[str, Any]) -> dict[str, Any]:
         else:
             action = "monitor_source"
         recommendations.append({"action": action, "evidence": rid})
-    return {"summary": summary[:4], "attention": attention, "recommendations": recommendations[:4]}
+    return {"summary": _diverse_summary_ids(context, summary[:4]), "attention": attention, "recommendations": recommendations[:4]}
 
 def _source_label(source: dict[str, Any], language: str = "fr") -> str:
     """Return a human-oriented label without leaking grouping artefacts.
@@ -1736,6 +1822,30 @@ def _render_ledger_id(item_id: str, context: dict[str, Any], language: str, sect
         label = _source_label(source, language)
         metric = source.get("m")
         stat = row.get("k")
+        if stat in {"energy_per_cycle", "runtime_per_cycle"}:
+            unit = "kWh/cycle" if stat == "energy_per_cycle" else "h/cycle"
+            base = _fmt_fixed(row.get("b"), 2, language)
+            reference = _fmt_fixed(row.get("r"), 2, language)
+            pct = f" ({_fmt_number(row['p'], language, signed=True)} %)" if row.get("p") is not None else ""
+            target = comparison.get("tg") or ("reference" if language == "en" else "référence")
+            if language == "en":
+                text = f"{label}: {base} {unit} versus {reference} {unit} ({target}){pct}; {row['cycles_base']:g} versus {row['cycles_reference']:g} cycles."
+                caution = " Fewer cycles but higher total energy; operating conditions may explain this, without establishing a cause."
+            else:
+                text = f"{label} : {base} {unit} contre {reference} {unit} ({target}){pct} ; {row['cycles_base']:g} contre {row['cycles_reference']:g} cycles."
+                caution = " Moins de cycles mais davantage d’énergie totale ; les conditions d’utilisation peuvent l’expliquer, sans cause établie."
+            if stat == "energy_per_cycle" and row['cycles_base'] < row['cycles_reference'] and row['total_gap'] > 0:
+                text += caution
+            if stat == "energy_per_cycle":
+                for related in context.get("facts") or []:
+                    related_source = sources.get(related.get("s")) or {}
+                    related_comparison = comparisons.get(related.get("c")) or {}
+                    if related.get("k") == "runtime_per_cycle" and related.get("d") and related_source.get("device_scope") == source.get("device_scope") and (related_comparison.get("tg"), related_comparison.get("tp")) == (comparison.get("tg"), comparison.get("tp")):
+                        duration = f"{_fmt_fixed(related.get('b'), 2, language)} h/cycle"
+                        previous_duration = f"{_fmt_fixed(related.get('r'), 2, language)} h/cycle"
+                        text += (f" Mean duration: {duration} versus {previous_duration}." if language == "en" else f" Durée moyenne : {duration} contre {previous_duration}.")
+                        break
+            return text
         # integrated_energy_kwh is a derived ENERGY fact even when the source
         # itself is a power sensor expressed in W. Never inherit the source unit.
         unit = "kWh" if stat == "integrated_energy_kwh" else (source.get("u") or "")
@@ -1750,6 +1860,8 @@ def _render_ledger_id(item_id: str, context: dict[str, Any], language: str, sect
                 text = f"{label}: {stat_label} {base} {unit} versus {reference} {unit}; gap {gap} {unit}{pct_text}."
             else:
                 text = f"{label} : {stat_label} {base} {unit} contre {reference} {unit} ; écart {gap} {unit}{pct_text}."
+            if comparison.get("tg"):
+                text += f" ({comparison['tg']})"
             if comparison.get("st"):
                 text += _quality_suffix(comparison, language)
             return text.replace("  ", " ").strip()
@@ -1773,6 +1885,12 @@ def _render_ledger_id(item_id: str, context: dict[str, Any], language: str, sect
     if item_id.startswith("R"):
         kind = row.get("kind")
         supported = bool(row.get("full_period_comparison_supported"))
+        if not supported and row.get("source_quality_limited"):
+            return (
+                "Forecast and actual measurements cannot establish a full-period gap: check sampling density and source validity in the detailed tables. Source availability alone is insufficient."
+                if language == "en" else
+                "La prévision et les mesures réelles ne permettent pas d’établir un écart de période fiable : vérifier la densité d’échantillonnage et la validité des sources dans les tableaux détaillés. La disponibilité seule ne suffit pas."
+            )
         if kind == "energy_forecast_vs_actual":
             precision = _relationship_precision(row.get("absolute_gap_kwh"))
             forecast = _fmt_fixed(row.get("forecast_energy_kwh"), precision, language)
@@ -1830,14 +1948,20 @@ def _render_ledger_id(item_id: str, context: dict[str, Any], language: str, sect
         label = _source_label(row, language)
         coverage = row.get("cov")
         warnings = row.get("w") or []
+        if row.get("reset"):
+            return (f"{label}: counter reset(s) recorded; this is a measurement event, not evidence of an appliance fault." if language == "en" else f"{label} : réinitialisation(s) du compteur relevée(s) ; il s’agit d’un événement de mesure, pas d’une preuve de panne de l’appareil.")
         if language == "en":
             detail = f" Coverage: {_fmt_number(coverage, language)}%." if coverage is not None else ""
             if warnings:
                 detail += f" Warning: {warnings[0]}"
+            if row.get("den") is not None and row.get("m") == "power" and row["den"] < 10:
+                detail += f" Sampling density: {_fmt_number(row['den'], language)}%."
             return f"{label}: source quality requires attention.{detail}".strip()
         detail = f" Couverture : {_fmt_number(coverage, language)} %." if coverage is not None else ""
         if warnings:
             detail += f" Avertissement : {warnings[0]}"
+        if row.get("den") is not None and row.get("m") == "power" and row["den"] < 10:
+            detail += f" Densité d’échantillonnage : {_fmt_number(row['den'], language)} %."
         return f"{label} : la qualité de la source demande de la prudence.{detail}".strip()
     return None
 
@@ -1864,6 +1988,13 @@ def _render_recommendation(action: str, evidence: str, context: dict[str, Any], 
     elif evidence.startswith("Q"):
         source = None
     label = _source_label(source or {}, language)
+
+    if action == "check_cycle_usage":
+        return (
+            f"Check whether changes in operating conditions or longer cycles for {label} explain the increased energy per cycle; the cause is not established."
+            if language == "en" else
+            f"Vérifier si les conditions d’utilisation ou des cycles plus longs de {label} peuvent expliquer la hausse d’énergie par cycle ; la cause n’est pas établie."
+        )
 
     if evidence.startswith("Q"):
         if row.get("k") == "report_source_availability":
@@ -1951,9 +2082,14 @@ def _merged_recommendation_lines(selection: dict[str, Any], context: dict[str, A
         group["items"].append(item)
 
     lines: list[str] = []
+    generic_advice_used = False
     for group in groups:
         items = group["items"]
         actions = set(group["actions"])
+        if actions and actions <= {"collect_more_data", "monitor_source"}:
+            if generic_advice_used:
+                continue
+            generic_advice_used = True
         first = items[0]
         evidence = str(first.get("evidence") or "")
         # Quality and relationship recommendations keep their dedicated wording.
@@ -2008,15 +2144,22 @@ def _render_selection_analysis(context: dict[str, Any], selection: dict[str, Any
                 out.append(text)
         return out
 
+    mandatory = set((context.get("selection_policy") or {}).get("mandatory_summary") or [])
+    highlight_ids = [item for item in selection.get("summary") or [] if mandatory and item not in mandatory and str(item).startswith("F")]
+    highlights = dedupe([
+        text for item_id in highlight_ids
+        if (text := _render_ledger_id(item_id, context, language, "summary"))
+    ])
     summary = dedupe([
         text for item_id in selection.get("summary") or []
+        if item_id not in highlight_ids
         if (text := _render_ledger_id(item_id, context, language, "summary"))
     ])
     attention = dedupe([
         text for item_id in selection.get("attention") or []
         if (text := _render_ledger_id(item_id, context, language, "attention"))
     ])
-    summary_keys = {" ".join(text.casefold().split()) for text in summary}
+    summary_keys = {" ".join(text.casefold().split()) for text in summary + highlights}
     attention = [text for text in attention if " ".join(text.casefold().split()) not in summary_keys]
     recommendations = dedupe(_merged_recommendation_lines(selection, context, language))
 
@@ -2030,6 +2173,7 @@ def _render_selection_analysis(context: dict[str, Any], selection: dict[str, Any
     return "\n".join([
         summary_heading,
         " ".join(summary),
+        *(["", "HIGHLIGHTS" if language == "en" else "FAITS MARQUANTS", *[f"- {text}" for text in highlights]] if highlights else []),
         "",
         attention_heading,
         *[f"- {text}" for text in attention],
@@ -2235,6 +2379,10 @@ Return exactly one JSON object and nothing else:
 {{"summary":["ID"],"attention":["ID"],"recommendations":[{{"action":"ACTION","evidence":"ID"}}]}}
 
 Rules:
+- Rank appliance changes by absolute kWh impact and confidence before percentages. Ignore idle zero-versus-zero comparisons.
+- `energy_per_cycle` and `runtime_per_cycle` are validated derived facts; prefer them when distinguishing cycle count from consumption per cycle. Do not derive new ratios yourself.
+- Historical N/N-x change and forecast-versus-actual gap are distinct. Availability does not establish coverage or density; a counter reset does not establish an appliance fault. Correlation is not causation.
+- Use `check_cycle_usage` only for an eligible energy-per-cycle increase. Avoid repeating generic recommendations; an empty recommendations list is valid.
 - `summary`: 1 to 4 eligible `F*`, `R*` or mandatory `Q*` IDs. Prefer current `mean`/`period_delta`/`integrated_energy_kwh`, representative comparison `mean`/`period_delta`, explicit relationships, and mandatory quality signals.
 - `attention`: 0 to 5 eligible IDs. Prefer mandatory `Q*` quality signals, partial/limited/reconstructed comparison sets, quality-limited sources, or relationships whose full-period comparison is not supported.
 - `recommendations`: 0 to 4 objects. `action` must be one of `selection_policy.recommendation_actions`; `evidence` must be an attention-worthy ID from the context.
@@ -2259,6 +2407,10 @@ Retourne exactement un objet JSON et rien d'autre :
 {{"summary":["ID"],"attention":["ID"],"recommendations":[{{"action":"ACTION","evidence":"ID"}}]}}
 
 Règles :
+- Classe les évolutions d’appareils selon leur impact absolu en kWh et la confiance, avant les pourcentages. Ignore les comparaisons nulles contre nulles.
+- `energy_per_cycle` et `runtime_per_cycle` sont des faits dérivés validés ; privilégie-les pour distinguer le nombre de cycles de la consommation par cycle. Ne calcule aucun autre ratio.
+- L’évolution historique N/N-x et l’écart réel/prévision sont distincts. La disponibilité ne garantit ni couverture ni densité ; un reset de compteur ne prouve pas une panne. Une corrélation ne prouve pas une cause.
+- Utilise `check_cycle_usage` uniquement pour une hausse éligible de l’énergie par cycle. Évite les recommandations génériques répétées ; une liste de recommandations vide est valide.
 - `summary` : 1 à 4 IDs `F*`, `R*` ou `Q*` obligatoires éligibles. Privilégie les `mean`/`period_delta`/`integrated_energy_kwh` courants, les `mean`/`period_delta` de comparaison représentative, les relations explicites et les signaux globaux de qualité obligatoires.
 - `attention` : 0 à 5 IDs éligibles. Privilégie les signaux `Q*` obligatoires, les comparaisons partielles/limitées/reconstruites, les sources de qualité limitée ou les relations dont la comparaison de période complète n’est pas supportée.
 - `recommendations` : 0 à 4 objets. `action` doit appartenir à `selection_policy.recommendation_actions` et `evidence` doit être un ID digne d’attention présent dans le contexte.

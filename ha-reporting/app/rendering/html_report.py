@@ -7,6 +7,25 @@ import re
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from analysis.insights import report_digest
+
+
+def _energy_overview(result):
+    language = "en" if (result.get("report") or {}).get("language") == "en" else "fr"
+    digest = report_digest(result, language)
+    ai = result.get("ai_analysis") or {}
+    existing_text = str(ai.get("text") or "") if ai.get("status") == "completed" else ""
+    labels = ("Energy", "Highlights", "Measurement quality", "Recommendation") if language == "en" else ("Énergie", "Faits marquants", "Qualité des mesures", "Recommandation")
+    sections = []
+    for label, rows in zip(labels, digest.values()):
+        rows = [row for row in rows if row not in existing_text]
+        if rows:
+            sections.append(f'<h3>{_e(label)}</h3><ul>' + ''.join(f'<li>{_e(row)}</li>' for row in rows) + '</ul>')
+    if not sections:
+        return ""
+    title = "Period overview" if language == "en" else "L’essentiel de la période"
+    return f'<section class="energy-overview"><h2>{title}</h2>{"".join(sections)}</section>'
+
 
 def _translate_report_html_to_english(html: str) -> str:
     """Translate renderer-owned report labels while leaving user data untouched."""
@@ -463,6 +482,9 @@ body{{margin:0;background:var(--canvas);color:var(--ink);font:14px/1.45 system-u
 .page{{max-width:1180px;margin:28px auto;background:var(--paper);padding:38px 42px;box-shadow:0 12px 40px #0008;border:1px solid #252c35}}
 h1,h2,h3,h4,p{{margin-top:0}} h1{{font-size:28px;margin-bottom:6px}} h2{{font-size:20px;margin:28px 0 12px}} h3{{font-size:16px;margin:0}} h4{{font-size:12px;margin:0 0 3px;overflow-wrap:normal;word-break:normal}}
 .muted,.quality,small{{color:var(--muted)}}
+.energy-overview{{background:var(--soft);padding:14px;border:1px solid var(--line);border-radius:10px;margin-bottom:16px}}
+.energy-overview h2{{margin:0 0 10px}} .energy-overview li{{margin-bottom:6px;overflow-wrap:anywhere;orphans:3;widows:3}}
+.energy-overview h3{{break-after:avoid}} .energy-overview ul{{padding-left:20px}}
 .toolbar{{display:flex;justify-content:flex-end;margin-bottom:18px}}
 button{{border:0;border-radius:8px;background:var(--accent);color:#fff;padding:9px 14px;font-weight:700;cursor:pointer}}
 .hero{{border-bottom:2px solid #66717e;padding-bottom:18px;margin-bottom:20px}}
@@ -471,6 +493,8 @@ button{{border:0;border-radius:8px;background:var(--accent);color:#fff;padding:9
 .summary.mini{{grid-template-columns:repeat(4,1fr)}}
 .summary>div{{background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:12px}}
 .summary span{{display:block;color:var(--muted);font-size:11px}} .summary strong{{font-size:19px}}
+.summary small{{display:block;font-size:9px}}
+.ai-text,.quality,.unavailable-note{{overflow-wrap:anywhere;orphans:3;widows:3}}
 .catalog{{break-inside:auto}}
 .catalog>h2,.device-title,.section-title,.comparisons>h1{{break-after:avoid-page;page-break-after:avoid}}
 .device{{background:{device_bg};border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0 20px;break-inside:auto}}
@@ -541,9 +565,10 @@ footer{{border-top:1px solid var(--line);margin-top:28px;padding-top:12px;color:
 <div><span>Sources OK</span><strong>{_e(summary.get('sources_ok', 0))}/{_e(summary.get('sources_total', 0))}</strong></div>
 <div><span>Sans données</span><strong>{_e(summary.get('sources_no_data', 0))}</strong></div>
 <div><span>Erreurs / invalides</span><strong>{_e((summary.get('sources_error', 0) or 0) + (summary.get('sources_invalid', 0) or 0))}</strong></div>
-<div><span>Runtimes vérifiés</span><strong>{_e(summary.get('sources_runtime_verified', 0))}</strong></div>
+<div><span>Runtimes vérifiés</span><strong>{_e(summary.get('sources_runtime_verified', 0))}</strong><small>{'Raw history checks' if report.get('language') == 'en' else 'Vérifications sur historique brut'}</small></div>
 <div><span>Fallbacks</span><strong>{_e(summary.get('sources_fallback', 0))}</strong></div>
 </section>
+{_energy_overview(result)}
 {_ai_analysis(result)}
 {''.join(catalogs)}
 {_comparisons(result)}

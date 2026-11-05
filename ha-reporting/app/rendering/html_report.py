@@ -15,12 +15,9 @@ def _energy_overview(result, context=None):
     digest = report_digest(result, language, context)
     if not digest["highlights"]:
         digest["highlights"] = [no_significant_change(language)]
-    ai = result.get("ai_analysis") or {}
-    existing_text = str(ai.get("text") or "") if ai.get("status") == "completed" else ""
     labels = ("Energy", "Highlights", "Measurement quality", "Recommendation") if language == "en" else ("Énergie", "Faits marquants", "Qualité des mesures", "Recommandation")
     sections = []
     for label, rows in zip(labels, digest.values()):
-        rows = [row for row in rows if row not in existing_text]
         if rows:
             sections.append(f'<h3>{_e(label)}</h3><ul>' + ''.join(f'<li>{_e(row)}</li>' for row in rows) + '</ul>')
     if not sections:
@@ -329,7 +326,7 @@ def _comparisons(result: dict[str, Any], context=None) -> str:
     details = {}
     index = _selection_index(context)
     for fact in context.get('facts', []):
-        if fact.get('k') not in {'energy_per_cycle', 'runtime_per_cycle'}:
+        if fact.get('k') not in {'energy_per_cycle', 'runtime_per_cycle', 'energy_per_runtime'}:
             continue
         comparison = comparison_sets.get(fact.get('c'), {})
         source = sources.get(fact.get('s'), {})
@@ -429,14 +426,24 @@ def _ai_context_quality(ai: dict[str, Any], language: str = "fr") -> str:
     return text
 
 
-def _ai_analysis(result: dict[str, Any]) -> str:
+def _ai_analysis(result: dict[str, Any], context=None) -> str:
     ai = result.get("ai_analysis") or {}
     if not ai.get("enabled"):
         return ""
     status = ai.get("status") or "unknown"
     language = str((result.get("report") or {}).get("language") or "fr").lower()
     if status == "completed":
-        text = _e(ai.get("text") or "").replace("\n", "<br>")
+        # Keep the deterministic overview authoritative; remove only its exact
+        # sentences from the AI display, without modifying the stored response.
+        digest = report_digest(result, language, context)
+        ai_text = str(ai.get('text') or '')
+        for rows in digest.values():
+            for sentence in rows:
+                ai_text = ai_text.replace(sentence, '')
+        lines = [line for line in ai_text.splitlines() if line.strip() not in {'', '-'}]
+        headings = {'SYNTHÈSE', 'SUMMARY', 'FAITS MARQUANTS', 'HIGHLIGHTS', "POINTS D'ATTENTION", 'ATTENTION POINTS', 'RECOMMANDATIONS', 'RECOMMENDATIONS'}
+        lines = [line for n,line in enumerate(lines) if line.strip() not in headings or (n+1 < len(lines) and lines[n+1].strip() not in headings)]
+        text = _e('\n'.join(lines)).replace('\n', '<br>')
         context_quality = _ai_context_quality(ai, language)
         entity = ai.get("entity_id") or "entité AI Task préférée"
         duration = _num(ai.get("duration_seconds"), "s")
@@ -594,7 +601,7 @@ footer{{border-top:1px solid var(--line);margin-top:28px;padding-top:12px;color:
 <div><span>Fallbacks</span><strong>{_e(summary.get('sources_fallback', 0))}</strong></div>
 </section>
 {_energy_overview(result, context)}
-{_ai_analysis(result)}
+{_ai_analysis(result, context)}
 {''.join(catalogs)}
 {_comparisons(result, context)}
 <footer>HA Reporting · moteur {_e(execution.get('analysis_mode'))} · calcul {_num(execution.get('data_total_duration_seconds') or execution.get('duration_seconds'), 's')}{(' · IA ' + _num(execution.get('ai_analysis_duration_seconds'), 's')) if (execution.get('ai_analysis_duration_seconds') or 0) > 0 else ''} · sémantique {_e(period.get('semantics'))}</footer>

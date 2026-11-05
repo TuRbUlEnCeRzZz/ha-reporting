@@ -1,0 +1,15 @@
+{
+  "provenance": "Transcribed rounded PDF excerpt and user-supplied figures. Raw unrounded series/results unavailable; no exact full-report replay is claimed.",
+  "period": ["2026-10-26T00:00:00+01:00", "2026-11-02T00:00:00+01:00"],
+  "reference_period": ["2026-10-19T00:00:00+02:00", "2026-10-26T00:00:00+01:00"],
+  "timezone": "Europe/Zurich",
+  "summary": {"devices":16,"sources_ok":78,"sources_total":78,"comparable":39,"partial":32,"limited":4,"reconstructed":3},
+  "displayed_energy": {"actual_kwh":58.80,"forecast_kwh":51.73,"forecast_gap_kwh":7.06,"forecast_gap_percent":13.7,"reference_kwh":59.7,"historical_gap_kwh":-0.91,"historical_gap_percent":-1.53},
+  "unrounded_values_available": false,
+  "devices": [
+    {"id":"washer","energy":[3.49,3.10],"cycles":[5,7],"energy_coverage":[91.9,86.7],"cycle_coverage":[93.9,88.6]},
+    {"id":"dishwasher","energy":[7.63,10.6],"cycles":[7,11],"energy_coverage":[81.2,86.3],"cycle_coverage":[90.8,88.6]},
+    {"id":"dryer","energy":[2.83,4.66],"cycles":[6,9],"energy_coverage":[87.0,86.9],"cycle_coverage":[93.9,88.6]},
+    {"id":"tv","energy":[3.90,1.93],"energy_coverage":[93.3,87.9],"reconstructed":true}
+  ]
+}

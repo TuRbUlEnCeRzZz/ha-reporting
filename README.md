@@ -4,6 +4,8 @@
 
 **Current stable version: 0.2.1**
 
+**Next release in preparation: 0.2.2 — energy interpretation improvements**
+
 HA Reporting is a reporting engine for **Home Assistant OS**. It turns Home Assistant sensor history stored in VictoriaMetrics into structured reports, period comparisons, optional AI commentary and locally generated PDF documents.
 
 Reports can be created manually or executed on an internal schedule, stored locally, exported to Paperless-ngx, and followed by Home Assistant notifications or TTS.
@@ -99,7 +101,25 @@ Beta.21 introduces the first HA Reporting internationalization layer.
 
 From beta.21 onward, new and modified maintainer-facing repository content is written in **English**. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## What is new in 0.2.1
+## Preparing 0.2.2 — Energy interpretation improvements
+
+`0.2.2` focuses on more useful energy analysis and concise mobile reports. The feature changes have been merged; the application package still declares **0.2.1** until release metadata is updated. This section describes the upcoming release, not a published package.
+
+- Ranks observations using absolute kWh impact, relative change and data quality, while keeping idle and unchanged readings in detailed tables.
+- Adds deterministic **kWh/cycle** and **hours/cycle** comparisons only for unambiguous, sufficiently covered, comparable counters. It does not invent missing values or infer equipment faults from correlations.
+- Keeps historical consumption changes separate from **EMHASS forecast gaps**, showing both when the validated total meter and reference support them.
+- Improves the existing **ID-only AI selection** instructions and contextual recommendations without adding model calls or changing the configured AI Task entity.
+- Replaces copied AI essays in notifications with selected energy figures, up to two appliance facts, a significant source warning and one justified action; empty sections are omitted.
+- Adds a deterministic PDF overview when useful, avoids duplicate AI sentences, clarifies raw-history runtime verification and improves wrapping of long comments.
+- Preserves detailed statistics and data-quality classifications, and fixes forecast relationship identities when different devices share sensor keys.
+
+The historical statistics, period, comparison and counter-reconstruction engines are unchanged. No new application dependency or configuration option is required. Source availability alone is not treated as proof of reliable coverage or sampling density. AI remains optional; deterministic reporting remains available when AI fails.
+
+Local feature validation: **213 Python tests and 134 JavaScript checks passed**, with native PDF checks on synthetic scenarios. Raspberry Pi/Home Assistant OS operation, real Ollama responses and the original weekly history remain unverified.
+
+See [0.2.2 release notes](RELEASE-NOTES-0.2.2.md) and [0.2.2 validation](VALIDATION-0.2.2.md).
+
+## Previous 0.2.1 release
 
 `0.2.1` is a packaging and compatibility update to the Home Assistant OS **app**. The optional Home Assistant Core companion integration has been removed from this repository: HA Reporting is no longer distributed as a HACS/Marketplace integration. Scheduled report generation, manual runs, AI Tasks, VictoriaMetrics, PDF/Paperless export and Home Assistant notifications still run inside the app.
 
@@ -378,6 +398,8 @@ These are possible directions, not delivery or maintenance commitments.
 
 ## Documentation
 
+- [0.2.2 release notes](RELEASE-NOTES-0.2.2.md)
+- [0.2.2 validation](VALIDATION-0.2.2.md)
 - [Technical documentation](ha-reporting/DOCS.md)
 - [Changelog](ha-reporting/CHANGELOG.md)
 - [0.2.1 validation](VALIDATION-0.2.1.md)

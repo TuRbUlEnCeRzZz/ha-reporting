@@ -1,3 +1,14 @@
+## 0.2.2 (in preparation)
+
+- rank summary observations by energy impact and confidence; omit idle and unchanged comparisons from highlights;
+- add guarded energy/runtime-per-cycle facts and contextual verification recommendations;
+- distinguish historical consumption changes from forecast gaps and preserve reconstructed-counter semantics;
+- select concise deterministic mobile notifications and improve PDF overviews, wrapping and runtime-verification wording;
+- fix device-local forecast relationship identities for reused sensor keys;
+- retain existing statistics, reconstruction, period/comparison engines and configuration interfaces;
+- add 26 regression tests and reproducible synthetic PDF validation; real Home Assistant OS/Ollama acceptance remains pending;
+- document the upcoming release without changing the current 0.2.1 application package metadata.
+
 ## 0.2.1
 
 - remove the optional HACS/Home Assistant Core companion integration and its installation guide;

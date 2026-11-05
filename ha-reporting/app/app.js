@@ -2327,6 +2327,7 @@ async function addDeviceTo(id, name, push=true){
   $("saveMessage").textContent = "";
   setPage("devicePage", {catalogId:id, catalogName:name}, push);
   await loadCategories();
+  $("category").value = "other";
   await loadEntities();
 }
 

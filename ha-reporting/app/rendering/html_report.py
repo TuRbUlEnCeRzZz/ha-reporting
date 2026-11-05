@@ -7,12 +7,14 @@ import re
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from analysis.insights import report_digest
+from analysis.insights import report_digest, no_significant_change
 
 
-def _energy_overview(result):
+def _energy_overview(result, context=None):
     language = "en" if (result.get("report") or {}).get("language") == "en" else "fr"
-    digest = report_digest(result, language)
+    digest = report_digest(result, language, context)
+    if not digest["highlights"]:
+        digest["highlights"] = [no_significant_change(language)]
     ai = result.get("ai_analysis") or {}
     existing_text = str(ai.get("text") or "") if ai.get("status") == "completed" else ""
     labels = ("Energy", "Highlights", "Measurement quality", "Recommendation") if language == "en" else ("Énergie", "Faits marquants", "Qualité des mesures", "Recommandation")
@@ -312,11 +314,29 @@ def _comparison_source(source: dict[str, Any]) -> str:
       </article>"""
 
 
-def _comparisons(result: dict[str, Any]) -> str:
+def _comparisons(result: dict[str, Any], context=None) -> str:
     comparisons = result.get("comparisons") or {}
     if not comparisons.get("enabled"):
         return ""
     blocks = []
+    # Reuse the presentation ledger already built for the overview. Keep every
+    # validated ratio accessible here, even when it is not a headline.
+    from analysis.ai_report import _render_ledger_id, _selection_index
+    context = context or {}
+    sources = {s['i']: s for s in context.get('sources', [])}
+    comparison_sets = {c['i']: c for c in context.get('comparison_sets', [])}
+    language = 'en' if (result.get('report') or {}).get('language') == 'en' else 'fr'
+    details = {}
+    index = _selection_index(context)
+    for fact in context.get('facts', []):
+        if fact.get('k') not in {'energy_per_cycle', 'runtime_per_cycle'}:
+            continue
+        comparison = comparison_sets.get(fact.get('c'), {})
+        source = sources.get(fact.get('s'), {})
+        key = (comparison.get('target_id'), comparison.get('tg'), comparison.get('tp'), tuple(source.get('device_scope') or []))
+        # Energy sentences can include a linked duration; individual detailed
+        # rows remain explicit and are not used to select the summary.
+        details.setdefault(key, []).append(_render_ledger_id(fact['i'], context, language, 'detail', index))
     for target in comparisons.get("targets") or []:
         summary = target.get("summary") or {}
         catalogs = []
@@ -324,7 +344,10 @@ def _comparisons(result: dict[str, Any]) -> str:
             devices = []
             for device in catalog.get("devices") or []:
                 cards = "".join(_comparison_source(s) for s in device.get("sources") or [])
-                devices.append(f'<section class="device"><h3>{_e(device.get("name"))}</h3><div class="source-grid">{cards}</div></section>')
+                key = (target.get('id'), target.get('label'), (target.get('resolved_period') or {}).get('label'), (catalog.get('id'), device.get('id')))
+                rows = details.get(key, [])
+                ratio_html = ('<ul class="derived-indicators">' + ''.join(f'<li>{_e(row)}</li>' for row in rows) + '</ul>') if rows else ''
+                devices.append(f'<section class="device"><h3>{_e(device.get("name"))}</h3><div class="source-grid">{cards}</div>{ratio_html}</section>')
             catalogs.append(f'<section class="catalog"><h2>{_e(catalog.get("name"))}</h2>{"".join(devices)}</section>')
         blocks.append(f"""
           <section class="comparison-block">
@@ -439,6 +462,8 @@ def _ai_analysis(result: dict[str, Any]) -> str:
       </section>"""
 
 def render_report_html(result: dict[str, Any], theme: str = "dark") -> str:
+    from analysis.ai_report import _fact_ledger_context_v11
+    context = _fact_ledger_context_v11(result)
     report = result.get("report") or {}
     period = result.get("resolved_period") or {}
     execution = result.get("execution") or {}
@@ -568,10 +593,10 @@ footer{{border-top:1px solid var(--line);margin-top:28px;padding-top:12px;color:
 <div><span>Runtimes vérifiés</span><strong>{_e(summary.get('sources_runtime_verified', 0))}</strong><small>{'Raw history checks' if report.get('language') == 'en' else 'Vérifications sur historique brut'}</small></div>
 <div><span>Fallbacks</span><strong>{_e(summary.get('sources_fallback', 0))}</strong></div>
 </section>
-{_energy_overview(result)}
+{_energy_overview(result, context)}
 {_ai_analysis(result)}
 {''.join(catalogs)}
-{_comparisons(result)}
+{_comparisons(result, context)}
 <footer>HA Reporting · moteur {_e(execution.get('analysis_mode'))} · calcul {_num(execution.get('data_total_duration_seconds') or execution.get('duration_seconds'), 's')}{(' · IA ' + _num(execution.get('ai_analysis_duration_seconds'), 's')) if (execution.get('ai_analysis_duration_seconds') or 0) > 0 else ''} · sémantique {_e(period.get('semantics'))}</footer>
 </main></body></html>"""
     if str(report.get("language") or "fr").lower() == "en":

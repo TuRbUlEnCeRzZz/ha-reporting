@@ -311,6 +311,53 @@ def _comparison_source(source: dict[str, Any]) -> str:
       </article>"""
 
 
+def _derived_detail_html(rows, language, group_notes=True):
+    """Move only repeated, known common clauses into a scoped detail note.
+
+    Rows belong to one stable device and comparison target/period. Numeric
+    contributor coverage and all indicator-specific prose stay on their rows.
+    Unknown wording is deliberately left untouched.
+    """
+    if not rows:
+        return ""
+    english = language == 'en'
+    labels = ({'energy_per_cycle': 'Energy/cycle', 'runtime_per_cycle': 'Duration/cycle',
+               'energy_per_runtime': 'Energy/operating hour'} if english else
+              {'energy_per_cycle': 'Énergie/cycle', 'runtime_per_cycle': 'Durée/cycle',
+               'energy_per_runtime': 'Énergie/heure de fonctionnement'})
+    common = (
+        (" Counter cycles may represent starts; this descriptive ratio does not measure efficiency.",
+         "Counter cycles may represent starts; this descriptive ratio does not measure efficiency.", ""),
+        ("; full-period performance is not established.",
+         "Full-period performance is not established.", "."),
+    ) if english else (
+        (" Les cycles du compteur peuvent être des démarrages ; ce ratio descriptif ne mesure pas un rendement.",
+         "Les cycles du compteur peuvent être des démarrages ; ce ratio descriptif ne mesure pas un rendement.", ""),
+        (" ; performance de période complète non établie.",
+         "Performance de période complète non établie.", "."),
+    )
+    rendered = [(metric, str(text)) for metric, text in rows if text]
+    notes = []
+    if group_notes:
+        for clause, note, replacement in common:
+            affected = [n for n, (_, text) in enumerate(rendered) if clause in text]
+            if len(affected) < 2:
+                continue
+            affected_labels = []
+            for n in affected:
+                metric, text = rendered[n]
+                rendered[n] = (metric, text.replace(clause, replacement))
+                label = labels.get(metric, metric)
+                if label not in affected_labels:
+                    affected_labels.append(label)
+            notes.append(', '.join(affected_labels) + ': ' + note)
+    values = '<ul class="derived-indicators">' + ''.join(f'<li>{_e(text)}</li>' for _, text in rendered) + '</ul>'
+    if notes:
+        label = 'Reliability note' if english else 'Note de fiabilité'
+        values += '<div class="quality derived-reliability"><strong>' + _e(label) + '</strong><ul>' + ''.join(f'<li>{_e(note)}</li>' for note in notes) + '</ul></div>'
+    return values
+
+
 def _comparisons(result: dict[str, Any], context=None) -> str:
     comparisons = result.get("comparisons") or {}
     if not comparisons.get("enabled"):
@@ -333,7 +380,7 @@ def _comparisons(result: dict[str, Any], context=None) -> str:
         key = (comparison.get('target_id'), comparison.get('tg'), comparison.get('tp'), tuple(source.get('device_scope') or []))
         # Energy sentences can include a linked duration; individual detailed
         # rows remain explicit and are not used to select the summary.
-        details.setdefault(key, []).append(_render_ledger_id(fact['i'], context, language, 'detail', index))
+        details.setdefault(key, []).append((fact['k'], _render_ledger_id(fact['i'], context, language, 'detail', index)))
     for target in comparisons.get("targets") or []:
         summary = target.get("summary") or {}
         catalogs = []
@@ -343,7 +390,7 @@ def _comparisons(result: dict[str, Any], context=None) -> str:
                 cards = "".join(_comparison_source(s) for s in device.get("sources") or [])
                 key = (target.get('id'), target.get('label'), (target.get('resolved_period') or {}).get('label'), (catalog.get('id'), device.get('id')))
                 rows = details.get(key, [])
-                ratio_html = ('<ul class="derived-indicators">' + ''.join(f'<li>{_e(row)}</li>' for row in rows) + '</ul>') if rows else ''
+                ratio_html = _derived_detail_html(rows, language, group_notes=all((catalog.get('id'), device.get('id'))))
                 devices.append(f'<section class="device"><h3>{_e(device.get("name"))}</h3><div class="source-grid">{cards}</div>{ratio_html}</section>')
             catalogs.append(f'<section class="catalog"><h2>{_e(catalog.get("name"))}</h2>{"".join(devices)}</section>')
         blocks.append(f"""
@@ -427,46 +474,38 @@ def _ai_context_quality(ai: dict[str, Any], language: str = "fr") -> str:
 
 
 def _ai_analysis(result: dict[str, Any], context=None) -> str:
-    ai = result.get("ai_analysis") or {}
-    if not ai.get("enabled"):
-        return ""
-    status = ai.get("status") or "unknown"
-    language = str((result.get("report") or {}).get("language") or "fr").lower()
-    if status == "completed":
-        # Keep the deterministic overview authoritative; remove only its exact
-        # sentences from the AI display, without modifying the stored response.
-        digest = report_digest(result, language, context)
-        ai_text = str(ai.get('text') or '')
-        for rows in digest.values():
-            for sentence in rows:
-                ai_text = ai_text.replace(sentence, '')
-        lines = [line for line in ai_text.splitlines() if line.strip() not in {'', '-'}]
-        headings = {'SYNTHÈSE', 'SUMMARY', 'FAITS MARQUANTS', 'HIGHLIGHTS', "POINTS D'ATTENTION", 'ATTENTION POINTS', 'RECOMMANDATIONS', 'RECOMMENDATIONS'}
-        lines = [line for n,line in enumerate(lines) if line.strip() not in headings or (n+1 < len(lines) and lines[n+1].strip() not in headings)]
-        text = _e('\n'.join(lines)).replace('\n', '<br>')
-        context_quality = _ai_context_quality(ai, language)
-        entity = ai.get("entity_id") or "entité AI Task préférée"
-        duration = _num(ai.get("duration_seconds"), "s")
-        return f"""
-          <section class="ai-analysis ai-ok">
-            <div class="section-title"><div><h1>Analyse IA</h1><p>Interprétation automatique des statistiques. Les données, graphiques et indicateurs ci-dessous constituent la référence et permettent de vérifier, nuancer ou contester cette analyse.</p></div><span class="pill">AI Task · no-thinking</span></div>
-            <div class="ai-text">{text}</div>
-            <div class="quality">Source : {_e(entity)} · durée {duration} · les séries brutes ne sont pas transmises au modèle.</div>
-            {f'<div class="quality">{_e(context_quality)}</div>' if context_quality else ''}
-          </section>"""
-    if status in {"pending", "running"}:
-        label = "en cours" if status == "running" else "en attente"
-        return f"""
-          <section class="ai-analysis">
-            <div class="section-title"><div><h1>Analyse IA</h1><p>Le rapport statistique est disponible ; l’interprétation IA est traitée séparément.</p></div><span class="pill">{label}</span></div>
-            <div class="ai-text">Analyse locale en cours…</div>
-          </section>"""
-    error = ai.get("error") or "Analyse IA indisponible"
-    return f"""
-      <section class="ai-analysis ai-error">
-        <div class="section-title"><div><h1>Analyse IA</h1><p>Interprétation indisponible</p></div><span class="pill">erreur</span></div>
-        <div class="ai-text">{_e(error)}</div>
-      </section>"""
+    """Show validated complementary interpretation, otherwise compact trace only."""
+    ai = result.get('ai_analysis') or {}
+    if not ai.get('enabled'):
+        return ''
+    language = 'en' if (result.get('report') or {}).get('language') == 'en' else 'fr'
+    status = ai.get('status') or 'unknown'
+    entity = ai.get('entity_id') or ('preferred AI Task entity' if language == 'en' else 'entité AI Task préférée')
+    duration = _num(ai.get('duration_seconds'), 's')
+    trace = f'AI Task · {_e(entity)} · {duration}'
+    if status == 'completed':
+        from analysis.ai_report import _fact_ledger_context_v11, _complementary_lines
+        context = context if context is not None else _fact_ledger_context_v11(result)
+        selection = ai.get('selection') or {}
+        if not isinstance(selection, dict):
+            selection = {}
+        lines = [] if ai.get('selection_fallback') else _complementary_lines(context, selection, language)
+        quality = _ai_context_quality(ai, language)
+        if not lines:
+            label = 'No validated complementary interpretation.' if language == 'en' else 'Aucun complément d’interprétation validé.'
+            return (f'<section class="ai-analysis ai-trace"><p class="quality">{trace} · {label}</p>'
+                    + (f'<div class="quality">{_e(quality)}</div>' if quality else '') + '</section>')
+        title = 'Complementary AI interpretation' if language == 'en' else 'Complément d’interprétation IA'
+        text = '<br>'.join(_e(line) for line in lines)
+        return (f'<section class="ai-analysis ai-ok"><div class="section-title"><h1>{title}</h1><span class="pill">AI Task</span></div>'
+                f'<div class="ai-text">{text}</div><div class="quality">{trace}</div>'
+                + (f'<div class="quality">{_e(quality)}</div>' if quality else '') + '</section>')
+    if status in {'pending', 'running'}:
+        label = 'Interpretation pending; deterministic report available.' if language == 'en' else 'Interprétation en cours ; rapport déterministe disponible.'
+    else:
+        # Keep detailed exceptions in the stored result/UI diagnostics, not in PDF.
+        label = 'Interpretation unavailable; deterministic report available.' if language == 'en' else 'Interprétation indisponible ; rapport déterministe disponible.'
+    return f'<section class="ai-analysis ai-trace"><p class="quality">{trace} · {label}</p></section>'
 
 def render_report_html(result: dict[str, Any], theme: str = "dark") -> str:
     from analysis.ai_report import _fact_ledger_context_v11

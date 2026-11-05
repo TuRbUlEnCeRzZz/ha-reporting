@@ -1330,6 +1330,8 @@ def _project_ai_context(full: dict[str, Any], profile: str = "optimized") -> dic
     selected_fact_ids.update(item for item in (full.get("selection_policy") or {}).get("mandatory_summary", []) if item.startswith("F"))
     selected_fact_ids.update((full.get("selection_policy") or {}).get("priority_highlights") or [])
     selected_fact_ids.update((full.get("selection_policy") or {}).get("priority_attention") or [])
+    for candidate in full.get('interpretation_candidates') or []:
+        selected_fact_ids.update(candidate['evidence'])
 
     # Keep a small set of high-impact comparable changes as attention candidates.
     attention_facts = [
@@ -1396,6 +1398,7 @@ def _project_ai_context(full: dict[str, Any], profile: str = "optimized") -> dic
         "schema": full.get("schema"),
         "ledger_complete": False,
         "projection": f"deterministic_{profile}_v2",
+        "interpretation_candidates": list(full.get('interpretation_candidates') or []),
         "legend": full.get("legend"),
         "semantics": full.get("semantics"),
         "report": full.get("report"),
@@ -1420,6 +1423,8 @@ def _project_ai_context(full: dict[str, Any], profile: str = "optimized") -> dic
     _populate_selection_policy(projected,
         (full.get("selection_policy") or {}).get("priority_highlights") or [],
         (full.get("selection_policy") or {}).get("priority_attention") or [])
+    if 'interpretation_candidates' in full:
+        projected['selection_policy']['interpretations'] = [row['i'] for row in full['interpretation_candidates']]
     return projected
 
 def _extract_json_object(value: Any) -> dict[str, Any] | None:
@@ -1569,6 +1574,86 @@ def _diverse_summary_ids(context: dict[str, Any], ids: list[str]) -> list[str]:
     return selected
 
 
+def _interpretation_candidates(context: dict[str, Any]) -> list[dict[str, Any]]:
+    """Offer bounded interpretations of existing facts, never new calculations.
+
+    Candidates do not affect eligibility, ranking, ratios or the notification.
+    Both contributors must already be validated device/target-local ratios.
+    """
+    index = _selection_index(context)
+    candidates = []
+    for fid in (context.get('selection_policy') or {}).get('priority_highlights') or []:
+        energy = index.get(fid) or {}
+        source = index.get(energy.get('s')) or {}
+        comparison = index.get(energy.get('c')) or {}
+        if energy.get('k') != 'energy_per_cycle' or (_as_number(energy.get('d')) or 0) <= 0:
+            continue
+        if source.get('category') == 'refrigeration' or energy.get('cycle_kind') == 'starts':
+            continue
+        scope = source.get('device_scope') or []
+        if len(scope) != 2 or not all(scope):
+            continue
+        durations = []
+        for fact in context.get('facts') or []:
+            other_source = index.get(fact.get('s')) or {}
+            other_comparison = index.get(fact.get('c')) or {}
+            if fact.get('k') != 'runtime_per_cycle' or other_source.get('device_scope') != scope:
+                continue
+            if any(other_comparison.get(k) != comparison.get(k) for k in ('target_id','tg','tp')):
+                continue
+            if fact.get('cycle_kind') == 'starts' or not meaningful_change(fact, other_source, other_comparison):
+                continue
+            # Defensive checks also protect legacy/stored selections at display.
+            if any(other_comparison.get(k) or comparison.get(k) for k in ('br','rr','bz','rz')):
+                continue
+            if not energy.get('contributors') or not fact.get('contributors'):
+                continue
+            durations.append(fact)
+        if len(durations) != 1:
+            continue
+        duration = durations[0]
+        candidates.append({'i': f'I{len(candidates)+1}',
+            'kind': 'energy_duration_up' if duration['d'] > 0 else 'energy_duration_opposed',
+            'evidence': [fid, duration['i']]})
+    return candidates
+
+
+def _complementary_lines(context: dict[str, Any], selection: dict[str, Any], language: str) -> list[str]:
+    """Render only model-chosen, independently revalidated contextual relations.
+
+    No model prose, number, label or diagnostic is accepted as factual content.
+    Legacy summary/attention/recommendation selections remain supported elsewhere.
+    """
+    selected = selection.get('interpretations')
+    if not isinstance(selected, list):
+        return []
+    allowed = {row['i']: row for row in _interpretation_candidates(context)}
+    index = _selection_index(context)
+    lines = []
+    for iid in selected:
+        if not isinstance(iid, str) or iid not in allowed:
+            continue
+        candidate = allowed[iid]
+        energy, duration = (index[fid] for fid in candidate['evidence'])
+        label = _source_label(index.get(energy.get('s')) or {}, language)
+        if candidate['kind'] == 'energy_duration_up':
+            body = ("The observed mean cycle duration also increased. Longer operation may contribute to the energy-per-cycle increase. Different operating modes or loads are possible hypotheses, not measured causes; compare the operating conditions and cycle durations before concluding."
+                if language == 'en' else
+                "La durée moyenne observée des cycles augmente également. Un fonctionnement plus long peut contribuer à la hausse de l’énergie par cycle. Des modes d’utilisation ou des charges différents sont des hypothèses, pas des causes mesurées ; comparer les conditions d’utilisation et les durées avant de conclure.")
+        else:
+            body = ("Energy per cycle increased while the observed mean duration decreased. Longer cycles alone cannot explain this contrast. Compare operating conditions and loads; these are hypotheses to check, not a diagnosis."
+                if language == 'en' else
+                "L’énergie par cycle augmente alors que la durée moyenne observée diminue. Des cycles plus longs ne suffisent donc pas à expliquer ce contraste. Comparer les conditions d’utilisation et les charges ; il s’agit d’hypothèses à vérifier, pas d’un diagnostic.")
+        if energy.get('qualified') or duration.get('qualified'):
+            body += (" Partial measurements limit this interpretation." if language == 'en' else " Les mesures partielles limitent cette interprétation.")
+        text = f'{label}: {body}' if language == 'en' else f'{label} : {body}'
+        if text not in lines:
+            lines.append(text)
+        if len(lines) >= 3:
+            break
+    return lines
+
+
 def _validate_selection(data: Any, context: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     """Validate an id-only AI selection and inject mandatory quality facts."""
     parsed = _extract_json_object(data) or {}
@@ -1645,11 +1730,19 @@ def _validate_selection(data: Any, context: dict[str, Any]) -> tuple[dict[str, A
             if len(recommendations) >= 4:
                 break
 
+    # Optional additive field; old ID-only responses remain valid unchanged.
+    candidates = {row['i'] for row in _interpretation_candidates(context)}
+    raw_interpretations = parsed.get('interpretations')
+    interpretations = []
+    if isinstance(raw_interpretations, list):
+        interpretations = list(dict.fromkeys(i for i in raw_interpretations
+            if isinstance(i, str) and i in candidates))[:3]
     return {
         "summary": _diverse_summary_ids(context, summary),
         "attention": attention,
         "recommendations": recommendations,
-    }, model_valid
+        **({'interpretations': interpretations} if 'interpretations' in parsed else {}),
+    }, model_valid or bool(interpretations) or (isinstance(raw_interpretations, list) and not raw_interpretations)
 
 def _fallback_selection(context: dict[str, Any]) -> dict[str, Any]:
     """Deterministic fallback if the model does not return valid JSON IDs."""
@@ -2340,6 +2433,8 @@ def build_budgeted_ai_context(
 
     legacy_json = _encoded_context(compact_report_context(result))
     full_context = _fact_ledger_context_v11(result)
+    full_context['interpretation_candidates'] = _interpretation_candidates(full_context)
+    full_context['selection_policy']['interpretations'] = [row['i'] for row in full_context['interpretation_candidates']]
     full_context_json = _encoded_context(full_context)
 
     effective = requested
@@ -2513,15 +2608,16 @@ The context uses `ha-reporting-ai-context-v14`, a deterministic fact ledger proj
 
 Your ONLY job is to select IDs already listed in `selection_policy`.
 Return exactly one JSON object and nothing else:
-{{"summary":["ID"],"attention":["ID"],"recommendations":[{{"action":"ACTION","evidence":"ID"}}]}}
+{{"summary":["ID"],"attention":["ID"],"recommendations":[{{"action":"ACTION","evidence":"ID"}}],"interpretations":["I_ID"]}}
 
 Rules:
+- Your primary contribution is complementary interpretation, not a second statistical summary. Select 0–3 `interpretations` IDs from `interpretation_candidates` only when the relation adds useful context. These candidates link existing same-device/same-period observations and qualified hypotheses/checks; never invent causes. An empty list is correct when nothing useful is added. Leave summary/attention/recommendations empty unless explicitly needed for legacy evidence selection; do not spend output on a second summary. Legacy summary/attention/recommendations remain supported, but repeated numbers, coverage warnings and generic monitoring alone are not complementary interpretation.
 - Keep `selection_policy.priority_highlights` in order as the shared deterministic observations. Do not replace them with other appliance facts. Qualified observed ratios are descriptive, not full-period efficiency evidence. Explain usage counts versus per-cycle changes; possible programs or loads are hypotheses only, never measured facts. Group quality warnings per device; observations describe changes, attention means uncertainty, and recommendations require a concrete supported check. Empty advice is valid; do not diagnose faults or efficiency from counters.
 - Rank appliance changes by absolute kWh impact and confidence before percentages. Ignore idle zero-versus-zero comparisons.
 - `energy_per_cycle` and `runtime_per_cycle` are validated derived facts; prefer them when distinguishing cycle count from consumption per cycle. Do not derive new ratios yourself.
 - Historical N/N-x change and forecast-versus-actual gap are distinct. Availability does not establish coverage or density; a counter reset does not establish an appliance fault. Correlation is not causation.
 - Use `check_cycle_usage` only for an eligible energy-per-cycle increase. Avoid repeating generic recommendations; an empty recommendations list is valid.
-- `summary`: 1 to 4 eligible `F*`, `R*` or mandatory `Q*` IDs. Prefer current `mean`/`period_delta`/`integrated_energy_kwh`, representative comparison `mean`/`period_delta`, explicit relationships, and mandatory quality signals.
+- `summary`: 0 to 4 eligible `F*`, `R*` or mandatory `Q*` IDs. Prefer current `mean`/`period_delta`/`integrated_energy_kwh`, representative comparison `mean`/`period_delta`, explicit relationships, and mandatory quality signals.
 - `attention`: 0 to 5 eligible IDs. Prefer mandatory `Q*` quality signals, partial/limited/reconstructed comparison sets, quality-limited sources, or relationships whose full-period comparison is not supported.
 - `recommendations`: 0 to 4 objects. `action` must be one of `selection_policy.recommendation_actions`; `evidence` must be an attention-worthy ID from the context.
 - `verify_reconstructed_counter` is valid only when its own evidence explicitly indicates a reconstructed counter/reset (`st=reconstructed`, `br=true` or `rr=true`). Do not borrow reset evidence from another fact of the same device.
@@ -2542,15 +2638,16 @@ Le contexte utilise `ha-reporting-ai-context-v14`, une projection du registre d�
 
 Ta SEULE tâche est de sélectionner des identifiants déjà présents dans `selection_policy`.
 Retourne exactement un objet JSON et rien d'autre :
-{{"summary":["ID"],"attention":["ID"],"recommendations":[{{"action":"ACTION","evidence":"ID"}}]}}
+{{"summary":["ID"],"attention":["ID"],"recommendations":[{{"action":"ACTION","evidence":"ID"}}],"interpretations":["I_ID"]}}
 
 Règles :
+- Ton apport principal est une interprétation complémentaire, pas une seconde synthèse statistique. Sélectionne 0 à 3 IDs `interpretations` parmi `interpretation_candidates` seulement si la relation apporte un contexte utile. Ces candidats relient des observations du même appareil et de la même période à des hypothèses/vérifications qualifiées ; n’invente aucune cause. Une liste vide convient si aucun apport utile n’existe. Laisse summary/attention/recommendations vides sauf besoin explicite de sélection de preuves pour compatibilité ; ne produis pas une seconde synthèse. Les anciennes clés summary/attention/recommendations restent compatibles ; chiffres répétés, réserves de couverture et surveillance générique ne constituent pas à eux seuls un complément.
 - Conserve `selection_policy.priority_highlights` dans leur ordre : observations déterministes communes au PDF et à la notification. Ne les remplace pas par d’autres faits d’appareils. Les ratios partiels sont descriptifs, pas des preuves de performance complète. Distingue nombre de cycles et consommation par cycle ; programmes, température de lavage ou charge restent des hypothèses, jamais des faits mesurés. Regroupe les limites par appareil. Observation = évolution mesurée ; à surveiller = incertitude ; action = vérification concrète étayée. Aucune action est valide ; aucun diagnostic de panne ou de rendement à partir des compteurs.
 - Classe les évolutions d’appareils selon leur impact absolu en kWh et la confiance, avant les pourcentages. Ignore les comparaisons nulles contre nulles.
 - `energy_per_cycle` et `runtime_per_cycle` sont des faits dérivés validés ; privilégie-les pour distinguer le nombre de cycles de la consommation par cycle. Ne calcule aucun autre ratio.
 - L’évolution historique N/N-x et l’écart réel/prévision sont distincts. La disponibilité ne garantit ni couverture ni densité ; un reset de compteur ne prouve pas une panne. Une corrélation ne prouve pas une cause.
 - Utilise `check_cycle_usage` uniquement pour une hausse éligible de l’énergie par cycle. Évite les recommandations génériques répétées ; une liste de recommandations vide est valide.
-- `summary` : 1 à 4 IDs `F*`, `R*` ou `Q*` obligatoires éligibles. Privilégie les `mean`/`period_delta`/`integrated_energy_kwh` courants, les `mean`/`period_delta` de comparaison représentative, les relations explicites et les signaux globaux de qualité obligatoires.
+- `summary` : 0 à 4 IDs `F*`, `R*` ou `Q*` obligatoires éligibles. Privilégie les `mean`/`period_delta`/`integrated_energy_kwh` courants, les `mean`/`period_delta` de comparaison représentative, les relations explicites et les signaux globaux de qualité obligatoires.
 - `attention` : 0 à 5 IDs éligibles. Privilégie les signaux `Q*` obligatoires, les comparaisons partielles/limitées/reconstruites, les sources de qualité limitée ou les relations dont la comparaison de période complète n’est pas supportée.
 - `recommendations` : 0 à 4 objets. `action` doit appartenir à `selection_policy.recommendation_actions` et `evidence` doit être un ID digne d’attention présent dans le contexte.
 - `verify_reconstructed_counter` n'est valide que si son propre élément de preuve indique explicitement un compteur reconstruit/reset (`st=reconstructed`, `br=true` ou `rr=true`). N'emprunte jamais une preuve de reset à un autre fait du même appareil.
@@ -2701,7 +2798,12 @@ def analyze_report_with_ai(
         selection_fallback = not selection_valid
         if selection_fallback:
             selection = _fallback_selection(context)
-        text = _render_selection_analysis(context, selection, language)
+        complementary = [] if selection_fallback else _complementary_lines(context, selection, language)
+        if not selection_fallback and 'interpretations' in selection:
+            text = '\n'.join(complementary)
+        else:
+            # Preserve legacy ID-selection consumers and deterministic fallback.
+            text = _render_selection_analysis(context, selection, language)
 
         finished = time.time()
         return {
@@ -2714,6 +2816,7 @@ def analyze_report_with_ai(
             "text": text,
             "selection": selection,
             "selection_fallback": selection_fallback,
+            "interpretation_status": 'useful' if complementary else ('invalid_response' if selection_fallback else 'no_added_value'),
             "input": {
                 "context_characters": context_meta["characters"],
                 "context_target_characters": context_meta["target_characters"],

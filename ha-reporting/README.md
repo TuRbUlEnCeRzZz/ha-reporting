@@ -2,9 +2,7 @@
 
 ![HA Reporting](logo.png)
 
-**Current stable version: 0.2.1**
-
-**Next release in preparation: 0.2.2 — energy interpretation improvements**
+**Current stable version: 0.2.2**
 
 HA Reporting is a reporting engine for **Home Assistant OS**. It turns Home Assistant sensor history stored in VictoriaMetrics into structured reports, period comparisons, optional AI commentary and locally generated PDF documents.
 
@@ -101,9 +99,9 @@ Beta.21 introduces the first HA Reporting internationalization layer.
 
 From beta.21 onward, new and modified maintainer-facing repository content is written in **English**. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-## Preparing 0.2.2 — Energy interpretation improvements
+## What is new in 0.2.2 — Energy interpretation improvements
 
-`0.2.2` focuses on more useful energy analysis and concise mobile reports. The feature changes have been merged; the application package still declares **0.2.1** until release metadata is updated. This section describes the upcoming release, not a published package.
+`0.2.2` focuses on more useful energy analysis and concise mobile reports. The application package declares **0.2.2**.
 
 - Ranks observations using absolute kWh impact, relative change and data quality, while keeping idle and unchanged readings in detailed tables.
 - Adds deterministic **kWh/cycle** and **hours/cycle** comparisons only for unambiguous, sufficiently covered, comparable counters. It does not invent missing values or infer equipment faults from correlations.
@@ -112,6 +110,16 @@ From beta.21 onward, new and modified maintainer-facing repository content is wr
 - Replaces copied AI essays in notifications with selected energy figures, up to two appliance facts, a significant source warning and one justified action; empty sections are omitted.
 - Adds a deterministic PDF overview when useful, avoids duplicate AI sentences, clarifies raw-history runtime verification and improves wrapping of long comments.
 - Preserves detailed statistics and data-quality classifications, and fixes forecast relationship identities when different devices share sensor keys.
+
+### Targeted relevance corrections
+
+The follow-up corrections use one deterministic appliance selection for the PDF, mobile notification and AI Task context. Absolute energy impact and measurement quality take priority over percentages alone; negligible changes no longer fill the highlights. A report can state that no significant change was detected.
+
+Short durations are displayed in minutes/seconds and small energy ratios in Wh. Unrounded values remain authoritative, and unselected validated ratios stay available in the PDF details. Repeated quality warnings are grouped by device; idle measurements alone do not trigger generic collection advice. Material reconstructed-counter changes can appear as explicitly qualified attention, never as evidence of an appliance fault.
+
+New devices default to **Other**, avoiding the browser's former first-option selection of **Refrigeration**. Existing categories are preserved and must be corrected explicitly if needed. Historical calculations, counter reconstruction, saved settings, AI Task/Ollama, notification recipients and exports are unchanged; no new dependency or required setting is introduced.
+
+See [targeted validation](../VALIDATION-insight-relevance.md) and [paste-ready release update](../RELEASE-NOTES-insight-relevance.md). The weekly examples are synthetic; real Home Assistant/Ollama and Raspberry Pi acceptance remain to be completed.
 
 The historical statistics, period, comparison and counter-reconstruction engines are unchanged. No new application dependency or configuration option is required. Source availability alone is not treated as proof of reliable coverage or sampling density. AI remains optional; deterministic reporting remains available when AI fails.
 

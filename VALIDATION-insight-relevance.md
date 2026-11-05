@@ -2,7 +2,7 @@
 
 ## Scope and baseline
 
-The working checkout started clean at `a90eeab`, which contains the energy-insight implementation. The remote `v0.2.2` release also includes a documentation merge. No release version, tag, saved configuration schema, dependency or lockfile is changed by this patch. When preparing the PR, the branch was rebased onto `9a15b6b`, where main already declares `0.2.2` in `config.yaml`. This patch does not change release metadata.
+The working checkout started clean at `a90eeab`, which contains the energy-insight implementation. The remote `v0.2.2` release also includes a documentation merge. No release version, tag, saved configuration schema, dependency or lockfile is changed by this patch. After rebasing, the existing package-version test was aligned with the 0.2.2 metadata already changed on main; before that alignment, it was the sole failing test (236 passed, 1 failed). When preparing the PR, the branch was rebased onto `9a15b6b`, where main already declares `0.2.2` in `config.yaml`. This patch does not change release metadata.
 
 Before source changes, all **213 Python tests**, **118 UI checks** and **16 product UI checks** passed. New failing presentation tests were then added before applying the corrections.
 
@@ -78,6 +78,9 @@ Numeric ledger facts matched exactly. These runs show a small additional present
 - `ha-reporting/app/rendering/html_report.py`: shared ledger and retained detailed ratios.
 - `ha-reporting/app/app.js`: neutral category only on new-device creation.
 - `tests/test_insight_relevance.py`: targeted presentation/quality/compatibility regressions.
+- `tests/test_regressions.py`: align the package-version assertion with the 0.2.2 metadata already changed on main.
+- `README.md`, `ha-reporting/README.md`: current package version and targeted correction overview.
+- `RELEASE-NOTES-insight-relevance.md`: paste-ready release update.
 - `tests/fixtures/weekly_relevance_examples.json`: explicitly synthetic reference examples.
 - `tests/test_category_defaults.cjs`: new-device default and preservation of existing category.
 - `validation/insight_relevance.py`: reproducible baseline comparison, local benchmark and PDF generation.

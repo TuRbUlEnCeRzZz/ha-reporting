@@ -1526,7 +1526,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.2.1')
+        self.assertEqual(config['version'],'0.2.2')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(any(m.get('type')=='app_config' and m.get('path')=='/config' and m.get('read_only') is False for m in config['map']))
         self.assertFalse((ROOT/'custom_components').exists())

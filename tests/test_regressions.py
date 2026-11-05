@@ -998,15 +998,15 @@ class HtmlRendererTests(unittest.TestCase):
         self.assertNotIn('--paper:#14191f',html)
         self.assertIn('@page{size:A4;margin:10mm;background:#ffffff}',html)
 
-    def test_html_report_contains_escaped_ai_analysis(self):
+    def test_html_report_retains_legacy_ai_trace_without_unvalidated_prose(self):
         html=render_report_html(self.sample_result())
-        self.assertIn('Analyse IA',html)
-        self.assertIn('AI Task · no-thinking',html)
-        self.assertIn('SYNTHÈSE<br>Tout va bien &lt;script&gt;.',html)
-        self.assertNotIn('Tout va bien <script>.',html)
-        self.assertLess(html.index('Analyse IA'), html.index('Électroménager'))
-        self.assertLess(html.index('Analyse IA'), html.index('Comparaisons N / N-x'))
-        self.assertIn('permettent de vérifier, nuancer ou contester cette analyse', html)
+        self.assertIn('AI Task',html)
+        self.assertIn('ai_task.local',html)
+        self.assertIn('Aucun complément',html)
+        self.assertNotIn('Tout va bien',html)
+        self.assertNotIn('<script>.',html)
+        self.assertLess(html.index('AI Task'), html.index('Électroménager'))
+        self.assertLess(html.index('AI Task'), html.index('Comparaisons N / N-x'))
 
     def test_beta22_ai_context_diagnostics_render_in_french_and_english(self):
         sample=self.sample_result()
@@ -1147,7 +1147,7 @@ class Beta12ExportProviderTests(unittest.TestCase):
         self.assertTrue(status['reachable'])
         self.assertEqual(seen['url'],'http://paperless:8000/api/documents/?page_size=1')
         self.assertEqual(seen['auth'],'Token secret')
-        self.assertIn('0.2.4',seen['ua'])
+        self.assertIn('0.2.5',seen['ua'])
 
     def test_paperless_upload_is_multipart_and_uses_requested_filename(self):
         import tempfile
@@ -1526,7 +1526,7 @@ class PackageTests(unittest.TestCase):
         for p in ROOT.rglob('*.yaml'):
             self.assertIsInstance(yaml.safe_load(p.read_text()),dict)
         config=yaml.safe_load((addon/'config.yaml').read_text())
-        self.assertEqual(config['version'],'0.2.4')
+        self.assertEqual(config['version'],'0.2.5')
         self.assertIn('aarch64',config['arch'])
         self.assertTrue(any(m.get('type')=='app_config' and m.get('path')=='/config' and m.get('read_only') is False for m in config['map']))
         self.assertFalse((ROOT/'custom_components').exists())

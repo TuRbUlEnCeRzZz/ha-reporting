@@ -3192,6 +3192,10 @@ async function editDevice(catalogId, deviceId){
   const catalog = catalogs.find(c => c.id === catalogId);
   const device = catalog.devices.find(d => d.id === deviceId);
   await loadCategories();
+  // Keep a historical/custom value available when its category definition is absent.
+  const deviceCategories = categories.some(c => c.id === device.category)
+    ? categories
+    : [{id:device.category, name:device.category}, ...categories];
 
   openModal("Modifier l'appareil", `
     <label>Nom
@@ -3202,7 +3206,7 @@ async function editDevice(catalogId, deviceId){
     </label>
     <label>Catégorie
       <select id="modalDeviceCategory">
-        ${categories.map(c => `<option value="${esc(c.id)}" ${c.id === device.category ? "selected" : ""}>${esc(c.name)}</option>`).join("")}
+        ${deviceCategories.map(c => `<option value="${esc(c.id)}" ${c.id === device.category ? "selected" : ""}>${esc(c.name)}</option>`).join("")}
       </select>
     </label>
   `, async () => {

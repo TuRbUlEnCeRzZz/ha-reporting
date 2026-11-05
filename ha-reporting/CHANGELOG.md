@@ -1,5 +1,15 @@
 ## 0.2.2 (in preparation)
 
+## 0.2.5 — Prepared consolidation release
+
+- Preserve deterministic statistics, ranking, ratios, context modes and notifications.
+- Add optional ID-only complementary interpretations backed by existing energy/duration facts; retain legacy response compatibility and the single AI Task call.
+- Show only revalidated useful interpretation in the PDF; otherwise keep concise traceability. Technical error details remain in diagnostics.
+- Group repeated known ratio reliability clauses per device/period while retaining indicator-specific coverage.
+- Preserve unknown historical categories when editing devices; do not migrate or infer existing categories.
+- Align package, runtime banner and User-Agent version to 0.2.5. No automatic tag/release publication.
+
+
 ## 0.2.4 — Prepared corrective release
 
 - Restore the deterministic first-page overview, removing exact repetitions from AI display instead.

@@ -2,7 +2,7 @@
 
 ![HA Reporting](logo.png)
 
-**Current package version: 0.2.4 (prepared; not published by this change)**
+**Current package version: 0.2.5 (prepared; not published by this change)**
 
 HA Reporting is a reporting engine for **Home Assistant OS**. It turns Home Assistant sensor history stored in VictoriaMetrics into structured reports, period comparisons, optional AI commentary and locally generated PDF documents.
 
@@ -98,6 +98,14 @@ Beta.21 introduces the first HA Reporting internationalization layer.
 - User-owned names such as report names, catalogue names, device names and entity IDs are not translated.
 
 From beta.21 onward, new and modified maintainer-facing repository content is written in **English**. See [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+## 0.2.5 — Complementary AI interpretation and clearer PDF details
+
+The deterministic overview, statistical results, observation ranking and mobile notification are unchanged. AI Task can optionally select bounded complementary interpretations linking existing energy/cycle and duration/cycle observations. HA Reporting validates the same-device/same-period evidence and writes cautious explanations; the model cannot supply factual numbers, device names or unsupported diagnoses. The existing ID-only response fields remain compatible. When no useful interpretation is selected, the PDF keeps a compact AI source/duration/context trace instead of a second statistical summary. Legacy unstructured prose remains stored for diagnostics but is not treated as verified interpretation.
+
+Repeated known reliability clauses are grouped only within one device and comparison period. Indicator-specific coverage and numerical details remain visible. Editing an unknown historical category now preserves its exact value instead of implicitly selecting the first known category. Existing ventilation categories are not migrated or guessed from names.
+
+See [release notes](../RELEASE-NOTES-0.2.5.md) and [validation](../VALIDATION-0.2.5.md). No new dependency, mandatory setting, AI call or history request is introduced. Live Ollama and Raspberry Pi acceptance remain outstanding.
 
 ## 0.2.4 — Qualified observations and restored deterministic overview
 

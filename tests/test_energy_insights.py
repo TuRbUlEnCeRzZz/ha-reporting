@@ -188,7 +188,8 @@ class EnergyInsightsTests(unittest.TestCase):
         result['ai_analysis'] = {'enabled': True, 'status': 'error', 'error': 'Ollama unavailable'}
         html = render_report_html(result)
         self.assertIn('kWh/cycle', html)
-        self.assertIn('Ollama unavailable', html)
+        self.assertIn('Interprétation indisponible', html)
+        self.assertEqual(result['ai_analysis']['error'], 'Ollama unavailable')
         path = render_pdf_native(html)
         self.assertGreater(path.stat().st_size, 1000)
 
@@ -214,12 +215,13 @@ class EnergyInsightsTests(unittest.TestCase):
         self.assertIn('Period overview', render_report_html(result))
 
 class AdditionalRegressionTests(unittest.TestCase):
-    def test_long_comments_fit_native_page_width(self):
+    def test_unvalidated_long_comments_do_not_expand_or_overflow_pdf(self):
         from weasyprint import HTML
         result = scenario()
         result['ai_analysis'] = {'enabled': True, 'status': 'completed', 'text': ('Commentaires détaillés sur les mesures. ' * 200) + ('longcomment' * 100)}
         document = HTML(string=render_report_html(result)).render()
-        self.assertGreater(len(document.pages), 2)
+        self.assertGreaterEqual(len(document.pages), 1)
+        self.assertNotIn('longcommentlongcomment', render_report_html(result))
         for page in document.pages:
             for box in page._page_box.descendants():
                 if getattr(box, 'text', None):

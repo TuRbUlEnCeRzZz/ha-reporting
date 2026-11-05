@@ -98,7 +98,7 @@ class EnergyInsightsTests(unittest.TestCase):
         self.assertNotIn('p', energy)
 
     def test_partial_reconstructed_missing_coverage_and_invalid_are_not_ratios(self):
-        for status in ('partial', 'limited', 'reconstructed', 'unavailable'):
+        for status in ('limited', 'reconstructed', 'unavailable'):
             result = scenario()
             item = result['comparisons']['targets'][0]['catalogs'][0]['devices'][1]['sources'][1]
             item['comparison_status'] = status
@@ -257,7 +257,7 @@ class AdditionalRegressionTests(unittest.TestCase):
         result = scenario()
         context = _fact_ledger_context_v11(result)
         result['ai_analysis'] = {'status': 'completed', 'text': _render_selection_analysis(context, _fallback_selection(context), 'fr')}
-        self.assertEqual(_energy_overview(result), '')
+        self.assertIn('L’essentiel', _energy_overview(result))
 
     def test_same_sensor_keys_keep_forecast_pairing_local(self):
         result = scenario()

@@ -1,5 +1,16 @@
 ## 0.2.2 (in preparation)
 
+## 0.2.4 — Prepared corrective release
+
+- Restore the deterministic first-page overview, removing exact repetitions from AI display instead.
+- Allow explicitly qualified observed ratios from exploitable partial comparisons; preserve original quality classes and historical calculations.
+- Rank explanatory energy/cycle contrasts and contextualize changes in usage counts without claiming efficiency or faults.
+- Retain reconstructed totals as qualified attention and exclude reconstructed contributors from combined ratios.
+- Preserve readable units; show up to three concise mobile observations, with no mandatory fill.
+- Add PDF-excerpt regression tests and reproducible local presentation validation. Align package, runtime banner and outgoing User-Agent versions.
+- No new dependencies or required settings; no automatic release/tag publication.
+
+
 - rank summary observations by energy impact and confidence; omit idle and unchanged comparisons from highlights;
 - add guarded energy/runtime-per-cycle facts and contextual verification recommendations;
 - distinguish historical consumption changes from forecast gaps and preserve reconstructed-counter semantics;

@@ -1280,6 +1280,10 @@ def _fact_score(fact: dict[str, Any], sources: dict[str, dict[str, Any]], compar
             score += min(seconds/60, 30)
         if stat == "energy_per_cycle" and meaningful_change(fact, source, comparison):
             score += min(abs(_as_number(fact.get("p")) or 0), 100)/4
+            if (fact.get('total_gap') or 0) * (fact.get('d') or 0) < 0:
+                score += 25  # Total and per-cycle trends differ: useful context.
+        if fact.get('qualified'):
+            score -= 8  # Caution without discarding exploitable partial inputs.
     return score
 
 
@@ -1497,6 +1501,11 @@ def _recommendation_action_supported(action: str, evidence: str, context: dict[s
         comparison = index.get(row.get("c")) or {}
         sid = row.get("s") or comparison.get("s") or (evidence if str(evidence).startswith("S") else None)
         ids = {sid} if sid else set(index)
+        scope = (index.get(sid) or {}).get('device_scope')
+        for fid in (context.get('selection_policy') or {}).get('priority_highlights') or []:
+            fact = index.get(fid) or {}
+            if fact.get('k') == 'energy_per_cycle' and (index.get(fact.get('s')) or {}).get('device_scope') == scope and scope:
+                return False
         active = False
         for fact in context.get("facts") or []:
             comp = index.get(fact.get("c")) or {}
@@ -1879,6 +1888,12 @@ def _render_ledger_id(item_id: str, context: dict[str, Any], language: str, sect
         label = _source_label(source, language)
         metric = source.get("m")
         stat = row.get("k")
+        if stat == 'energy_per_runtime':
+            values = f"{_fmt_number(row['b'], language)} / {_fmt_number(row['r'], language)} kWh/h"
+            text = (f"{label}: observed energy per operating hour, N / reference: {values}. Descriptive ratio, not efficiency." if language == 'en' else f"{label} : énergie observée par heure de fonctionnement, N / référence : {values}. Ratio descriptif, pas un rendement.")
+            if row.get('qualified'):
+                text += (" Partial contributor coverage." if language == 'en' else " Couverture des contributeurs partielle.")
+            return text
         if stat in {"energy_per_cycle", "runtime_per_cycle"}:
             base, reference, unit = format_cycle_pair(stat, row['b'], row['r'], language)
             starts = row.get('cycle_kind') == 'starts'
@@ -1895,8 +1910,12 @@ def _render_ledger_id(item_id: str, context: dict[str, Any], language: str, sect
             else:
                 text = f"{label} : {base} contre {reference} ({target}){pct} ; {row['cycles_base']:g} contre {row['cycles_reference']:g} {counter_label}."
                 caution = " Moins de cycles mais davantage d’énergie totale ; les conditions d’utilisation peuvent l’expliquer, sans cause établie."
-            if stat == "energy_per_cycle" and row['cycles_base'] < row['cycles_reference'] and row['total_gap'] > 0:
-                text += caution
+            if stat == "energy_per_cycle":
+                text += (f" Total energy: {_fmt_number(row.get('total_base'), language)} versus {_fmt_number(row.get('total_reference'), language)} kWh." if language == 'en' else f" Énergie totale : {_fmt_number(row.get('total_base'), language)} contre {_fmt_number(row.get('total_reference'), language)} kWh.")
+                if row['cycles_base'] < row['cycles_reference'] and row['total_gap'] > 0:
+                    text += caution
+                elif row['cycles_base'] < row['cycles_reference'] and row['total_gap'] < 0:
+                    text += (" Fewer cycles contribute to the lower total; this does not establish improved efficiency." if language == 'en' else " La baisse du nombre de cycles contribue à celle du total ; elle ne démontre pas un meilleur rendement.")
             if stat == "energy_per_cycle" and section != "detail":
                 for related in context.get("facts") or []:
                     related_source = sources.get(related.get("s")) or {}
@@ -1912,6 +1931,10 @@ def _render_ledger_id(item_id: str, context: dict[str, Any], language: str, sect
                         break
             if source.get('category') == 'refrigeration':
                 text += (" Counter cycles may represent starts; this descriptive ratio does not measure efficiency." if language == 'en' else " Les cycles du compteur peuvent être des démarrages ; ce ratio descriptif ne mesure pas un rendement.")
+            if row.get('qualified') and section == 'mobile':
+                return (f"{label}: {base} versus {reference}{pct}; {row['cycles_base']:g} versus {row['cycles_reference']:g} {counter_label}; partial observed ratio, coverage ≥{_fmt_number(row['coverage'], language)}%." if language == 'en' else f"{label} : {base} contre {reference}{pct} ; {row['cycles_base']:g} contre {row['cycles_reference']:g} {counter_label} ; ratio observé partiel, couverture ≥{_fmt_number(row['coverage'], language)} %.")
+            if row.get('qualified'):
+                text += (f" Partial observed ratio (minimum contributor coverage {_fmt_number(row['coverage'], language)}%); full-period performance is not established." if language == 'en' else f" Ratio observé partiel (couverture minimale des contributeurs {_fmt_number(row['coverage'], language)} %) ; performance de période complète non établie.")
             return text
         # integrated_energy_kwh is a derived ENERGY fact even when the source
         # itself is a power sensor expressed in W. Never inherit the source unit.
@@ -1927,6 +1950,24 @@ def _render_ledger_id(item_id: str, context: dict[str, Any], language: str, sect
                 text = f"{label}: {stat_label} {base} {unit} versus {reference} {unit}; gap {gap} {unit}{pct_text}."
             else:
                 text = f"{label} : {stat_label} {base} {unit} contre {reference} {unit} ; écart {gap} {unit}{pct_text}."
+            if metric in {'runtime', 'energy_total'} and stat == 'period_delta':
+                for related in context.get('facts') or []:
+                    related_comp = comparisons.get(related.get('c')) or {}
+                    related_source = sources.get(related.get('s')) or {}
+                    wanted = 'runtime_per_cycle' if metric == 'runtime' else 'energy_per_cycle'
+                    if metric == 'energy_total' and not meaningful_change(related, related_source, related_comp):
+                        continue
+                    if related.get('k') != wanted or not source.get('device_scope') or related_source.get('device_scope') != source.get('device_scope'):
+                        continue
+                    if any(related_comp.get(k) != comparison.get(k) for k in ('target_id','tg','tp')):
+                        continue
+                    b, r, unit = format_cycle_pair(wanted, related['b'], related['r'], language)
+                    text += (f" Counter cycles: {related['cycles_base']:g} versus {related['cycles_reference']:g}; observed mean {b} versus {r} {unit}." if language == 'en' else f" Cycles du compteur : {related['cycles_base']:g} contre {related['cycles_reference']:g} ; moyenne observée {b} contre {r} {unit}.")
+                    if metric == 'runtime' and related['cycles_base'] > related['cycles_reference'] and abs(related.get('p') or 0) < 10:
+                        text += (" More activations with a similar mean duration; no timer drift is established." if language == 'en' else " Sollicitations plus nombreuses, durée moyenne proche ; aucune dérive de temporisation n’est établie.")
+                    if metric == 'energy_total' and related['cycles_base'] < related['cycles_reference']:
+                        text += (" Fewer cycles do not establish improved efficiency." if language == 'en' else " Moins de cycles ne démontre pas un meilleur rendement.")
+                    break
             if comparison.get("tg"):
                 text += f" ({comparison['tg']})"
             if comparison.get("st") or comparison.get("br") or comparison.get("rr"):
@@ -2226,11 +2267,21 @@ def _render_selection_analysis(context: dict[str, Any], selection: dict[str, Any
     ])
     index = _selection_index(context)
     alert_ids, seen_devices = [], set()
+    covered_comparisons = set()
+    for fid in selection.get('summary') or []:
+        fact = index.get(fid) or {}
+        if fact.get('qualified'):
+            for contributor in [fid] + list(fact.get('contributors') or []):
+                cid = (index.get(contributor) or {}).get('c')
+                if cid:
+                    covered_comparisons.add(cid)
     qualified_ids = set((context.get('selection_policy') or {}).get('priority_attention') or [])
     quality_ids = sorted(selection.get("attention") or [],
                          key=lambda rid: (rid not in qualified_ids, -_comparison_attention_score(index.get(rid) or {})))
     for item_id in quality_ids:
         row = index.get(item_id) or {}
+        if item_id in covered_comparisons and row.get('st') == 'partial' and not row.get('br') and not row.get('rr'):
+            continue  # The selected observed ratio already carries this reserve.
         comparison = index.get(row.get('c')) or {}
         source = index.get(row.get("s") or comparison.get('s')) or (row if str(item_id).startswith("S") else {})
         scope = tuple(source.get("device_scope") or [])
@@ -2465,7 +2516,7 @@ Return exactly one JSON object and nothing else:
 {{"summary":["ID"],"attention":["ID"],"recommendations":[{{"action":"ACTION","evidence":"ID"}}]}}
 
 Rules:
-- Keep `selection_policy.priority_highlights` in order as the shared deterministic observations. Do not replace them with other appliance facts. Group quality warnings per device; observations describe changes, attention means uncertainty, and recommendations require a concrete supported check. Empty advice is valid; do not diagnose faults or efficiency from counters.
+- Keep `selection_policy.priority_highlights` in order as the shared deterministic observations. Do not replace them with other appliance facts. Qualified observed ratios are descriptive, not full-period efficiency evidence. Explain usage counts versus per-cycle changes; possible programs or loads are hypotheses only, never measured facts. Group quality warnings per device; observations describe changes, attention means uncertainty, and recommendations require a concrete supported check. Empty advice is valid; do not diagnose faults or efficiency from counters.
 - Rank appliance changes by absolute kWh impact and confidence before percentages. Ignore idle zero-versus-zero comparisons.
 - `energy_per_cycle` and `runtime_per_cycle` are validated derived facts; prefer them when distinguishing cycle count from consumption per cycle. Do not derive new ratios yourself.
 - Historical N/N-x change and forecast-versus-actual gap are distinct. Availability does not establish coverage or density; a counter reset does not establish an appliance fault. Correlation is not causation.
@@ -2494,7 +2545,7 @@ Retourne exactement un objet JSON et rien d'autre :
 {{"summary":["ID"],"attention":["ID"],"recommendations":[{{"action":"ACTION","evidence":"ID"}}]}}
 
 Règles :
-- Conserve `selection_policy.priority_highlights` dans leur ordre : observations déterministes communes au PDF et à la notification. Ne les remplace pas par d’autres faits d’appareils. Regroupe les limites par appareil. Observation = évolution mesurée ; à surveiller = incertitude ; action = vérification concrète étayée. Aucune action est valide ; aucun diagnostic de panne ou de rendement à partir des compteurs.
+- Conserve `selection_policy.priority_highlights` dans leur ordre : observations déterministes communes au PDF et à la notification. Ne les remplace pas par d’autres faits d’appareils. Les ratios partiels sont descriptifs, pas des preuves de performance complète. Distingue nombre de cycles et consommation par cycle ; programmes, température de lavage ou charge restent des hypothèses, jamais des faits mesurés. Regroupe les limites par appareil. Observation = évolution mesurée ; à surveiller = incertitude ; action = vérification concrète étayée. Aucune action est valide ; aucun diagnostic de panne ou de rendement à partir des compteurs.
 - Classe les évolutions d’appareils selon leur impact absolu en kWh et la confiance, avant les pourcentages. Ignore les comparaisons nulles contre nulles.
 - `energy_per_cycle` et `runtime_per_cycle` sont des faits dérivés validés ; privilégie-les pour distinguer le nombre de cycles de la consommation par cycle. Ne calcule aucun autre ratio.
 - L’évolution historique N/N-x et l’écart réel/prévision sont distincts. La disponibilité ne garantit ni couverture ni densité ; un reset de compteur ne prouve pas une panne. Une corrélation ne prouve pas une cause.

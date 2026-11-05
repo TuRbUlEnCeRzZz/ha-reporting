@@ -2,7 +2,7 @@
 
 ![HA Reporting](ha-reporting/logo.png)
 
-**Current stable version: 0.2.3**
+**Current package version: 0.2.4 (prepared; not published by this change)**
 
 HA Reporting is a reporting engine for **Home Assistant OS**. It turns Home Assistant sensor history stored in VictoriaMetrics into structured reports, period comparisons, optional AI commentary and locally generated PDF documents.
 
@@ -98,6 +98,14 @@ Beta.21 introduces the first HA Reporting internationalization layer.
 - User-owned names such as report names, catalogue names, device names and entity IDs are not translated.
 
 From beta.21 onward, new and modified maintainer-facing repository content is written in **English**. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## 0.2.4 — Qualified observations and restored deterministic overview
+
+The PDF overview remains visible before AI analysis. Shared deterministic priorities now accept exploitable partial comparisons with explicit contributor-coverage reservations; this does not upgrade their original quality classification or prove full-period performance. Consumption totals, usage counts and per-cycle changes are distinguished. Reconstructed energy changes remain qualified attention, while reconstructed counters are excluded from combined ratios.
+
+Notifications retain up to three relevant observations with concise wording. Exact overview sentences are removed only from the PDF's AI display, preserving the stored structured AI response. Short-duration/Wh formatting, detailed tables, no-AI operation, saved settings, notification recipients and the existing historical/statistical engines remain unchanged.
+
+See [release notes](RELEASE-NOTES-0.2.4.md) and [validation](VALIDATION-0.2.4.md). The reference PDF contains rounded figures; exact unrounded replay and live Raspberry Pi/Ollama acceptance remain outstanding.
 
 ## What is new in 0.2.2 — Energy interpretation improvements
 

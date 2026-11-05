@@ -18,8 +18,9 @@ def number(value):
 def add_cycle_facts(context):
     """Join unambiguous device-local comparable counters for the same target.
 
-    Reconstructed/partial/invalid counters remain in the original ledger but
-    cannot establish a change in energy per cycle. Unknown coverage is also
+    Reconstructed/invalid counters remain in the original ledger. Partial
+    counters may establish an explicitly qualified observed ratio, not a
+    representative full-period performance claim. Unknown coverage is also
     insufficient for this derived claim. No additional provider request occurs.
     """
     sources = {s['i']: s for s in context['sources']}
@@ -32,9 +33,9 @@ def add_cycle_facts(context):
             continue
         if source.get('sh') or source.get('st') or source.get('w') or source.get('reset'):
             continue
-        if comparison.get('p') != 'full_period_change_allowed' or comparison.get('st') not in {None, 'comparable'} or any(comparison.get(k) for k in ('br', 'rr', 'bz', 'rz')):
+        if comparison.get('p') not in {'full_period_change_allowed', 'descriptive_gap_only'} or comparison.get('st') not in {None, 'comparable', 'partial'} or any(comparison.get(k) for k in ('br', 'rr', 'bz', 'rz')):
             continue
-        if any(number(comparison.get(k)) is None or number(comparison[k]) < 95 for k in ('bc', 'rc')):
+        if any(number(comparison.get(k)) is None or number(comparison[k]) < 80 for k in ('bc', 'rc')):
             continue
         scope = source.get('device_scope') or []
         if len(scope) != 2 or not all(scope):
@@ -45,9 +46,23 @@ def add_cycle_facts(context):
         groups[key][source.get('m')].append((fact, source, comparison))
 
     for metrics in groups.values():
+        # Refrigeration energy per operating hour is descriptive, not efficiency.
+        if len(metrics['energy_total']) == len(metrics['runtime']) == 1:
+            energy, source, comp = metrics['energy_total'][0]
+            runtime, runtime_source, runtime_comp = metrics['runtime'][0]
+            ef = {'kwh': 1, 'wh': .001, 'mwh': 1000}.get(str(source.get('u') or '').lower())
+            tf = {'h': 1, 'min': 1/60, 's': 1/3600}.get(str(runtime_source.get('u') or '').lower())
+            if source.get('category') == 'refrigeration' and ef and tf and min(runtime['b'], runtime['r'])*tf >= 1:
+                coverage = min(number(c[k]) for c in (comp, runtime_comp) for k in ('bc', 'rc'))
+                context['facts'].append({'i': f"F{len(context['facts'])+1}", 'q': 'comparison',
+                    's': source['i'], 'c': comp['i'], 'k': 'energy_per_runtime',
+                    'b': energy['b']*ef/(runtime['b']*tf),
+                    'r': energy['r']*ef/(runtime['r']*tf),
+                    'contributors': [energy['i'], runtime['i']], 'coverage': coverage,
+                    'qualified': coverage < 95 or comp.get('st') == 'partial' or runtime_comp.get('st') == 'partial'})
         if len(metrics['cycles']) != 1:
             continue
-        cycles, cycle_source, _ = metrics['cycles'][0]
+        cycles, cycle_source, cycle_comparison = metrics['cycles'][0]
         cycle_unit = str(cycle_source.get('u') or '').lower()
         if cycle_unit not in {'', 'cycle', 'cycles', 'count', 'counts', 'start', 'starts', 'démarrages'}:
             continue
@@ -67,6 +82,8 @@ def add_cycle_facts(context):
             reference = fact['r'] * factor / cycles['r']
             if not all(math.isfinite(v) for v in (base, reference)):
                 continue
+            coverage = min(number(c[k]) for c in (comparison, cycle_comparison) for k in ('bc', 'rc'))
+            qualified = coverage < 95 or any(c.get('st') == 'partial' for c in (comparison, cycle_comparison))
             row = {
                 'i': f"F{len(context['facts']) + 1}", 'q': 'comparison',
                 's': source['i'], 'c': comparison['i'], 'k': stat,
@@ -74,6 +91,8 @@ def add_cycle_facts(context):
                 'contributors': [fact['i'], cycles['i']],
                 'cycles_base': cycles['b'], 'cycles_reference': cycles['r'],
                 'total_gap': fact['b']-fact['r'],
+                'qualified': qualified, 'coverage': coverage,
+                'total_base': fact['b']*factor, 'total_reference': fact['r']*factor,
                 'energy_impact_kwh': abs(base-reference) * min(cycles['b'], cycles['r']) if metric == 'energy_total' else None,
             }
             if cycle_unit in {'start', 'starts', 'démarrages'}:
@@ -97,12 +116,12 @@ def meaningful_change(fact, source, comparison):
     Existing coverage policies remain authoritative. No appliance family or
     counter meaning is guessed from a name.
     """
-    if fact.get('q') != 'comparison' or comparison.get('st') not in (None, 'comparable'):
+    if fact.get('q') != 'comparison' or comparison.get('st') not in (None, 'comparable', 'partial'):
         return False
     if any(comparison.get(k) for k in ('bz', 'rz', 'br', 'rr')) or source.get('st'):
         return False
     coverage = [number(comparison.get(k)) for k in ('bc', 'rc')]
-    if any(v is not None and v < 95 for v in coverage):
+    if any(v is not None and v < 80 for v in coverage):
         return False
     gap = number(fact.get('d'))
     if gap in (None, 0):
@@ -178,7 +197,7 @@ def qualified_attention(context):
             continue
         if source.get('st') or comp.get('st') in {'unavailable', 'limited'} or any(comp.get(k) for k in ('bz', 'rz')):
             continue
-        if any(number(comp.get(k)) is None or number(comp[k]) < 95 for k in ('bc', 'rc')):
+        if any(number(comp.get(k)) is None or number(comp[k]) < 80 for k in ('bc', 'rc')):
             continue
         if any(number(fact.get(k)) is None for k in ('b', 'r', 'd')):
             continue
@@ -245,7 +264,7 @@ def report_digest(result, language='fr', context=None):
     selected = (context.get('selection_policy') or {}).get('priority_highlights', [])
     highlights = [_render_ledger_id(fid, context, language, 'summary') for fid in selected]
     recommendation = []
-    for fid in selected[:2]:
+    for fid in selected[:3]:
         text = _render_recommendation('check_cycle_usage', fid, context, language)
         if text:
             recommendation.append(text)
@@ -264,11 +283,14 @@ def report_digest(result, language='fr', context=None):
 
 
 def mobile_summary(result, language='fr'):
-    digest = report_digest(result, language)
-    labels = ('Energy', 'Highlights', 'Attention', 'Recommendation') if language == 'en' else ('Énergie', 'Faits marquants', 'Attention', 'Recommandation')
+    from .ai_report import _fact_ledger_context_v11, _render_ledger_id
+    context = _fact_ledger_context_v11(result)
+    digest = report_digest(result, language, context)
+    digest['highlights'] = [_render_ledger_id(fid, context, language, 'mobile') for fid in context['selection_policy'].get('priority_highlights', [])]
+    labels = ('Energy', 'Highlights', 'To watch', 'Recommendation') if language == 'en' else ('Énergie', 'Faits marquants', 'À surveiller', 'Recommandation')
     if not digest['highlights']:
         digest['highlights'] = [no_significant_change(language)]
     return '\n\n'.join(
         label + '\n' + '\n'.join('- ' + text for text in digest[key][:limit])
-        for label, key, limit in zip(labels, digest, (3, 2, 1, 1)) if digest[key]
+        for label, key, limit in zip(labels, digest, (3, 3, 1, 1)) if digest[key]
     )

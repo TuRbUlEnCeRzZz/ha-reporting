@@ -2,7 +2,7 @@
 
 ![HA Reporting](ha-reporting/logo.png)
 
-**Current package version: 0.2.4 (prepared; not published by this change)**
+**Current package version: 0.2.4**
 
 HA Reporting is a reporting engine for **Home Assistant OS**. It turns Home Assistant sensor history stored in VictoriaMetrics into structured reports, period comparisons, optional AI commentary and locally generated PDF documents.
 

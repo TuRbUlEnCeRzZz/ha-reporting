@@ -1,4 +1,4 @@
-# HA Reporting 0.2.2 — Targeted insight relevance corrections
+# HA Reporting 0.2.3 — Targeted insight relevance corrections
 
 This update improves how HA Reporting selects and presents important observations, while preserving its existing statistical engine and detailed reports.
 
